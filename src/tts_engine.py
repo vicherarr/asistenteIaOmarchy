@@ -1,7 +1,7 @@
 """Módulo de síntesis de voz (TTS).
 
-Usa gTTS (Google Text-to-Speech) como motor principal.
-Piper TTS se usa como fallback si está disponible localmente.
+Usa Kokoro como motor principal (local, español, alta calidad).
+Fallback a gTTS (requiere internet) si Kokoro no está disponible.
 """
 
 import asyncio
@@ -14,8 +14,9 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-PIPER_VOICES_DIR = Path.home() / ".local" / "share" / "piper-voices"
-DEFAULT_VOICE = "es_ES-mls_10246-low"
+KOKORO_SAMPLE_RATE = 24000
+KOKORO_LANG_CODE = "e"  # Spanish
+KOKORO_VOICE = "em_alex"
 
 
 class TTSError(Exception):
@@ -24,21 +25,23 @@ class TTSError(Exception):
 
 
 class TTSEngine:
-    """Motor de texto a voz. Prioriza gTTS, fallback a Piper."""
+    """Motor de texto a voz. Prioriza Kokoro, fallback a gTTS."""
 
-    def __init__(
-        self,
-        voice_name: str = DEFAULT_VOICE,
-        voice_dir: Optional[Path] = None,
-        prefer_local: bool = False,
-    ) -> None:
-        self.voice_name = voice_name
-        self.voice_dir = voice_dir or PIPER_VOICES_DIR
-        self.prefer_local = prefer_local
+    def __init__(self) -> None:
+        self._kokoro_pipeline = None
         self._default_sink: Optional[str] = None
+        self._init_kokoro()
 
-    def _get_voice_model_path(self) -> Path:
-        return self.voice_dir / f"{self.voice_name}.onnx"
+    def _init_kokoro(self) -> None:
+        """Intenta inicializar Kokoro TTS."""
+        try:
+            from kokoro import KPipeline
+            self._kokoro_pipeline = KPipeline(lang_code=KOKORO_LANG_CODE)
+            logger.info("Kokoro TTS inicializado correctamente")
+        except ImportError:
+            logger.warning("Kokoro no instalado. Se usará gTTS como fallback.")
+        except Exception as e:
+            logger.warning(f"Error inicializando Kokoro: {e}. Se usará gTTS como fallback.")
 
     def _get_default_bluetooth_sink(self) -> Optional[str]:
         """Detecta el sink Bluetooth por defecto."""
@@ -55,7 +58,7 @@ class TTSEngine:
                 if "Sinks:" in line:
                     in_sinks = True
                     continue
-                if in_sinks and "Sources:" in line:
+                if in_sinks and ("Sources:" in line or "Filters:" in line):
                     break
                 if in_sinks and "bluetooth" in line.lower():
                     cleaned = line.replace("│", "").replace("├", "").replace("─", "").strip()
@@ -83,18 +86,54 @@ class TTSEngine:
 
         self._set_audio_sink()
 
-        if self.prefer_local and self._get_voice_model_path().exists():
-            return self._speak_piper(text)
+        if self._kokoro_pipeline is not None:
+            return self._speak_kokoro(text)
 
         return self._speak_gtts(text)
 
+    def _speak_kokoro(self, text: str) -> Optional[str]:
+        """Sintetiza usando Kokoro TTS (local, alta calidad)."""
+        try:
+            import soundfile as sf
+
+            audio_chunks = []
+            generator = self._kokoro_pipeline(text, voice=KOKORO_VOICE, speed=1.0)
+
+            for _, _, audio in generator:
+                audio_chunks.append(audio)
+
+            if not audio_chunks:
+                raise TTSError("Kokoro no generó audio")
+
+            import numpy as np
+            full_audio = np.concatenate(audio_chunks)
+
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+                wav_path = tmp_file.name
+
+            sf.write(wav_path, full_audio, KOKORO_SAMPLE_RATE)
+
+            if not Path(wav_path).exists() or Path(wav_path).stat().st_size == 0:
+                raise TTSError("Kokoro generó archivo vacío")
+
+            logger.info(f"Kokoro generó audio: {Path(wav_path).stat().st_size} bytes ({len(full_audio)/KOKORO_SAMPLE_RATE:.1f}s)")
+            self._play_audio(wav_path)
+            return wav_path
+
+        except ImportError:
+            logger.warning("soundfile no disponible, intentando gTTS")
+            return self._speak_gtts(text)
+        except Exception as e:
+            logger.warning(f"Kokoro falló: {e}, intentando gTTS")
+            return self._speak_gtts(text)
+
     def _speak_gtts(self, text: str) -> Optional[str]:
-        """Sintetiza usando gTTS (Google TTS API)."""
+        """Sintetiza usando gTTS (Google TTS API, requiere internet)."""
         try:
             from gtts import gTTS
         except ImportError:
-            logger.warning("gTTS no disponible, intentando Piper")
-            return self._speak_piper(text)
+            logger.error("gTTS tampoco disponible")
+            raise TTSError("No hay motor TTS disponible")
 
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp_file:
             mp3_path = tmp_file.name
@@ -111,76 +150,34 @@ class TTSEngine:
             return mp3_path
 
         except Exception as e:
-            logger.warning(f"gTTS falló: {e}, intentando Piper")
-            return self._speak_piper(text)
+            raise TTSError(f"Error en gTTS: {e}")
 
-    def _speak_piper(self, text: str) -> Optional[str]:
-        """Sintetiza usando Piper TTS local."""
-        model_path = self._get_voice_model_path()
-        if not model_path.exists():
-            logger.warning("Piper no disponible (modelo no encontrado)")
-            raise TTSError("No hay motor TTS disponible (gTTS y Piper fallaron)")
-
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-            wav_path = tmp_file.name
-
-        try:
-            result = subprocess.run(
-                ["piper", "--model", str(model_path), "--output_file", wav_path],
-                input=text,
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-
-            if result.returncode != 0:
-                raise TTSError(f"Piper falló: {result.stderr}")
-
-            if not Path(wav_path).exists() or Path(wav_path).stat().st_size == 0:
-                raise TTSError("Piper generó archivo vacío")
-
-            self._play_audio(wav_path)
-            return wav_path
-
-        except FileNotFoundError:
-            raise TTSError("piper binario no encontrado")
-        except subprocess.TimeoutExpired:
-            raise TTSError("Timeout generando audio TTS")
-
-    def _play_audio(self, audio_path: str, speed: float = 1.7) -> None:
-        """Reproduce audio al sink Bluetooth con velocidad ajustada."""
+    def _play_audio(self, audio_path: str, speed: float = 1.0) -> None:
+        """Reproduce audio al sink Bluetooth."""
         ext = Path(audio_path).suffix.lower()
 
         try:
             if self._default_sink:
-                # Usar ffmpeg para acelerar y enviar al sink BT
-                with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
-                    sped_path = tmp.name
+                if speed != 1.0:
+                    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+                        sped_path = tmp.name
+                    subprocess.run(
+                        ["ffmpeg", "-y", "-i", audio_path, "-af", f"atempo={speed}", sped_path],
+                        capture_output=True, timeout=30,
+                    )
+                    audio_path = sped_path
 
                 subprocess.run(
-                    ["ffmpeg", "-y", "-i", audio_path, "-af", f"atempo={speed}", sped_path],
-                    capture_output=True, timeout=30,
+                    ["paplay", "--device", self._default_sink, audio_path],
+                    capture_output=True, timeout=60,
                 )
-
-                cmd = ["paplay", "--device", self._default_sink, sped_path]
-                subprocess.run(cmd, capture_output=True, timeout=60)
-
-                try:
-                    Path(sped_path).unlink()
-                except OSError:
-                    pass
             else:
                 if ext == ".mp3":
                     cmd = ["ffplay", "-nodisp", "-autoexit", "-af", f"atempo={speed}", audio_path]
                 else:
                     cmd = ["aplay", audio_path]
 
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    timeout=60,
-                )
-
+                result = subprocess.run(cmd, capture_output=True, timeout=60)
                 if result.returncode != 0:
                     logger.warning(f"Error reproduciendo: {result.stderr.decode()}")
 
@@ -200,24 +197,15 @@ class TTSEngine:
         cleaned = 0
         tmp_dir = Path(tempfile.gettempdir())
 
-        for f in tmp_dir.glob("*.mp3"):
-            if f.name.startswith("tmp"):
-                age = time.time() - f.stat().st_mtime
-                if age > max_age_seconds:
-                    try:
-                        f.unlink()
-                        cleaned += 1
-                    except OSError:
-                        pass
-
-        for f in tmp_dir.glob("*.wav"):
-            if f.name.startswith("tmp"):
-                age = time.time() - f.stat().st_mtime
-                if age > max_age_seconds:
-                    try:
-                        f.unlink()
-                        cleaned += 1
-                    except OSError:
-                        pass
+        for pattern in ["*.mp3", "*.wav"]:
+            for f in tmp_dir.glob(pattern):
+                if f.name.startswith("tmp"):
+                    age = time.time() - f.stat().st_mtime
+                    if age > max_age_seconds:
+                        try:
+                            f.unlink()
+                            cleaned += 1
+                        except OSError:
+                            pass
 
         return cleaned

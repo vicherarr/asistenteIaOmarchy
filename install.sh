@@ -4,8 +4,8 @@ set -euo pipefail
 # =============================================================================
 # AsistenteIA - Script de Instalación para CachyOS
 # =============================================================================
-# Instala todas las dependencias necesarias: Ollama, PipeWire, Handy, TTS local
-# y las librerías Python del proyecto.
+# Instala todas las dependencias necesarias: Ollama, PipeWire, espeak-ng,
+# Kokoro TTS y las librerías Python del proyecto.
 # =============================================================================
 
 echo "=== AsistenteIA - Instalación en CachyOS ==="
@@ -13,13 +13,13 @@ echo "=== AsistenteIA - Instalación en CachyOS ==="
 # -----------------------------------------------------------------------------
 # 1. Actualizar sistema
 # -----------------------------------------------------------------------------
-echo "[1/7] Actualizando sistema..."
+echo "[1/8] Actualizando sistema..."
 sudo pacman -Syu --noconfirm
 
 # -----------------------------------------------------------------------------
 # 2. Instalar dependencias base de sistema
 # -----------------------------------------------------------------------------
-echo "[2/7] Instalando dependencias base..."
+echo "[2/8] Instalando dependencias base..."
 sudo pacman -S --needed --noconfirm \
     pipewire \
     wireplumber \
@@ -33,12 +33,14 @@ sudo pacman -S --needed --noconfirm \
     python \
     python-pip \
     python-virtualenv \
-    git
+    git \
+    espeak-ng \
+    ffmpeg
 
 # -----------------------------------------------------------------------------
 # 3. Instalar Ollama (vía yay si no está disponible)
 # -----------------------------------------------------------------------------
-echo "[3/7] Instalando Ollama..."
+echo "[3/8] Instalando Ollama..."
 if ! command -v ollama &>/dev/null; then
     if command -v yay &>/dev/null; then
         yay -S --noconfirm ollama
@@ -58,47 +60,37 @@ echo "Descargando modelo gemma4:e4b..."
 ollama pull gemma4:e4b
 
 # -----------------------------------------------------------------------------
-# 4. Instalar Handy (app de transcripción)
+# 4. Instalar whisper.cpp para transcripción
 # -----------------------------------------------------------------------------
-echo "[4/7] Instalando Handy..."
-if command -v yay &>/dev/null; then
-    yay -S --noconfirm handy-transcribe 2>/dev/null || \
-        echo "Handy no disponible en AUR. Instalar manualmente desde https://github.com/marvinkreis/handy"
+echo "[4/8] Instalando whisper.cpp..."
+if ! command -v whisper-cli &>/dev/null; then
+    if command -v yay &>/dev/null; then
+        yay -S --noconfirm whisper.cpp
+    else
+        echo "Instalar whisper.cpp manualmente: yay -S whisper.cpp"
+    fi
 else
-    echo "Instalar Handy manualmente: yay -S handy-transcribe"
+    echo "whisper.cpp ya instalado."
+fi
+
+# Descargar modelo base de whisper si no existe
+WHISPER_MODEL="$HOME/.cache/whisper/ggml-base.bin"
+if [ ! -f "$WHISPER_MODEL" ]; then
+    echo "Descargando modelo whisper base..."
+    curl -L -o "$WHISPER_MODEL" \
+        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin"
 fi
 
 # -----------------------------------------------------------------------------
-# 5. Instalar Piper TTS (síntesis de voz local rápida)
+# 5. Instalar grim y slurp para capturas de pantalla
 # -----------------------------------------------------------------------------
-echo "[5/7] Instalando Piper TTS..."
-if command -v yay &>/dev/null; then
-    yay -S --noconfirm piper-tts 2>/dev/null || \
-        echo "piper-tts no disponible en AUR. Instalando vía pip..."
-fi
-
-# Fallback: instalar piper-tts via pip si no está en AUR
-if ! command -v piper &>/dev/null; then
-    pip install piper-tts 2>/dev/null || \
-        echo "Advertencia: piper-tts no pudo instalarse. Usar coqui-tts como alternativa."
-    pip install coqui-tts 2>/dev/null || true
-fi
-
-# Descargar voz en español para Piper
-PIPER_VOICES_DIR="${HOME}/.local/share/piper-voices"
-mkdir -p "$PIPER_VOICES_DIR"
-if [ ! -f "$PIPER_VOICES_DIR/es_ES-mls_10246-low.onnx" ]; then
-    echo "Descargando voz española para Piper TTS..."
-    curl -L -o "$PIPER_VOICES_DIR/es_ES-mls_10246-low.onnx" \
-        "https://huggingface.co/rhassyc/piper-voices/resolve/main/es/es_ES/mls_10246/es_ES-mls_10246-low.onnx"
-    curl -L -o "$PIPER_VOICES_DIR/es_ES-mls_10246-low.onnx.json" \
-        "https://huggingface.co/rhassyc/piper-voices/resolve/main/es/es_ES/mls_10246/es_ES-mls_10246-low.onnx.json"
-fi
+echo "[5/8] Instalando grim y slurp..."
+sudo pacman -S --needed --noconfirm grim slurp
 
 # -----------------------------------------------------------------------------
-# 6. Configurar entorno Python del proyecto
+# 6. Configurar entorno Python del proyecto (incluye Kokoro TTS)
 # -----------------------------------------------------------------------------
-echo "[6/7] Configurando entorno Python..."
+echo "[6/8] Configurando entorno Python..."
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$PROJECT_DIR"
 
@@ -110,27 +102,40 @@ source venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 
+echo ""
+echo "Nota: Kokoro descargará su modelo (~100MB) la primera vez que se ejecute."
+echo "Esto es automático y se guardará en caché."
+echo ""
+
 # -----------------------------------------------------------------------------
 # 7. Configurar keybinding de Hyprland
 # -----------------------------------------------------------------------------
-echo "[7/7] Configurando keybinding Alt+Z en Hyprland..."
+echo "[7/8] Configurando keybindings en Hyprland..."
 
-HYPRCONF="$HOME/.config/hypr/hyprland.conf"
-KEYBIND_LINE="bind = ALT, Z, exec, ${PROJECT_DIR}/scripts/handy-toggle.sh"
-
-if [ -f "$HYPRCONF" ]; then
-    if ! grep -q "handy-toggle.sh" "$HYPRCONF"; then
-        echo "" >> "$HYPRCONF"
-        echo "# AsistenteIA - Toggle Handy con Alt+Z" >> "$HYPRCONF"
-        echo "$KEYBIND_LINE" >> "$HYPRCONF"
-        echo "Keybinding Alt+Z añadido a $HYPRCONF"
+BINDINGS_FILE="$HOME/.config/hypr/bindings.lua"
+if [ -f "$BINDINGS_FILE" ]; then
+    if ! grep -q "handy-toggle.sh" "$BINDINGS_FILE"; then
+        echo "" >> "$BINDINGS_FILE"
+        echo "-- AsistenteIA" >> "$BINDINGS_FILE"
+        echo "o.bind(\"SUPER + Z\", \"AsistenteIA Listen\", \"$PROJECT_DIR/scripts/handy-toggle.sh\")" >> "$BINDINGS_FILE"
+        echo "o.bind(\"SUPER + X\", \"AsistenteIA Stop\", \"$PROJECT_DIR/scripts/stop-assistant.sh\")" >> "$BINDINGS_FILE"
+        echo "Keybindings añadidos a $BINDINGS_FILE"
     else
-        echo "Keybinding Alt+Z ya configurado."
+        echo "Keybindings ya configurados."
     fi
 else
-    echo "Advertencia: $HYPRCONF no encontrado. Añadir manualmente:"
-    echo "  $KEYBIND_LINE"
+    echo "Advertencia: $BINDINGS_FILE no encontrado. Añadir manualmente:"
+    echo "  o.bind(\"SUPER + Z\", \"AsistenteIA\", \"$PROJECT_DIR/scripts/handy-toggle.sh\")"
+    echo "  o.bind(\"SUPER + X\", \"AsistenteIA Stop\", \"$PROJECT_DIR/scripts/stop-assistant.sh\")"
 fi
+
+# -----------------------------------------------------------------------------
+# 8. Instalar servicio systemd
+# -----------------------------------------------------------------------------
+echo "[8/8] Instalando servicio systemd..."
+mkdir -p "$HOME/.config/systemd/user"
+cp "$PROJECT_DIR/services/asistenteia.service" "$HOME/.config/systemd/user/"
+systemctl --user daemon-reload
 
 # -----------------------------------------------------------------------------
 # Finalización
@@ -140,9 +145,8 @@ echo "=== Instalación completada ==="
 echo ""
 echo "Siguientes pasos:"
 echo "  1. Recargar Hyprland: hyprctl reload"
-echo "  2. Iniciar el asistente: ./scripts/start-assistant.sh"
-echo "  3. Presionar Alt+Z para iniciar la escucha"
+echo "  2. Iniciar el asistente: ./start.sh"
+echo "  3. Super+Z para hablar, Super+X para detener"
 echo ""
 echo "Para instalar como servicio systemd:"
-echo "  cp services/asistenteia.service ~/.config/systemd/user/"
 echo "  systemctl --user enable --now asistenteia.service"
