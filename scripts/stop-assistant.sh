@@ -3,6 +3,8 @@
 # stop-assistant.sh - Detiene AsistenteIA y Ollama por completo
 # =============================================================================
 
+notify-send "AsistenteIA" "Deteniendo servicio de voz asistente..."
+
 echo "Deteniendo AsistenteIA..."
 
 # Detener servicio systemd si está activo
@@ -30,6 +32,7 @@ fi
 pkill -f "uvicorn src.main:app" 2>/dev/null || true
 
 # Detener Ollama
+notify-send "AsistenteIA" "Deteniendo Ollama..."
 echo "Deteniendo Ollama..."
 if systemctl --user is-active ollama.service &>/dev/null; then
     systemctl --user stop ollama.service
@@ -51,5 +54,5 @@ fi
 # Limpiar archivos temporales
 rm -f /tmp/asistenteia_started_ollama
 
-notify-send "AsistenteIA" "Servicio detenido por completo"
+notify-send "AsistenteIA" "Todo detenido"
 echo "AsistenteIA y Ollama detenidos."

@@ -14,6 +14,35 @@ log() {
 
 log "=== Script iniciado ==="
 
+# Verificar si el servicio está corriendo
+if ! curl -s http://localhost:8765/status &>/dev/null; then
+    log "Servicio no disponible, iniciando..."
+    notify-send "AsistenteIA" "Iniciando servicio de voz..."
+
+    # Intentar inicio manual
+    PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+    if [ -f "$PROJECT_DIR/start.sh" ]; then
+        bash "$PROJECT_DIR/start.sh" &>/dev/null &
+        START_PID=$!
+    fi
+
+    # Esperar hasta 30 segundos a que el servicio esté listo
+    for i in $(seq 1 30); do
+        if curl -s http://localhost:8765/status &>/dev/null; then
+            log "Servicio listo tras $((i)) segundos"
+            notify-send "AsistenteIA" "Servicio listo. Pulsa Super+Z de nuevo para hablar."
+            rm -f "$LOCK_FILE"
+            exit 0
+        fi
+        sleep 1
+    done
+
+    log "ERROR: Servicio no respondió en 30 segundos"
+    notify-send "AsistenteIA" "No se pudo iniciar el servicio"
+    rm -f "$LOCK_FILE"
+    exit 1
+fi
+
 cleanup() {
     rm -f "$LOCK_FILE"
     log "Cleanup done"
@@ -83,6 +112,7 @@ if command -v whisper-cli &>/dev/null && [ -f "$WHISPER_MODEL" ]; then
 
     if [ -n "$TRANSCRIPTION" ]; then
         log "Enviando al servidor..."
+        notify-send "AsistenteIA" "Has dicho: $TRANSCRIPTION"
         RESPONSE=$(curl -s -X POST "$ORCHESTRATOR_URL" \
             -H "Content-Type: application/json" \
             -d "{\"text\": \"$TRANSCRIPTION\"}" 2>&1)
