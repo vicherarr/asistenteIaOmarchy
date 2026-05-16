@@ -1,7 +1,7 @@
 [Unit]
 Description=AsistenteIA - Voice Assistant Orchestrator
 After=network.target ollama.service
-Wants=ollama.service
+Requires=ollama.service
 
 [Service]
 Type=simple

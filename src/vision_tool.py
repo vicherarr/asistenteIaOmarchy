@@ -7,7 +7,11 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
+from PIL import Image
+
 logger = logging.getLogger(__name__)
+
+MAX_IMAGE_DIMENSION = 800
 
 
 class VisionToolError(Exception):
@@ -91,6 +95,27 @@ class VisionTool:
             raise VisionToolError("Timeout seleccionando región")
 
     @staticmethod
+    def _resize_image(image_path: str, max_dim: int = MAX_IMAGE_DIMENSION) -> str:
+        """Redimensiona la imagen manteniendo aspect ratio. Devuelve path del temp."""
+        img = Image.open(image_path)
+        if max(img.size) <= max_dim:
+            img.close()
+            return image_path
+
+        ratio = max_dim / max(img.size)
+        new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+        img = img.resize(new_size, Image.Resampling.LANCZOS)
+
+        resized_path = tempfile.mktemp(suffix=".jpg")
+        img.save(resized_path, "JPEG", quality=85)
+        img.close()
+
+        original_kb = Path(image_path).stat().st_size // 1024
+        resized_kb = Path(resized_path).stat().st_size // 1024
+        logger.info(f"Imagen redimensionada: {original_kb}KB -> {resized_kb}KB ({img.size[0]}x{img.size[1]})")
+        return resized_path
+
+    @staticmethod
     def image_to_base64(image_path: str) -> str:
         """Convierte una imagen a base64 para enviar a Ollama."""
         try:
@@ -103,14 +128,21 @@ class VisionTool:
 
     def get_screen_for_vision(self) -> str:
         """
-        Flujo completo: captura pantalla y devuelve base64.
+        Flujo completo: captura pantalla, redimensiona y devuelve base64.
         Método principal para usar con modelos multimodales.
         """
         screenshot_path = self.capture_screen()
+        resized_path = screenshot_path
         try:
-            return self.image_to_base64(screenshot_path)
+            resized_path = self._resize_image(screenshot_path)
+            return self.image_to_base64(resized_path)
         finally:
             try:
                 Path(screenshot_path).unlink()
             except OSError:
                 pass
+            if resized_path != screenshot_path:
+                try:
+                    Path(resized_path).unlink()
+                except OSError:
+                    pass

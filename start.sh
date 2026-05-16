@@ -14,7 +14,6 @@ if [ -n "$EXISTING_PID" ]; then
     echo "Deteniendo proceso existente..."
     kill "$EXISTING_PID" 2>/dev/null || true
     sleep 2
-    # Verificar que se liberó
     if lsof -ti:8765 &>/dev/null; then
         echo "Proceso no respondió, forzando..."
         kill -9 "$EXISTING_PID" 2>/dev/null || true
@@ -40,11 +39,40 @@ if [ ! -d "venv" ]; then
     exit 1
 fi
 
-# Verificar Ollama
+# Iniciar Ollama si no está corriendo
 if command -v ollama &>/dev/null; then
     if ! curl -s http://localhost:11434/api/tags &>/dev/null; then
-        echo "ADVERTENCIA: Ollama no parece estar corriendo. Iniciar con: ollama serve"
+        echo "Ollama no está corriendo. Iniciándolo..."
+        ollama serve &>/dev/null &
+        OLLAMA_STARTED=true
+        echo "Esperando a que Ollama esté listo..."
+        for i in $(seq 1 60); do
+            if curl -s http://localhost:11434/api/tags &>/dev/null; then
+                echo "Ollama listo."
+                break
+            fi
+            if [ "$i" -eq 60 ]; then
+                echo "ERROR: Ollama no respondió en 2 minutos"
+                exit 1
+            fi
+            sleep 2
+        done
+    else
+        echo "Ollama ya está corriendo."
     fi
+
+    # Verificar modelo LLM
+    if ! ollama list 2>/dev/null | grep -q "gemma4"; then
+        echo "Modelo gemma4:e4b no encontrado. Descargándolo..."
+        ollama pull gemma4:e4b
+    else
+        echo "Modelo gemma4:e4b disponible."
+    fi
+
+    # Precargar modelo en memoria
+    echo "Precargando modelo gemma4:e4b en memoria..."
+    curl -s http://localhost:11434/api/chat -d '{"model":"gemma4:e4b","messages":[{"role":"user","content":"hola"}],"stream":false}' &>/dev/null &
+    WARMUP_PID=$!
 else
     echo "ADVERTENCIA: Ollama no está instalado"
 fi
@@ -55,6 +83,13 @@ echo "Iniciando AsistenteIA..."
 ./venv/bin/python -m uvicorn src.main:app --host 127.0.0.1 --port 8765 >> "$LOG_FILE" 2>&1 &
 SERVER_PID=$!
 echo "$SERVER_PID" > "$PID_FILE"
+
+# Guardar si iniciamos Ollama nosotros
+if [ "${OLLAMA_STARTED:-false}" = "true" ]; then
+    echo "$$" > /tmp/asistenteia_started_ollama
+else
+    rm -f /tmp/asistenteia_started_ollama
+fi
 
 # Esperar a que levante
 echo "Esperando al servidor..."

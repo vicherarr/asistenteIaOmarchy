@@ -16,10 +16,18 @@ if ! command -v ollama &>/dev/null; then
     exit 1
 fi
 
-if ! curl -s http://localhost:11434/api/tags &>/dev/null; then
-    echo "ERROR: Ollama no está corriendo. Iniciar con: ollama serve"
-    exit 1
-fi
+echo "Esperando a que Ollama esté listo..."
+for i in $(seq 1 30); do
+    if curl -s http://localhost:11434/api/tags &>/dev/null; then
+        echo "Ollama listo."
+        break
+    fi
+    if [ "$i" -eq 30 ]; then
+        echo "ERROR: Ollama no respondió en 30 segundos"
+        exit 1
+    fi
+    sleep 2
+done
 
 # Verificar modelo
 if ! ollama list 2>/dev/null | grep -q "gemma4"; then

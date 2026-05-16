@@ -37,7 +37,7 @@ def strip_markdown(text: str) -> str:
     text = re.sub(r"\*\*\*(.+?)\*\*\*", r"\1", text)
     text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
     text = re.sub(r"\*(.+?)\*", r"\1", text)
-    text = re.sub(r"__(+?)__", r"\1", text)
+    text = re.sub(r"__(.+?)__", r"\1", text)
     text = re.sub(r"_(.+?)_", r"\1", text)
     text = re.sub(r"`{3}[\s\S]*?`{3}", "", text)
     text = re.sub(r"`(.+?)`", r"\1", text)
