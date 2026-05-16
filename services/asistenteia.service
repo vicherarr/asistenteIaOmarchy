@@ -1,0 +1,20 @@
+[Unit]
+Description=AsistenteIA - Voice Assistant Orchestrator
+After=network.target ollama.service
+Wants=ollama.service
+
+[Service]
+Type=simple
+ExecStart=%h/develop/asistenteia/scripts/start-assistant.sh
+WorkingDirectory=%h/develop/asistenteia
+Restart=on-failure
+RestartSec=5
+Environment=PATH=%h/develop/asistenteia/venv/bin:/usr/local/bin:/usr/bin
+Environment=PYTHONUNBUFFERED=1
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=asistenteia
+
+[Install]
+WantedBy=default.target
