@@ -31,8 +31,8 @@ done
 
 # Verificar modelo
 if ! ollama list 2>/dev/null | grep -q "gemma4"; then
-    echo "Descargando modelo gemma4:e4b..."
-    ollama pull gemma4:e4b
+    echo "Descargando modelo gemma4:e2b..."
+    ollama pull gemma4:e2b
 fi
 
 # Activar entorno virtual

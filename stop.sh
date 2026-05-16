@@ -38,6 +38,12 @@ fi
 
 rm -f "$PID_FILE"
 
+# Descargar modelo de memoria
+if command -v ollama &>/dev/null; then
+    echo "Descargando modelo de memoria..."
+    ollama stop gemma4:e2b 2>/dev/null || true
+fi
+
 # Detener Ollama si lo iniciamos nosotros
 if [ -f "$OLLAMA_FLAG" ]; then
     echo "Deteniendo Ollama (fue iniciado por AsistenteIA)..."

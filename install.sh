@@ -56,8 +56,8 @@ fi
 systemctl --user enable --now ollama.service 2>/dev/null || true
 
 # Descargar modelo Gemma 4:e4b
-echo "Descargando modelo gemma4:e4b..."
-ollama pull gemma4:e4b
+echo "Descargando modelo gemma4:e2b..."
+ollama pull gemma4:e2b
 
 # -----------------------------------------------------------------------------
 # 4. Instalar whisper.cpp para transcripción

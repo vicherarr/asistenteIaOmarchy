@@ -31,6 +31,12 @@ fi
 # Matar cualquier uvicorn residual
 pkill -f "uvicorn src.main:app" 2>/dev/null || true
 
+# Descargar modelo de memoria
+if command -v ollama &>/dev/null; then
+    echo "Descargando modelo de memoria..."
+    ollama stop gemma4:e2b 2>/dev/null || true
+fi
+
 # Detener Ollama
 notify-send "AsistenteIA" "Deteniendo Ollama..."
 echo "Deteniendo Ollama..."

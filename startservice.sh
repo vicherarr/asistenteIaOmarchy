@@ -31,15 +31,15 @@ if command -v ollama &>/dev/null; then
 
     # Verificar modelo LLM
     if ! ollama list 2>/dev/null | grep -q "gemma4"; then
-        echo "Modelo gemma4:e4b no encontrado. Descargándolo (puede tardar varios minutos)..."
-        ollama pull gemma4:e4b
+        echo "Modelo gemma4:e2b no encontrado. Descargándolo (puede tardar varios minutos)..."
+        ollama pull gemma4:e2b
     else
-        echo "Modelo gemma4:e4b disponible."
+        echo "Modelo gemma4:e2b disponible."
     fi
 
     # Precargar modelo en memoria (en background, no bloquea el inicio)
-    echo "Precargando modelo gemma4:e4b en memoria..."
-    curl -s http://localhost:11434/api/chat -d '{"model":"gemma4:e4b","messages":[{"role":"user","content":"hola"}],"stream":false}' &>/dev/null &
+    echo "Precargando modelo gemma4:e2b en memoria..."
+    curl -s http://localhost:11434/api/chat -d '{"model":"gemma4:e2b","messages":[{"role":"user","content":"hola"}],"stream":false}' &>/dev/null &
 fi
 
 systemctl --user start asistenteia.service

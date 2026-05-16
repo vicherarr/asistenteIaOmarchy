@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 OLLAMA_BASE_URL = "http://localhost:11434"
-DEFAULT_MODEL = "gemma4:e4b"
+DEFAULT_MODEL = "gemma4:e2b"
 
 
 class OllamaMessage(BaseModel):

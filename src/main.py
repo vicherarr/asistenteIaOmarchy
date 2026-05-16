@@ -1,5 +1,6 @@
 """Orchestrator principal - Servidor FastAPI del asistente de voz."""
 
+import asyncio
 import logging
 import re
 from contextlib import asynccontextmanager
@@ -30,6 +31,9 @@ command_executor: Optional[CommandExecutor] = None
 tts_engine: Optional[TTSEngine] = None
 vision_tool: Optional[VisionTool] = None
 system_prompt: str = ""
+
+processing: bool = False
+current_task: Optional[asyncio.Task] = None
 
 
 def strip_markdown(text: str) -> str:
@@ -62,6 +66,7 @@ class StatusResponse(BaseModel):
     ollama_connected: bool
     bluetooth_audio: str
     conversation_length: int
+    processing: bool
 
 
 @asynccontextmanager
@@ -95,75 +100,118 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="AsistenteIA", lifespan=lifespan)
 
 
+async def _process_transcription(text: str) -> dict:
+    """Lógica principal de procesamiento de transcripción."""
+    global processing
+
+    processing = True
+    try:
+        logger.info(f"Transcripción recibida: {text[:100]}...")
+
+        conversation_history.append(OllamaMessage(role="user", content=text))
+
+        if len(conversation_history) > MAX_HISTORY:
+            conversation_history[:] = conversation_history[-MAX_HISTORY:]
+
+        messages = [OllamaMessage(role="system", content=system_prompt)] + conversation_history
+
+        try:
+            assert ollama_client is not None
+            gemma_response = await ollama_client.generate(messages)
+        except Exception as e:
+            logger.error(f"Error llamando a Ollama: {e}")
+            raise HTTPException(status_code=502, detail=f"Error con Ollama: {e}")
+
+        parsed = parse_gemma_response(gemma_response)
+
+        conversation_history.append(OllamaMessage(role="assistant", content=gemma_response))
+
+        commands_executed = 0
+        if parsed.commands:
+            assert command_executor is not None
+            results = command_executor.execute_multiple(parsed.commands)
+            commands_executed = sum(1 for success, _ in results if success)
+            for success, output in results:
+                status = "OK" if success else "FALLÓ"
+                logger.info(f"Comando [{status}]: {output}")
+
+        if parsed.action_type == "vision":
+            try:
+                assert vision_tool is not None
+                assert ollama_client is not None
+                logger.info("Acción de visión: capturando pantalla")
+                image_base64 = vision_tool.get_screen_for_vision()
+                vision_response = await ollama_client.generate_with_image(
+                    text="Describe brevemente qué se ve en esta pantalla. Sé conciso y útil.",
+                    image_base64=image_base64,
+                )
+                parsed.response_text = vision_response
+                logger.info(f"Respuesta de visión: {vision_response[:100]}...")
+            except Exception as e:
+                logger.error(f"Error en visión: {e}")
+                parsed.response_text = "No pude capturar la pantalla en este momento."
+
+        audio_file: Optional[str] = None
+        if parsed.response_text and parsed.action_type in ("speak", "both", "vision"):
+            parsed.response_text = strip_markdown(parsed.response_text)
+            try:
+                assert tts_engine is not None
+                audio_file = await tts_engine.speak_async(parsed.response_text)
+            except Exception as e:
+                logger.error(f"Error en TTS: {e}")
+
+        return {
+            "status": "success",
+            "response_text": parsed.response_text,
+            "commands_executed": commands_executed,
+            "audio_file": audio_file,
+        }
+    finally:
+        processing = False
+
+
 @app.post("/transcribe", response_model=TranscriptionResponse)
 async def handle_transcription(request: TranscriptionRequest):
-    """
-    Endpoint principal: recibe texto de Handy, procesa con Gemma,
-    ejecuta comandos y genera respuesta de voz.
-    """
+    """Endpoint principal: recibe texto, procesa con Gemma, ejecuta comandos y genera voz."""
+    global current_task
+
     if not request.text.strip():
         raise HTTPException(status_code=400, detail="Texto vacío")
 
-    logger.info(f"Transcripción recibida: {request.text[:100]}...")
+    if current_task and not current_task.done():
+        current_task.cancel()
 
-    conversation_history.append(OllamaMessage(role="user", content=request.text))
-
-    if len(conversation_history) > MAX_HISTORY:
-        conversation_history[:] = conversation_history[-MAX_HISTORY:]
-
-    messages = [OllamaMessage(role="system", content=system_prompt)] + conversation_history
+    current_task = asyncio.create_task(_process_transcription(request.text))
 
     try:
-        assert ollama_client is not None
-        gemma_response = await ollama_client.generate(messages)
-    except Exception as e:
-        logger.error(f"Error llamando a Ollama: {e}")
-        raise HTTPException(status_code=502, detail=f"Error con Ollama: {e}")
+        result = await current_task
+        return TranscriptionResponse(**result)
+    except asyncio.CancelledError:
+        return TranscriptionResponse(
+            status="cancelled",
+            response_text="",
+            commands_executed=0,
+        )
 
-    parsed = parse_gemma_response(gemma_response)
 
-    conversation_history.append(OllamaMessage(role="assistant", content=gemma_response))
+@app.post("/cancel")
+async def cancel_processing():
+    """Cancela cualquier procesamiento en curso y detiene TTS."""
+    global processing, current_task
 
-    commands_executed = 0
-    if parsed.commands:
-        assert command_executor is not None
-        results = command_executor.execute_multiple(parsed.commands)
-        commands_executed = sum(1 for success, _ in results if success)
-        for success, output in results:
-            status = "OK" if success else "FALLÓ"
-            logger.info(f"Comando [{status}]: {output}")
+    cancelled = False
 
-    if parsed.action_type == "vision":
-        try:
-            assert vision_tool is not None
-            assert ollama_client is not None
-            logger.info("Acción de visión: capturando pantalla")
-            image_base64 = vision_tool.get_screen_for_vision()
-            vision_response = await ollama_client.generate_with_image(
-                text="Describe brevemente qué se ve en esta pantalla. Sé conciso y útil.",
-                image_base64=image_base64,
-            )
-            parsed.response_text = vision_response
-            logger.info(f"Respuesta de visión: {vision_response[:100]}...")
-        except Exception as e:
-            logger.error(f"Error en visión: {e}")
-            parsed.response_text = "No pude capturar la pantalla en este momento."
+    if current_task and not current_task.done():
+        current_task.cancel()
+        cancelled = True
+        logger.info("Tarea cancelada por el usuario")
 
-    audio_file: Optional[str] = None
-    if parsed.response_text and parsed.action_type in ("speak", "both", "vision"):
-        parsed.response_text = strip_markdown(parsed.response_text)
-        try:
-            assert tts_engine is not None
-            audio_file = await tts_engine.speak_async(parsed.response_text)
-        except Exception as e:
-            logger.error(f"Error en TTS: {e}")
+    processing = False
 
-    return TranscriptionResponse(
-        status="success",
-        response_text=parsed.response_text,
-        commands_executed=commands_executed,
-        audio_file=audio_file,
-    )
+    if tts_engine:
+        tts_engine.stop()
+
+    return {"status": "cancelled", "was_processing": cancelled}
 
 
 @app.get("/status", response_model=StatusResponse)
@@ -179,6 +227,7 @@ async def get_status():
         ollama_connected=ollama_ok,
         bluetooth_audio=bt_status,
         conversation_length=len(conversation_history),
+        processing=processing,
     )
 
 

@@ -18,6 +18,8 @@ fi
 
 # Detener Ollama también
 if command -v ollama &>/dev/null; then
+    echo "Descargando modelo de memoria..."
+    ollama stop gemma4:e2b 2>/dev/null || true
     echo "Deteniendo Ollama..."
     systemctl --user stop ollama.service 2>/dev/null || true
     OLLAMA_PID=$(pgrep -f "ollama serve" 2>/dev/null || true)

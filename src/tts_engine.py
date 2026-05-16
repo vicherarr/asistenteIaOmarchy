@@ -30,6 +30,7 @@ class TTSEngine:
     def __init__(self) -> None:
         self._kokoro_pipeline = None
         self._default_sink: Optional[str] = None
+        self._playback_process: Optional[subprocess.Popen] = None
         self._init_kokoro()
 
     def _init_kokoro(self) -> None:
@@ -167,24 +168,39 @@ class TTSEngine:
                     )
                     audio_path = sped_path
 
-                subprocess.run(
+                self._playback_process = subprocess.Popen(
                     ["paplay", "--device", self._default_sink, audio_path],
-                    capture_output=True, timeout=60,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 )
+                self._playback_process.wait(timeout=120)
+                self._playback_process = None
             else:
                 if ext == ".mp3":
                     cmd = ["ffplay", "-nodisp", "-autoexit", "-af", f"atempo={speed}", audio_path]
                 else:
                     cmd = ["aplay", audio_path]
 
-                result = subprocess.run(cmd, capture_output=True, timeout=60)
-                if result.returncode != 0:
-                    logger.warning(f"Error reproduciendo: {result.stderr.decode()}")
+                self._playback_process = subprocess.Popen(
+                    cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+                self._playback_process.wait(timeout=120)
+                self._playback_process = None
 
         except FileNotFoundError:
             logger.warning(f"Reproductor no encontrado para {ext}")
+        except subprocess.TimeoutExpired:
+            if self._playback_process:
+                self._playback_process.kill()
+                self._playback_process = None
         except Exception as e:
             logger.warning(f"Fallo en reproducción: {e}")
+
+    def stop(self) -> None:
+        """Detiene la reproducción de audio en curso."""
+        if self._playback_process and self._playback_process.poll() is None:
+            self._playback_process.kill()
+            self._playback_process = None
+            logger.info("Reproducción de TTS interrumpida")
 
     def speak_async(self, text: str) -> asyncio.Task:
         return asyncio.create_task(self._speak_async(text))
