@@ -12,7 +12,7 @@ from src.config import settings
 logger = logging.getLogger(__name__)
 
 # Intentar encontrar el modelo en la ubicación por defecto de la instalación
-DEFAULT_MODEL_PATH = Path.home() / ".cache" / "whisper" / "ggml-base.bin"
+DEFAULT_MODEL_PATH = Path.home() / ".cache" / "whisper" / "ggml-small.bin"
 
 
 class STTEngine:
@@ -24,25 +24,47 @@ class STTEngine:
             logger.warning(f"Modelo de Whisper no encontrado en {self.model_path}")
 
     async def transcribe(self, audio_path: Path) -> str:
-        """Transcribe un archivo de audio a texto."""
+        """Transcribe un archivo de audio a texto, con limpieza previa."""
         if not self.model_path.exists():
             return "[Error: Modelo Whisper no encontrado]"
 
-        logger.info(f"Transcribiendo audio: {audio_path}")
+        logger.info(f"Procesando audio para STT: {audio_path}")
 
         try:
-            # whisper-cli --model <model> --file <file> --language es --no-timestamps
+            # 1. Normalización suave con FFmpeg (configuración óptima demostrada en lab)
+            cleaned_path = audio_path.with_suffix(".cleaned.wav")
+            
+            ffmpeg_process = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-y", "-i", str(audio_path),
+                "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
+                "-ar", "16000", "-ac", "1", str(cleaned_path),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+            _, ffmpeg_stderr = await ffmpeg_process.communicate()
+
+            if ffmpeg_process.returncode == 0:
+                audio_to_transcribe = cleaned_path
+            else:
+                audio_to_transcribe = audio_path
+
+            # 2. Transcripción con whisper-cli (Beam Size 5: el cambio clave)
             process = await asyncio.create_subprocess_exec(
                 "whisper-cli",
                 "--model", str(self.model_path),
-                "--file", str(audio_path),
+                "--file", str(audio_to_transcribe),
                 "--language", "es",
                 "--no-timestamps",
+                "--beam-size", "5",
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
 
             stdout, stderr = await process.communicate()
+
+            # Limpiar archivo temporal normalizado
+            if audio_to_transcribe != audio_path:
+                audio_to_transcribe.unlink(missing_ok=True)
 
             if process.returncode != 0:
                 error_msg = stderr.decode().strip()

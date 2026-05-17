@@ -190,6 +190,11 @@ class AudioManager:
         self._default_sink = node_id
         logger.info(f"Salida por defecto establecida: {node_id}")
 
+    def set_volume(self, node_id: str, volume: float) -> None:
+        """Establece el volumen de un nodo (0.0 a 1.0)."""
+        self._run_wpctl(["set-volume", node_id, str(volume)])
+        logger.info(f"Volumen de nodo {node_id} establecido a {volume}")
+
     def auto_configure_bluetooth(self) -> tuple[Optional[str], Optional[str]]:
         """
         Detecta y configura automáticamente los dispositivos Bluetooth.

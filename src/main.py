@@ -179,30 +179,35 @@ async def toggle_listen(state: AppState = Depends(get_app_state)):
         else:
             return {"status": "error", "message": "No se pudo obtener el audio"}
     else:
-        # Iniciar nueva grabación (FLUJO OPTIMIZADO)
-        # 1. Cancelar cualquier cosa en curso (TTS o procesamiento previo)
+        # Iniciar nueva grabación (FLUJO CORREGIDO PARA EVITAR RUIDO DEL BIP)
+        # 1. Cancelar cualquier cosa en curso
         if state.current_task and not state.current_task.done():
             state.current_task.cancel()
         if state.tts_engine:
             state.tts_engine.stop()
             
-        # 2. Empezar a grabar INMEDIATAMENTE
-        state.is_recording = True
-        
-        # Intentar usar el micro detectado previamente para ganar milisegundos
-        source_id = state.audio_manager.default_source
-        state.audio_recorder.start_recording(source_id=source_id)
-        
-        # 3. Notificar y emitir un pequeño sonido (con un pequeño delay para el Bluetooth)
+        # 2. Configuración de audio y Lanzar BIP PRIMERO
+        # Despertamos al Bluetooth y damos feedback ANTES de abrir el micro
         state.assistant_service.send_notification("Escuchando... habla ahora")
         
-        async def delayed_beep():
-            # Los auriculares BT suelen tardar entre 500ms y 1s en estabilizar el audio 
-            # tras abrir el micro. Usamos 0.8s como valor seguro.
-            await asyncio.sleep(0.8)
+        async def start_sequence():
+            # Reproducir bip
             state.audio_manager.play_system_sound("message-new-instant")
+            # Esperar a que el bip termine y el auricular se estabilice (1.2s total)
+            await asyncio.sleep(1.0)
             
-        asyncio.create_task(delayed_beep())
+            # 3. Empezar a grabar AHORA que todo está en silencio
+            state.is_recording = True
+            source_id = state.audio_manager.default_source
+            
+            # Ajuste de volumen
+            if source_id:
+                await asyncio.to_thread(state.audio_manager.set_volume, source_id, 0.9)
+                
+            state.audio_recorder.start_recording(source_id=source_id)
+            logger.info("Grabación iniciada tras el bip")
+
+        asyncio.create_task(start_sequence())
         
         # 4. Refrescar configuración de audio en SEGUNDO PLANO
         asyncio.create_task(asyncio.to_thread(state.audio_manager.auto_configure_bluetooth))
