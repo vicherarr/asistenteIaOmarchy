@@ -76,11 +76,23 @@ class AssistantService:
         return await self.process_transcription(text, conversation_history, sink_id, max_history)
 
     def send_notification(self, message: str, title: str = "AsistenteIA") -> None:
-        """Envía una notificación de escritorio."""
+        """Envía una notificación de escritorio y emite un bip si es inicio de escucha."""
         try:
             subprocess.Popen(["notify-send", title, message])
+            
+            # Si el mensaje es de inicio de escucha, emitir un bip sonoro
+            if message == "Escuchando...":
+                # Intentar reproducir un sonido de sistema estándar
+                beep_sound = "/usr/share/sounds/freedesktop/stereo/message.oga"
+                if not Path(beep_sound).exists():
+                    beep_sound = "/usr/share/sounds/freedesktop/stereo/complete.oga"
+                
+                if Path(beep_sound).exists():
+                    subprocess.Popen(["paplay", beep_sound], 
+                                   stdout=subprocess.DEVNULL, 
+                                   stderr=subprocess.DEVNULL)
         except Exception as e:
-            logger.warning(f"No se pudo enviar notificación: {e}")
+            logger.warning(f"No se pudo enviar notificación o bip: {e}")
 
     async def process_transcription(
         self,
