@@ -1,5 +1,6 @@
 """Módulo de gestión de audio Bluetooth vía PipeWire/WirePlumber."""
 
+import asyncio
 import logging
 import subprocess
 from dataclasses import dataclass
@@ -49,26 +50,27 @@ class AudioManager:
     def default_sink(self) -> Optional[str]:
         return self._default_sink
 
-    def _run_wpctl(self, args: list[str]) -> str:
-        """Ejecuta un comando wpctl y devuelve su salida."""
+    async def _run_wpctl(self, args: list[str]) -> str:
+        """Ejecuta un comando wpctl de forma asíncrona y devuelve su salida."""
         try:
-            result = subprocess.run(
-                ["wpctl"] + args,
-                capture_output=True,
-                text=True,
-                timeout=5,
+            process = await asyncio.create_subprocess_exec(
+                "wpctl", *args,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
             )
-            if result.returncode != 0:
-                raise AudioManagerError(f"wpctl falló: {result.stderr.strip()}")
-            return result.stdout
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=5)
+            
+            if process.returncode != 0:
+                raise AudioManagerError(f"wpctl falló: {stderr.decode().strip()}")
+            return stdout.decode()
         except FileNotFoundError:
             raise AudioManagerError("wpctl no encontrado. Instalar wireplumber.")
-        except subprocess.TimeoutExpired:
+        except asyncio.TimeoutError:
             raise AudioManagerError("Timeout ejecutando wpctl")
 
-    def list_devices(self) -> list[AudioDevice]:
-        """Lista todos los dispositivos de audio disponibles."""
-        output = self._run_wpctl(["status"])
+    async def list_devices(self) -> list[AudioDevice]:
+        """Lista todos los dispositivos de audio disponibles de forma asíncrona."""
+        output = await self._run_wpctl(["status"])
         devices: list[AudioDevice] = []
 
         current_type: Optional[DeviceType] = None
@@ -144,9 +146,9 @@ class AudioManager:
 
         return devices
 
-    def get_default_bluetooth_source(self) -> Optional[AudioDevice]:
+    async def get_default_bluetooth_source(self) -> Optional[AudioDevice]:
         """Obtiene el dispositivo fuente Bluetooth por defecto."""
-        devices = self.list_devices()
+        devices = await self.list_devices()
         bt_sources = [
             d for d in devices
             if d.device_type == DeviceType.SOURCE and d.is_bluetooth
@@ -161,9 +163,9 @@ class AudioManager:
 
         return None
 
-    def get_default_bluetooth_sink(self) -> Optional[AudioDevice]:
+    async def get_default_bluetooth_sink(self) -> Optional[AudioDevice]:
         """Obtiene el dispositivo sumidero Bluetooth por defecto."""
-        devices = self.list_devices()
+        devices = await self.list_devices()
         bt_sinks = [
             d for d in devices
             if d.device_type == DeviceType.SINK and d.is_bluetooth
@@ -178,37 +180,37 @@ class AudioManager:
 
         return None
 
-    def set_default_source(self, node_id: str) -> None:
+    async def set_default_source(self, node_id: str) -> None:
         """Establece un nodo como fuente de audio por defecto."""
-        self._run_wpctl(["set-default", node_id])
+        await self._run_wpctl(["set-default", node_id])
         self._default_source = node_id
         logger.info(f"Fuente por defecto establecida: {node_id}")
 
-    def set_default_sink(self, node_id: str) -> None:
+    async def set_default_sink(self, node_id: str) -> None:
         """Establece un nodo como salida de audio por defecto."""
-        self._run_wpctl(["set-default", node_id])
+        await self._run_wpctl(["set-default", node_id])
         self._default_sink = node_id
         logger.info(f"Salida por defecto establecida: {node_id}")
 
-    def set_volume(self, node_id: str, volume: float) -> None:
+    async def set_volume(self, node_id: str, volume: float) -> None:
         """Establece el volumen de un nodo (0.0 a 1.0)."""
-        self._run_wpctl(["set-volume", node_id, str(volume)])
+        await self._run_wpctl(["set-volume", node_id, str(volume)])
         logger.info(f"Volumen de nodo {node_id} establecido a {volume}")
 
-    def auto_configure_bluetooth(self) -> tuple[Optional[str], Optional[str]]:
+    async def auto_configure_bluetooth(self) -> tuple[Optional[str], Optional[str]]:
         """
         Detecta y configura automáticamente los dispositivos Bluetooth.
         Devuelve (source_node_id, sink_node_id).
         """
-        source = self.get_default_bluetooth_source()
-        sink = self.get_default_bluetooth_sink()
+        source = await self.get_default_bluetooth_source()
+        sink = await self.get_default_bluetooth_sink()
 
         if source:
-            self.set_default_source(source.node_id)
+            await self.set_default_source(source.node_id)
             logger.info(f"Fuente BT configurada: {source.description}")
 
         if sink:
-            self.set_default_sink(sink.node_id)
+            await self.set_default_sink(sink.node_id)
             logger.info(f"Sink BT configurado: {sink.description}")
 
         return (
@@ -233,10 +235,10 @@ class AudioManager:
         except Exception as e:
             logger.warning(f"No se pudo reproducir sonido de sistema: {e}")
 
-    def get_status_summary(self) -> str:
+    async def get_status_summary(self) -> str:
         """Devuelve un resumen del estado de audio para inyección de contexto."""
         try:
-            devices = self.list_devices()
+            devices = await self.list_devices()
             bt_devices = [d for d in devices if d.is_bluetooth]
 
             if not bt_devices:

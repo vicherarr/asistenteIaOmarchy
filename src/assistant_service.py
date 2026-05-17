@@ -4,40 +4,46 @@ import asyncio
 import logging
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
-from src.command_executor import CommandExecutor, parse_gemma_response
-from src.ollama_client import OllamaClient, OllamaMessage
+from src.schema import ChatMessage
+from src.command_executor import execute_system_command, get_system_status, read_log_file
+from src.vision_tool import analyze_screen
+from src.litert_client import LiteRTClient
 from src.tts_engine import TTSEngine
-from src.vision_tool import VisionTool
 from src.stt_engine import STTEngine
-from src.utils import strip_markdown
-from src.context_injector import build_full_system_prompt
+from src.utils import strip_markdown, get_pending_image
+from src.config import settings
+from PIL import Image
 
 logger = logging.getLogger(__name__)
 
 
 class AssistantService:
-    """Orquesta la comunicación entre LLM, herramientas y TTS."""
+    """Orquesta la comunicación entre LLM, herramientas y TTS usando LiteRT."""
 
     def __init__(
         self,
-        ollama_client: OllamaClient,
-        command_executor: CommandExecutor,
-        vision_tool: VisionTool,
+        litert_client: LiteRTClient,
         tts_engine: TTSEngine,
         stt_engine: STTEngine,
     ):
-        self.ollama = ollama_client
-        self.executor = command_executor
-        self.vision = vision_tool
+        self.litert = litert_client
         self.tts = tts_engine
         self.stt = stt_engine
+        # Lista de herramientas para LiteRT
+        self.tools = [
+            execute_system_command,
+            get_system_status,
+            analyze_screen,
+            read_log_file
+        ]
 
     async def process_audio(
         self,
         audio_path: Path,
-        conversation_history: list[OllamaMessage],
+        conversation_history: list[ChatMessage],
+        sink_id: Optional[str] = None,
         max_history: int = 10
     ) -> dict:
         """Transcribe el audio y procesa el texto resultante."""
@@ -50,7 +56,7 @@ class AssistantService:
             return {"status": "error", "message": "No se detectó voz"}
 
         self.send_notification(f"Has dicho: {text}")
-        return await self.process_transcription(text, conversation_history, max_history)
+        return await self.process_transcription(text, conversation_history, sink_id, max_history)
 
     def send_notification(self, message: str, title: str = "AsistenteIA") -> None:
         """Envía una notificación de escritorio."""
@@ -62,76 +68,72 @@ class AssistantService:
     async def process_transcription(
         self,
         text: str,
-        conversation_history: list[OllamaMessage],
+        conversation_history: list[ChatMessage],
+        sink_id: Optional[str] = None,
         max_history: int = 10
     ) -> dict:
         """
-        Procesa el texto del usuario y ejecuta las acciones necesarias.
-        Devuelve un diccionario con el resultado.
+        Procesa el texto del usuario usando LiteRT y herramientas nativas.
         """
-        logger.info(f"Procesando transcripción: {text[:100]}...")
+        logger.info(f"Procesando transcripción con LiteRT: {text[:100]}...")
 
-        conversation_history.append(OllamaMessage(role="user", content=text))
-
+        # Añadir mensaje del usuario al historial
+        conversation_history.append(ChatMessage(role="user", content=text))
         if len(conversation_history) > max_history:
             conversation_history[:] = conversation_history[-max_history:]
 
-        # REGENERAR CONTEXTO DINÁMICO (Hardware + Sistema)
-        system_prompt = build_full_system_prompt()
-        
-        # Copiamos la historia para no modificarla permanentemente con el nudge
-        messages = [OllamaMessage(role="system", content=system_prompt)]
-        for msg in conversation_history[:-1]:
-            messages.append(msg)
-            
-        # Añadimos el último mensaje del usuario con un "nudge" para forzar JSON
-        last_msg = conversation_history[-1]
-        nudge_content = f"{last_msg.content}\n\n(Responde SOLO en JSON)"
-        messages.append(OllamaMessage(role="user", content=nudge_content))
+        # Cargar system prompt desde archivo
+        prompt_path = settings.PROJECT_ROOT / "config" / "system_prompt.txt"
+        try:
+            system_prompt = prompt_path.read_text(encoding="utf-8")
+        except Exception as e:
+            logger.error(f"Error cargando system prompt: {e}")
+            system_prompt = "Eres un asistente de voz para Linux llamado AsistenteIA."
 
-        gemma_response = await self.ollama.generate(messages)
-        logger.info(f"Respuesta RAW de Ollama: {gemma_response}")
-        parsed = parse_gemma_response(gemma_response)
+        # Primera llamada al modelo
+        # LiteRT ejecutará las herramientas automáticamente si lo considera necesario
+        response_text = await self.litert.chat(
+            prompt=text,
+            tools=self.tools,
+            system_prompt=system_prompt,
+            history=conversation_history[:-1] # Pasamos el historial previo
+        )
 
-        conversation_history.append(OllamaMessage(role="assistant", content=gemma_response))
+        logger.info(f"Respuesta de LiteRT: {response_text}")
 
-        commands_executed = 0
-        if parsed.commands:
-            results = await self.executor.execute_multiple(parsed.commands)
-            commands_executed = sum(1 for success, _ in results if success)
-            for success, output in results:
-                status = "OK" if success else "FALLÓ"
-                logger.info(f"Comando [{status}]: {output}")
+        # Comprobar si una herramienta de visión dejó una imagen pendiente
+        pending_image_path = get_pending_image()
+        if pending_image_path:
+            logger.info("Imagen detectada de tool 'analyze_screen'. Realizando segunda pasada visual...")
+            try:
+                img = Image.open(pending_image_path)
+                # Segunda llamada incluyendo la imagen
+                response_text = await self.litert.chat(
+                    prompt="Describe qué ves en esta imagen y responde a la petición original del usuario.",
+                    image=img,
+                    system_prompt=system_prompt,
+                    history=conversation_history # Incluimos el turno actual
+                )
+                img.close()
+                Path(pending_image_path).unlink()
+            except Exception as e:
+                logger.error(f"Error procesando imagen pendiente: {e}")
+                response_text = "Lo siento, tuve un problema al procesar la imagen de tu pantalla."
 
-        if parsed.action_type == "vision":
-            parsed.response_text = await self._handle_vision_action()
+        # Guardar respuesta en el historial
+        conversation_history.append(ChatMessage(role="assistant", content=response_text))
 
         audio_file: Optional[str] = None
-        if parsed.response_text and parsed.action_type in ("speak", "both", "vision"):
-            clean_text = strip_markdown(parsed.response_text)
+        if response_text:
+            clean_text = strip_markdown(response_text)
             try:
-                audio_file = await self.tts.speak_async(clean_text)
+                audio_file = await self.tts.speak(clean_text, sink_id=sink_id)
             except Exception as e:
                 logger.error(f"Error en TTS: {e}")
 
         return {
             "status": "success",
-            "response_text": parsed.response_text,
-            "commands_executed": commands_executed,
+            "response_text": response_text,
+            "commands_executed": 1 if "Éxito" in response_text else 0,
             "audio_file": audio_file,
         }
-
-    async def _handle_vision_action(self) -> str:
-        """Maneja la acción de visión de forma modular."""
-        try:
-            logger.info("Acción de visión: capturando pantalla")
-            image_base64 = await asyncio.to_thread(self.vision.get_screen_for_vision)
-            vision_response = await self.ollama.generate_with_image(
-                text="Describe brevemente qué se ve en esta pantalla. Sé conciso y útil.",
-                image_base64=image_base64,
-            )
-            logger.info(f"Respuesta de visión: {vision_response[:100]}...")
-            return vision_response
-        except Exception as e:
-            logger.error(f"Error en visión: {e}")
-            return "No pude capturar la pantalla en este momento."

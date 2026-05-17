@@ -16,9 +16,6 @@ from src.context_injector import (
     get_audio_status,
     get_network_info,
     get_hardware_context,
-    get_omarchy_commands,
-    get_system_prompt,
-    build_full_system_prompt,
     ContextInjectorError,
 )
 
@@ -83,13 +80,6 @@ def test_get_display_info_hyprland_available():
         result = get_display_info()
 
     assert "DP-1" in result
-
-
-def test_get_display_info_hyprland_unavailable():
-    with patch('src.context_injector._run_cmd', return_value="Hyprland no disponible"):
-        result = get_display_info()
-
-    assert "Hyprland no disponible" in result
 
 
 def test_get_window_info():
@@ -157,51 +147,3 @@ def test_get_hardware_context():
     assert "CPU" in context
     assert "Ryzen 7" in context
     assert "RTX 3070" in context
-
-
-def test_get_omarchy_commands_from_file():
-    config_path = Path(__file__).parent.parent / "config" / "omarchy_commands.md"
-    if config_path.exists():
-        result = get_omarchy_commands()
-        assert "omarchy launch" in result
-        assert "playerctl" in result
-
-
-def test_get_omarchy_commands_fallback():
-    with patch('src.context_injector.OMARCHY_COMMANDS_PATH') as mock_path:
-        mock_path.exists.return_value = False
-        result = get_omarchy_commands()
-
-    assert "omarchy launch" in result
-    assert "playerctl" in result
-
-
-def test_get_system_prompt_from_file():
-    config_path = Path(__file__).parent.parent / "config" / "system_prompt.txt"
-    if config_path.exists():
-        result = get_system_prompt()
-        assert "AsistenteIA" in result
-
-
-def test_get_system_prompt_fallback():
-    with patch('src.context_injector.SYSTEM_PROMPT_PATH') as mock_path:
-        mock_path.exists.return_value = False
-        result = get_system_prompt()
-
-    assert "CachyOS" in result
-    assert "Hyprland" in result
-
-
-def test_build_full_system_prompt():
-    with patch('src.context_injector.get_hardware_context', return_value="HW: test"):
-        with patch('src.context_injector.get_omarchy_commands', return_value="CMD: test"):
-            with patch('src.context_injector.get_system_prompt', return_value="PROMPT: test"):
-                prompt = build_full_system_prompt()
-
-    assert "PROMPT: test" in prompt
-    assert "HW: test" in prompt
-    assert "CMD: test" in prompt
-    assert "FORMATO DE RESPUESTA" in prompt
-    assert "response_text" in prompt
-    assert "commands" in prompt
-    assert "action_type" in prompt

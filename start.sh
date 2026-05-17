@@ -15,17 +15,16 @@ cd "$PROJECT_DIR"
 # Cargar configuraciones del .env si existe para obtener el puerto y modelo
 if [ -f ".env" ]; then
     PORT=$(grep '^PORT=' .env | cut -d '=' -f2 | tr -d '[:space:]' || echo "8765")
-    MODEL=$(grep '^OLLAMA_MODEL=' .env | cut -d '=' -f2 | tr -d '[:space:]' || echo "ministral-3:3b")
+    MODEL_PATH=$(grep '^LITERT_MODEL_PATH=' .env | cut -d '=' -f2 | tr -d '[:space:]' || echo "models/gemma-4-e2b.litertlm")
 else
     PORT="8765"
-    MODEL="ministral-3:3b"
+    MODEL_PATH="models/gemma-4-e2b.litertlm"
 fi
 
 PID_FILE="/tmp/asistenteia.pid"
 LOG_FILE="/tmp/asistenteia.log"
-OLLAMA_FLAG="/tmp/asistenteia_started_ollama"
 
-echo "=== AsistenteIA: Iniciando en puerto $PORT ==="
+echo "=== AsistenteIA (LiteRT): Iniciando en puerto $PORT ==="
 
 # --- 1. Gestión de procesos previos ---
 EXISTING_PID=$(lsof -ti:"$PORT" 2>/dev/null || true)
@@ -33,20 +32,6 @@ if [ -n "$EXISTING_PID" ]; then
     echo "(!) Puerto $PORT ocupado por PID $EXISTING_PID. Intentando liberar..."
     kill "$EXISTING_PID" 2>/dev/null || true
     sleep 2
-    if lsof -ti:"$PORT" &>/dev/null; then
-        echo "(!) El proceso no cedió, forzando cierre..."
-        kill -9 "$EXISTING_PID" 2>/dev/null || true
-        sleep 1
-    fi
-fi
-
-if [ -f "$PID_FILE" ]; then
-    PID=$(cat "$PID_FILE")
-    if kill -0 "$PID" 2>/dev/null; then
-        echo "(!) Error: Ya existe una instancia corriendo (PID: $PID)"
-        exit 1
-    fi
-    rm -f "$PID_FILE"
 fi
 
 # --- 2. Validación de entorno ---
@@ -55,52 +40,14 @@ if [ ! -d "venv" ]; then
     exit 1
 fi
 
-# --- 3. Preparación de Ollama ---
-if ! command -v ollama &>/dev/null; then
-    echo "(!) Error: 'ollama' no está instalado en el sistema."
+# Verificar modelo LiteRT
+if [ ! -f "$MODEL_PATH" ]; then
+    echo "(!) Error: Modelo LiteRT no encontrado en $MODEL_PATH."
     exit 1
 fi
 
-# Iniciar Ollama si no responde
-if ! curl -s http://localhost:11434/api/tags &>/dev/null; then
-    echo "-> Ollama no detectado. Iniciando servicio..."
-    if systemctl --user list-unit-files | grep -q ollama.service; then
-        systemctl --user start ollama.service
-    else
-        ollama serve > /dev/null 2>&1 &
-    fi
-    touch "$OLLAMA_FLAG"
-    echo "-> Esperando a que Ollama despierte..."
-    COUNT=0
-    until curl -s http://localhost:11434/api/tags &>/dev/null; do
-        sleep 2
-        COUNT=$((COUNT + 1))
-        if [ $COUNT -ge 30 ]; then
-            echo "(!) Error: Ollama tardó demasiado en iniciar."
-            exit 1
-        fi
-    done
-    echo "-> Ollama listo."
-fi
-
-# Optimización de GPU: Detener otros modelos cargados
-echo "-> Optimizando memoria GPU..."
-LOADED_MODELS=$(ollama ps 2>/dev/null | tail -n +2 | awk '{print $1}' || echo "")
-for m in $LOADED_MODELS; do
-    if [[ "$m" != "$MODEL"* ]]; then
-        echo "   - Liberando modelo '$m'..."
-        ollama stop "$m" 2>/dev/null || true
-    fi
-done
-
-# Verificar/Descargar modelo
-if ! ollama list | grep -q "$MODEL"; then
-    echo "-> Modelo '$MODEL' no encontrado. Descargando (esto puede tardar)..."
-    ollama pull "$MODEL"
-fi
-
-# --- 4. Lanzamiento del Asistente ---
-echo "-> Iniciando Orchestrator..."
+# --- 3. Lanzamiento del Asistente ---
+echo "-> Iniciando Orchestrator con LiteRT..."
 ./venv/bin/python -m src.main > "$LOG_FILE" 2>&1 &
 SERVER_PID=$!
 echo "$SERVER_PID" > "$PID_FILE"

@@ -1,5 +1,6 @@
 """Inyección de contexto del sistema (Hardware + Omarchy/Hyprland)."""
 
+import asyncio
 import logging
 import subprocess
 from pathlib import Path
@@ -17,7 +18,7 @@ class ContextInjectorError(Exception):
 
 
 def _run_cmd(cmd: str, shell: bool = True, timeout: int = 5) -> str:
-    """Ejecuta un comando del sistema y devuelve su salida."""
+    """Ejecuta un comando del sistema y devuelve su salida (Síncrono)."""
     try:
         result = subprocess.run(
             cmd,
@@ -29,6 +30,25 @@ def _run_cmd(cmd: str, shell: bool = True, timeout: int = 5) -> str:
         return result.stdout.strip() if result.returncode == 0 else f"[Error: {result.stderr.strip()}]"
     except subprocess.TimeoutExpired:
         return "[Timeout]"
+    except Exception as e:
+        return f"[Exception: {e}]"
+
+
+async def _run_cmd_async(cmd: str, timeout: int = 5) -> str:
+    """Ejecuta un comando del sistema de forma asíncrona (Preferido)."""
+    import shlex
+    try:
+        args = shlex.split(cmd) if not "|" in cmd else ["/bin/bash", "-c", cmd]
+        process = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+        if process.returncode == 0:
+            return stdout.decode().strip()
+        else:
+            return f"[Error: {stderr.decode().strip()}]"
     except Exception as e:
         return f"[Exception: {e}]"
 
@@ -76,7 +96,7 @@ def get_network_info() -> str:
 def get_hardware_context() -> str:
     """
     Recopila toda la información de hardware del sistema.
-    Devuelve un string formateado para inyectar en el system prompt.
+    Devuelve un string formateado para ser usado por herramientas LiteRT.
     """
     sections = [
         ("CPU", get_cpu_info()),
@@ -96,78 +116,9 @@ def get_hardware_context() -> str:
     return context
 
 
-def get_omarchy_commands() -> str:
-    """Carga el manual de comandos de Omarchy."""
-    if OMARCHY_COMMANDS_PATH.exists():
-        return OMARCHY_COMMANDS_PATH.read_text(encoding="utf-8")
-
-    logger.warning("Archivo de comandos Omarchy no encontrado. Usando defaults.")
-    return """## COMANDOS DE OMARCHI/HYPRLAND DISPONIBLES
-
-El asistente puede ejecutar estos comandos del sistema:
-
-- `omarchy launch <app>` - Lanzar cualquier aplicación
-- `omarchy search <query>` - Buscar en el sistema
-- `hyprctl dispatch exec <command>` - Ejecutar comando en Hyprland
-- `hyprctl dispatch focuswindow <class>` - Enfocar ventana
-- `playerctl play-pause` - Pausar/reproducir música
-- `playerctl next` - Siguiente pista
-- `playerctl previous` - Pista anterior
-- `playerctl stop` - Detener reproducción
-- `wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle` - Silenciar audio
-- `wpctl set-volume @DEFAULT_AUDIO_SINK@ 50%` - Ajustar volumen
-- `chromium <url>` - Abrir URL en navegador
-- `notify-send "titulo" "mensaje"` - Enviar notificación
-"""
-
-
-def get_system_prompt() -> str:
-    """Carga el system prompt base o usa uno por defecto."""
-    if SYSTEM_PROMPT_PATH.exists():
-        return SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
-
-    return """Eres un asistente de voz experto para Linux CachyOS con Hyprland/Omarchy.
-Responde siempre en español de forma concisa y útil.
-Cuando necesites ejecutar acciones del sistema, usa el formato JSON especificado."""
-
-
-def build_full_system_prompt() -> str:
-    """
-    Construye el system prompt completo con todo el contexto inyectado.
-    Optimizado para modelos ligeros (Gemma 2B / 8-bit).
-    """
-    hardware_context = get_hardware_context()
-    omarchy_commands = get_omarchy_commands()
-    base_prompt = get_system_prompt()
-
-    full_prompt = f"""{base_prompt}
-
-## COMANDOS DISPONIBLES
-{omarchy_commands}
-
-## CONTEXTO ACTUAL DEL SISTEMA
-{hardware_context}
-
-## FORMATO DE RESPUESTA OBLIGATORIO (JSON)
-Debes responder ÚNICAMENTE en este formato JSON, sin texto antes ni después:
-
-```json
-{{
-    "response_text": "Respuesta verbal corta en español",
-    "commands": [
-        {{"command": "comando", "description": "objetivo"}}
-    ],
-    "action_type": "speak|execute|both|vision"
-}}
-```
-
-REGLAS FINALES:
-- Para webs usa: `chromium <url>`
-- Si buscas: `chromium https://www.google.com/search?q=<query>`
-- NUNCA escribas fuera del JSON.
-"""
-
-    return full_prompt
+def get_system_context() -> str:
+    """Alias para herramientas LiteRT."""
+    return get_hardware_context()
 
 
 def get_context_summary() -> str:

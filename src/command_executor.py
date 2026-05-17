@@ -113,24 +113,95 @@ class CommandExecutor:
             results.append((success, output))
         return results
 
+# --- Funciones para LiteRT Tool Calling ---
+
+def execute_system_command(command: str) -> str:
+    """
+    Ejecuta un comando del sistema en Linux de forma segura. 
+    Usa esto para abrir aplicaciones (ej. 'chromium', 'spotify'), controlar volumen ('wpctl'), 
+    controlar música ('playerctl') o gestionar ventanas de Hyprland ('hyprctl').
+    
+    Args:
+        command: El comando exacto a ejecutar.
+    """
+    executor = CommandExecutor()
+    
+    # Dado que LiteRT llama a esto desde un hilo separado (asyncio.to_thread),
+    # podemos usar asyncio.run() si no hay un loop corriendo en este hilo.
+    try:
+        try:
+            loop = asyncio.get_running_loop()
+            # Si ya hay un loop (poco probable en el thread de LiteRT), usamos run_until_complete
+            success, output = loop.run_until_complete(executor.execute(command))
+        except RuntimeError:
+            # Caso normal: no hay loop en el thread de LiteRT
+            success, output = asyncio.run(executor.execute(command))
+        
+        if success:
+            return f"Éxito: {output if output else 'Comando ejecutado correctamente'}"
+        else:
+            return f"Error: {output}"
+    except Exception as e:
+        logger.error(f"Error en tool execute_system_command: {e}")
+        return f"Excepción ejecutando comando: {e}"
+
+def get_system_status() -> str:
+    """
+    Obtiene un resumen detallado del estado actual del sistema: CPU, RAM, Audio, Red y Ventanas.
+    Usa esto cuando el usuario pregunte por el rendimiento, carga o estado general del PC.
+    """
+    from src.context_injector import get_system_context
+    try:
+        # get_system_context es síncrona
+        context = get_system_context()
+        return f"Contexto del sistema obtenido:\n{context}"
+    except Exception as e:
+        return f"Error obteniendo estado: {e}"
+
+def read_log_file(service: str = "asistenteia") -> str:
+    """
+    Lee las últimas 20 líneas del log de un servicio systemd. 
+    Útil para diagnosticar errores si algo no funciona bien.
+    
+    Args:
+        service: El nombre del servicio (ej. 'asistenteia', 'bluetooth', 'pipewire').
+    """
+    import subprocess
+    try:
+        cmd = ["journalctl", "--user", "-u", service, "-n", "20", "--no-pager"]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            return f"Logs de {service}:\n{result.stdout}"
+        else:
+            return f"Error leyendo logs: {result.stderr}"
+    except Exception as e:
+        return f"Error ejecutando journalctl: {e}"
+
 
 def parse_gemma_response(raw_text: str) -> ParsedResponse:
     """
     Parsea la respuesta del LLM para extraer texto y comandos.
-    Maneja etiquetas de pensamiento (R1), bloques markdown y JSON plano.
+    Maneja etiquetas de pensamiento (R1), bloques markdown y JSON plano con estructuras anidadas.
     """
     # 1. Limpiar etiquetas de pensamiento de DeepSeek R1 (<thought>...</thought>)
     clean_text = re.sub(r"<thought>[\s\S]*?</thought>", "", raw_text).strip()
     
     # 2. Intentar extraer JSON de bloques de código markdown
     json_match = re.search(r"```json\s*([\s\S]*?)\s*```", clean_text)
-    if not json_match:
-        # Intentar buscar un objeto JSON plano { ... } si no hay bloques markdown
-        json_match = re.search(r"(\{[\s\S]*?\})", clean_text)
-
+    
+    json_str = None
     if json_match:
+        json_str = json_match.group(1)
+    else:
+        # Intentar buscar un objeto JSON plano { ... } manejando anidamiento básico
+        # Buscamos desde el primer '{' hasta el último '}'
+        start_idx = clean_text.find('{')
+        end_idx = clean_text.rfind('}')
+        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+            json_str = clean_text[start_idx:end_idx+1]
+
+    if json_str:
         try:
-            json_str = json_match.group(1)
             data = json.loads(json_str)
             
             # Extraer campos con fallbacks
@@ -146,8 +217,10 @@ def parse_gemma_response(raw_text: str) -> ParsedResponse:
 
             # Si el JSON no tiene texto de respuesta, usamos el texto limpio fuera del JSON
             if not response_text:
-                response_text = re.sub(r"```json[\s\S]*?```", "", clean_text).strip()
-                response_text = re.sub(r"\{[\s\S]*?\}", "", response_text).strip()
+                text_without_json = clean_text.replace(json_str, "").strip()
+                # Limpiar también los bloques markdown si quedaron
+                text_without_json = re.sub(r"```json\s*```", "", text_without_json).strip()
+                response_text = text_without_json
 
             return ParsedResponse(
                 response_text=response_text,

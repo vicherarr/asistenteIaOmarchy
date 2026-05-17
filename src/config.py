@@ -21,7 +21,10 @@ class Settings(BaseSettings):
     OLLAMA_TIMEOUT: float = 120.0
     OLLAMA_TEMPERATURE: float = 0.3
     OLLAMA_NUM_CTX: int = 4096
-    
+
+    # LiteRT
+    LITERT_MODEL_PATH: str = "models/gemma-4-e2b.litertlm"
+
     # Assistant
     MAX_HISTORY: int = 10
     
@@ -43,5 +46,6 @@ class Settings(BaseSettings):
 # Instancia global de configuración
 settings = Settings()
 
-# Asegurar que el directorio temporal existe
+# Asegurar que los directorios existen
 settings.TEMP_DIR.mkdir(parents=True, exist_ok=True)
+(settings.PROJECT_ROOT / "models").mkdir(parents=True, exist_ok=True)

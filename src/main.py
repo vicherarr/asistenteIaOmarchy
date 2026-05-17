@@ -2,8 +2,6 @@
 
 import asyncio
 import logging
-import re
-import subprocess
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -12,15 +10,13 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from src.audio_manager import AudioManager
-from src.command_executor import CommandExecutor, parse_gemma_response
-from src.context_injector import build_full_system_prompt
-from src.ollama_client import OllamaClient, OllamaMessage
+from src.litert_client import LiteRTClient
 from src.tts_engine import TTSEngine
-from src.vision_tool import VisionTool
 from src.assistant_service import AssistantService
 from src.config import settings
 from src.audio_recorder import AudioRecorder
 from src.stt_engine import STTEngine
+from src.schema import ChatMessage
 from src.utils import strip_markdown
 
 logging.basicConfig(
@@ -36,20 +32,16 @@ class AppState:
     """Clase para mantener el estado de la aplicación sin variables globales."""
     def __init__(self):
         self.audio_manager = AudioManager()
-        self.ollama_client = OllamaClient()
-        self.command_executor = CommandExecutor()
+        self.litert_client = LiteRTClient()
         self.tts_engine = TTSEngine()
-        self.vision_tool = VisionTool()
         self.audio_recorder = AudioRecorder()
         self.stt_engine = STTEngine()
         self.assistant_service = AssistantService(
-            ollama_client=self.ollama_client,
-            command_executor=self.command_executor,
-            vision_tool=self.vision_tool,
+            litert_client=self.litert_client,
             tts_engine=self.tts_engine,
             stt_engine=self.stt_engine,
         )
-        self.conversation_history: list[OllamaMessage] = []
+        self.conversation_history: list[ChatMessage] = []
         self.current_task: Optional[asyncio.Task] = None
         self.processing: bool = False
         self.is_recording: bool = False
@@ -72,7 +64,7 @@ class TranscriptionResponse(BaseModel):
 
 
 class StatusResponse(BaseModel):
-    ollama_connected: bool
+    litert_connected: bool
     bluetooth_audio: str
     conversation_length: int
     processing: bool
@@ -80,22 +72,23 @@ class StatusResponse(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Inicializando AsistenteIA...")
+    logger.info("Inicializando AsistenteIA con LiteRT...")
     
     state = AppState()
     app.state.app_state = state
 
-    state.audio_manager.auto_configure_bluetooth()
+    # Configurar audio al inicio
+    await state.audio_manager.auto_configure_bluetooth()
 
-    if not await state.ollama_client.health_check():
-        logger.warning("Ollama no responde. Asegúrate de que está corriendo: ollama serve")
+    if not state.litert_client.engine:
+        logger.warning(f"LiteRT no pudo cargar el modelo en {settings.LITERT_MODEL_PATH}")
 
     logger.info("AsistenteIA listo")
 
     yield
 
-    if hasattr(app.state, "app_state") and app.state.app_state.ollama_client:
-        await app.state.app_state.ollama_client.close()
+    if hasattr(app.state, "app_state") and app.state.app_state.litert_client:
+        app.state.app_state.litert_client.close()
     logger.info("AsistenteIA detenido")
 
 
@@ -108,25 +101,8 @@ async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Error no manejado: {exc}", exc_info=True)
     return JSONResponse(
         status_code=500,
-        content={"status": "error", "message": "Ocurrió un error interno en el servidor"},
+        content={"status": "error", "message": str(exc)},
     )
-
-
-async def _process_transcription(text: str, state: AppState) -> dict:
-    """Lógica principal de procesamiento delegada al servicio de negocio."""
-    state.processing = True
-    try:
-        try:
-            return await state.assistant_service.process_transcription(
-                text=text,
-                conversation_history=state.conversation_history,
-                max_history=MAX_HISTORY
-            )
-        except Exception as e:
-            logger.error(f"Error procesando transcripción: {e}")
-            raise HTTPException(status_code=502, detail=f"Error interno: {e}")
-    finally:
-        state.processing = False
 
 
 @app.post("/transcribe", response_model=TranscriptionResponse)
@@ -134,29 +110,30 @@ async def handle_transcription(
     request: TranscriptionRequest,
     state: AppState = Depends(get_app_state)
 ):
-    """Endpoint principal: recibe texto, procesa con Gemma, ejecuta comandos y genera voz."""
+    """Endpoint principal: recibe texto, procesa con LiteRT y genera voz."""
     if not request.text.strip():
         raise HTTPException(status_code=400, detail="Texto vacío")
 
     if state.current_task and not state.current_task.done():
         state.current_task.cancel()
 
-    state.current_task = asyncio.create_task(_process_transcription(request.text, state))
-
+    state.processing = True
     try:
-        result = await state.current_task
-        return TranscriptionResponse(**result)
-    except asyncio.CancelledError:
-        return TranscriptionResponse(
-            status="cancelled",
-            response_text="",
-            commands_executed=0,
+        sink_id = state.audio_manager.default_sink
+        result = await state.assistant_service.process_transcription(
+            text=request.text,
+            conversation_history=state.conversation_history,
+            sink_id=sink_id,
+            max_history=MAX_HISTORY
         )
+        return TranscriptionResponse(**result)
+    finally:
+        state.processing = False
 
 
 @app.post("/listen/toggle")
 async def toggle_listen(state: AppState = Depends(get_app_state)):
-    """Alterna el estado de grabación del micrófono de forma ultra-rápida."""
+    """Alterna el estado de grabación del micrófono."""
     if state.is_recording:
         # Detener grabación y procesar
         state.is_recording = False
@@ -165,49 +142,45 @@ async def toggle_listen(state: AppState = Depends(get_app_state)):
         if audio_path:
             if state.current_task and not state.current_task.done():
                 state.current_task.cancel()
-                
-            state.current_task = asyncio.create_task(
-                state.assistant_service.process_audio(
-                    audio_path, 
-                    state.conversation_history, 
-                    MAX_HISTORY
-                )
-            )
+            
+            async def process_task():
+                try:
+                    sink_id = state.audio_manager.default_sink
+                    await state.assistant_service.process_audio(
+                        audio_path, 
+                        state.conversation_history,
+                        sink_id=sink_id,
+                        max_history=MAX_HISTORY
+                    )
+                except Exception as e:
+                    logger.error(f"Error en tarea de audio: {e}")
+                finally:
+                    state.processing = False
+
+            state.processing = True
+            state.current_task = asyncio.create_task(process_task())
             return {"status": "processing"}
         else:
             return {"status": "error", "message": "No se pudo obtener el audio"}
     else:
-        # Iniciar nueva grabación (FLUJO RESTAURADO)
-        # 1. Cancelar cualquier cosa en curso
+        # Iniciar nueva grabación
         if state.current_task and not state.current_task.done():
             state.current_task.cancel()
         if state.tts_engine:
             state.tts_engine.stop()
             
-        # Bloquear inmediatamente para evitar doble pulsación
         state.is_recording = True
         
-        # 2. Notificar y empezar a grabar INMEDIATAMENTE (0ms)
-        # Grabamos desde el principio para no perder ni una sílaba
-        state.assistant_service.send_notification("Escuchando... habla ahora")
+        # 1. Notificar y empezar a grabar
+        state.assistant_service.send_notification("Escuchando...")
         source_id = state.audio_manager.default_source
         if source_id:
-            asyncio.create_task(asyncio.to_thread(state.audio_manager.set_volume, source_id, 0.9))
+            asyncio.create_task(state.audio_manager.set_volume(source_id, 0.9))
             
         state.audio_recorder.start_recording(source_id=source_id)
-        logger.info("Grabación iniciada inmediatamente (0ms)")
-
-        async def delayed_feedback():
-            # Esperamos 0.8s a que el sistema/Bluetooth se asiente
-            await asyncio.sleep(0.8)
-            # Sonamos el bip para decir "ESTOY LISTO, HABLA"
-            state.audio_manager.play_system_sound("message-new-instant")
-            logger.info("Bip de confirmación emitido a los 800ms")
-
-        state.current_task = asyncio.create_task(delayed_feedback())
         
-        # 4. Refrescar configuración de audio en SEGUNDO PLANO
-        asyncio.create_task(asyncio.to_thread(state.audio_manager.auto_configure_bluetooth))
+        # 2. Refrescar configuración de audio en segundo plano
+        asyncio.create_task(state.audio_manager.auto_configure_bluetooth())
         
         return {"status": "listening"}
 
@@ -220,7 +193,6 @@ async def cancel_processing(state: AppState = Depends(get_app_state)):
     if state.current_task and not state.current_task.done():
         state.current_task.cancel()
         cancelled = True
-        logger.info("Tarea cancelada por el usuario")
 
     state.processing = False
     state.is_recording = False
@@ -237,14 +209,11 @@ async def cancel_processing(state: AppState = Depends(get_app_state)):
 @app.get("/status", response_model=StatusResponse)
 async def get_status(state: AppState = Depends(get_app_state)):
     """Estado actual del asistente."""
-    ollama_ok = False
-    if state.ollama_client:
-        ollama_ok = await state.ollama_client.health_check()
-
-    bt_status = await asyncio.to_thread(state.audio_manager.get_status_summary) if state.audio_manager else "No inicializado"
+    litert_ok = state.litert_client.engine is not None
+    bt_status = await state.audio_manager.get_status_summary() if state.audio_manager else "No inicializado"
 
     return StatusResponse(
-        ollama_connected=ollama_ok,
+        litert_connected=litert_ok,
         bluetooth_audio=bt_status,
         conversation_length=len(state.conversation_history),
         processing=state.processing or state.is_recording,
@@ -262,7 +231,7 @@ async def reset_conversation(state: AppState = Depends(get_app_state)):
 async def configure_audio(state: AppState = Depends(get_app_state)):
     """Reconfigura dispositivos de audio Bluetooth."""
     if state.audio_manager:
-        source, sink = state.audio_manager.auto_configure_bluetooth()
+        source, sink = await state.audio_manager.auto_configure_bluetooth()
         return {
             "status": "configured",
             "source": source,

@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 
 from src.config import settings
 
@@ -29,8 +29,7 @@ class TTSEngine:
 
     def __init__(self) -> None:
         self._kokoro_pipeline = None
-        self._default_sink: Optional[str] = None
-        self._playback_process: Optional[subprocess.Popen] = None
+        self._playback_process: Optional[asyncio.subprocess.Process] = None
         self._init_kokoro()
 
     def _init_kokoro(self) -> None:
@@ -44,58 +43,24 @@ class TTSEngine:
         except Exception as e:
             logger.warning(f"Error inicializando Kokoro: {e}. Se usará gTTS como fallback.")
 
-    def _get_default_bluetooth_sink(self) -> Optional[str]:
-        """Detecta el sink Bluetooth por defecto."""
-        try:
-            result = subprocess.run(
-                ["wpctl", "status"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-
-            in_sinks = False
-            for line in result.stdout.splitlines():
-                if "Sinks:" in line:
-                    in_sinks = True
-                    continue
-                if in_sinks and ("Sources:" in line or "Filters:" in line):
-                    break
-                if in_sinks and "bluetooth" in line.lower():
-                    cleaned = line.replace("│", "").replace("├", "").replace("─", "").strip()
-                    parts = cleaned.split()
-                    for part in parts:
-                        node_id = part.replace(".", "").replace("*", "")
-                        if node_id.isdigit():
-                            return node_id
-        except Exception as e:
-            logger.warning(f"Error detectando sink BT: {e}")
-
-        return None
-
-    def _set_audio_sink(self) -> None:
-        sink_id = self._get_default_bluetooth_sink()
-        if sink_id:
-            self._default_sink = sink_id
-            logger.info(f"TTS usará sink Bluetooth: {sink_id}")
-
-    def speak(self, text: str) -> Optional[str]:
-        """Sintetiza texto a voz y lo reproduce."""
+    async def speak(self, text: str, sink_id: Optional[str] = None) -> Optional[str]:
+        """Sintetiza texto a voz y lo reproduce de forma asíncrona."""
         if not text.strip():
             logger.warning("Texto vacío para TTS")
             return None
 
-        self._set_audio_sink()
-
+        # Si no se pasa sink_id, intentará reproducir al dispositivo por defecto de PipeWire
+        
         if self._kokoro_pipeline is not None:
-            return self._speak_kokoro(text)
+            return await self._speak_kokoro(text, sink_id)
 
-        return self._speak_gtts(text)
+        return await self._speak_gtts(text, sink_id)
 
-    def _speak_kokoro(self, text: str) -> Optional[str]:
-        """Sintetiza usando Kokoro TTS (local, alta calidad)."""
-        try:
+    async def _speak_kokoro(self, text: str, sink_id: Optional[str]) -> Optional[str]:
+        """Sintetiza usando Kokoro TTS (operación CPU-intensiva en hilo)."""
+        def _generate():
             import soundfile as sf
+            import numpy as np
 
             audio_chunks = []
             generator = self._kokoro_pipeline(text, voice=settings.KOKORO_VOICE, speed=1.0)
@@ -104,110 +69,110 @@ class TTSEngine:
                 audio_chunks.append(audio)
 
             if not audio_chunks:
-                raise TTSError("Kokoro no generó audio")
+                return None
 
-            import numpy as np
             full_audio = np.concatenate(audio_chunks)
-
+            
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False, dir=settings.TEMP_DIR) as tmp_file:
                 wav_path = tmp_file.name
 
             sf.write(wav_path, full_audio, KOKORO_SAMPLE_RATE)
-
-            if not Path(wav_path).exists() or Path(wav_path).stat().st_size == 0:
-                raise TTSError("Kokoro generó archivo vacío")
-
-            logger.info(f"Kokoro generó audio: {Path(wav_path).stat().st_size} bytes ({len(full_audio)/KOKORO_SAMPLE_RATE:.1f}s)")
-            self._play_audio(wav_path)
             return wav_path
 
-        except ImportError:
-            logger.warning("soundfile no disponible, intentando gTTS")
-            return self._speak_gtts(text)
+        try:
+            wav_path = await asyncio.to_thread(_generate)
+            if not wav_path or not Path(wav_path).exists():
+                raise TTSError("Kokoro falló al generar audio")
+
+            logger.info(f"Kokoro generó audio: {Path(wav_path).stat().st_size} bytes")
+            await self._play_audio(wav_path, sink_id)
+            return wav_path
+
         except Exception as e:
             logger.warning(f"Kokoro falló: {e}, intentando gTTS")
-            return self._speak_gtts(text)
+            return await self._speak_gtts(text, sink_id)
 
-    def _speak_gtts(self, text: str) -> Optional[str]:
-        """Sintetiza usando gTTS (Google TTS API, requiere internet)."""
-        try:
+    async def _speak_gtts(self, text: str, sink_id: Optional[str]) -> Optional[str]:
+        """Sintetiza usando gTTS (requiere internet)."""
+        def _generate():
             from gtts import gTTS
-        except ImportError:
-            logger.error("gTTS tampoco disponible")
-            raise TTSError("No hay motor TTS disponible")
-
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False, dir=settings.TEMP_DIR) as tmp_file:
-            mp3_path = tmp_file.name
-
-        try:
+            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False, dir=settings.TEMP_DIR) as tmp_file:
+                mp3_path = tmp_file.name
+            
             tts = gTTS(text=text, lang="es", slow=False)
             tts.save(mp3_path)
-
-            if not Path(mp3_path).exists() or Path(mp3_path).stat().st_size == 0:
-                raise TTSError("gTTS generó archivo vacío")
-
-            logger.info(f"gTTS generó audio: {Path(mp3_path).stat().st_size} bytes")
-            self._play_audio(mp3_path)
             return mp3_path
 
-        except Exception as e:
-            raise TTSError(f"Error en gTTS: {e}")
-
-    def _play_audio(self, audio_path: str, speed: float = 1.0) -> None:
-        """Reproduce audio al sink Bluetooth."""
-        ext = Path(audio_path).suffix.lower()
-
         try:
-            if self._default_sink:
-                if speed != 1.0:
-                    with tempfile.NamedTemporaryFile(suffix=ext, delete=False, dir=settings.TEMP_DIR) as tmp:
-                        sped_path = tmp.name
-                    subprocess.run(
-                        ["ffmpeg", "-y", "-i", audio_path, "-af", f"atempo={speed}", sped_path],
-                        capture_output=True, timeout=30,
-                    )
-                    audio_path = sped_path
+            mp3_path = await asyncio.to_thread(_generate)
+            logger.info(f"gTTS generó audio: {Path(mp3_path).stat().st_size} bytes")
+            await self._play_audio(mp3_path, sink_id)
+            return mp3_path
+        except Exception as e:
+            logger.error(f"Fallo total en TTS: {e}")
+            return None
 
-                self._playback_process = subprocess.Popen(
-                    ["paplay", "--device", self._default_sink, audio_path],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    async def _play_audio(self, audio_path: str, sink_id: Optional[str] = None, speed: float = 1.0) -> None:
+        """Reproduce audio usando paplay o ffplay de forma asíncrona."""
+        ext = Path(audio_path).suffix.lower()
+        
+        try:
+            # 1. Ajuste de velocidad si es necesario
+            if speed != 1.0:
+                with tempfile.NamedTemporaryFile(suffix=ext, delete=False, dir=settings.TEMP_DIR) as tmp:
+                    sped_path = tmp.name
+                
+                ffmpeg = await asyncio.create_subprocess_exec(
+                    "ffmpeg", "-y", "-i", audio_path, "-af", f"atempo={speed}", sped_path,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                 )
-                self._playback_process.wait(timeout=120)
-                self._playback_process = None
+                await ffmpeg.wait()
+                audio_path = sped_path
+
+            # 2. Selección de comando de reproducción
+            if sink_id:
+                # Si hay un sink Bluetooth específico
+                cmd = ["paplay", "--device", sink_id, audio_path]
             else:
+                # Por defecto a PipeWire
                 if ext == ".mp3":
                     cmd = ["ffplay", "-nodisp", "-autoexit", "-af", f"atempo={speed}", audio_path]
                 else:
-                    cmd = ["aplay", audio_path]
+                    cmd = ["paplay", audio_path] # paplay es preferido en PipeWire/Pulse
 
-                self._playback_process = subprocess.Popen(
-                    cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                )
-                self._playback_process.wait(timeout=120)
-                self._playback_process = None
+            logger.info(f"Reproduciendo TTS: {' '.join(cmd)}")
+            self._playback_process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            
+            # Esperar a que termine la reproducción o se cancele
+            await self._playback_process.wait()
+            self._playback_process = None
 
-        except FileNotFoundError:
-            logger.warning(f"Reproductor no encontrado para {ext}")
-        except subprocess.TimeoutExpired:
+        except asyncio.CancelledError:
             if self._playback_process:
-                self._playback_process.kill()
-                self._playback_process = None
+                try:
+                    self._playback_process.terminate()
+                except ProcessLookupError:
+                    pass
+            raise
         except Exception as e:
-            logger.warning(f"Fallo en reproducción: {e}")
+            logger.warning(f"Fallo en reproducción TTS: {e}")
 
     def stop(self) -> None:
-        """Detiene la reproducción de audio en curso."""
-        if self._playback_process and self._playback_process.poll() is None:
-            self._playback_process.kill()
-            self._playback_process = None
-            logger.info("Reproducción de TTS interrumpida")
+        """Detiene la reproducción en curso."""
+        if self._playback_process and self._playback_process.returncode is None:
+            try:
+                self._playback_process.terminate()
+                logger.info("Reproducción TTS detenida manualmente")
+            except Exception:
+                pass
 
-    def speak_async(self, text: str) -> asyncio.Task:
-        return asyncio.create_task(self._speak_async(text))
-
-    async def _speak_async(self, text: str) -> Optional[str]:
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self.speak, text)
+    async def speak_async(self, text: str, sink_id: Optional[str] = None) -> Optional[str]:
+        """Mantenemos por compatibilidad con AssistantService pero ahora es nativamente async."""
+        return await self.speak(text, sink_id)
 
     def cleanup_temp_files(self, max_age_seconds: int = 3600) -> int:
         cleaned = 0

@@ -1,7 +1,8 @@
 """Tests para src/audio_manager.py"""
 
+import asyncio
 import subprocess
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
 
@@ -41,9 +42,10 @@ def manager():
     return AudioManager()
 
 
-def test_list_devices_parses_output_correctly(manager):
+@pytest.mark.asyncio
+async def test_list_devices_parses_output_correctly(manager):
     with patch.object(manager, '_run_wpctl', return_value=WPCTL_STATUS_OUTPUT):
-        devices = manager.list_devices()
+        devices = await manager.list_devices()
 
     assert len(devices) > 0
 
@@ -55,49 +57,55 @@ def test_list_devices_parses_output_correctly(manager):
     assert bt_sinks[0].description == "UGREEN Bluetooth Headset [vol: 0.65 MUTED]"
 
 
-def test_get_default_bluetooth_source(manager):
+@pytest.mark.asyncio
+async def test_get_default_bluetooth_source(manager):
     with patch.object(manager, '_run_wpctl', return_value=WPCTL_STATUS_OUTPUT):
-        source = manager.get_default_bluetooth_source()
+        source = await manager.get_default_bluetooth_source()
 
     assert source is not None
     assert source.is_bluetooth is True
     assert source.device_type == DeviceType.SOURCE
 
 
-def test_get_default_bluetooth_sink(manager):
+@pytest.mark.asyncio
+async def test_get_default_bluetooth_sink(manager):
     with patch.object(manager, '_run_wpctl', return_value=WPCTL_STATUS_OUTPUT):
-        sink = manager.get_default_bluetooth_sink()
+        sink = await manager.get_default_bluetooth_sink()
 
     assert sink is not None
     assert sink.is_bluetooth is True
     assert sink.device_type == DeviceType.SINK
 
 
-def test_set_default_source(manager):
+@pytest.mark.asyncio
+async def test_set_default_source(manager):
     with patch.object(manager, '_run_wpctl', return_value="") as mock_wpctl:
-        manager.set_default_source("46")
+        await manager.set_default_source("46")
 
     mock_wpctl.assert_called_once_with(["set-default", "46"])
     assert manager._default_source == "46"
 
 
-def test_set_default_sink(manager):
+@pytest.mark.asyncio
+async def test_set_default_sink(manager):
     with patch.object(manager, '_run_wpctl', return_value="") as mock_wpctl:
-        manager.set_default_sink("45")
+        await manager.set_default_sink("45")
 
     mock_wpctl.assert_called_once_with(["set-default", "45"])
     assert manager._default_sink == "45"
 
 
-def test_auto_configure_bluetooth(manager):
+@pytest.mark.asyncio
+async def test_auto_configure_bluetooth(manager):
     with patch.object(manager, '_run_wpctl', return_value=WPCTL_STATUS_OUTPUT):
-        source_id, sink_id = manager.auto_configure_bluetooth()
+        source_id, sink_id = await manager.auto_configure_bluetooth()
 
     assert source_id is not None
     assert sink_id is not None
 
 
-def test_no_bluetooth_devices(manager):
+@pytest.mark.asyncio
+async def test_no_bluetooth_devices(manager):
     no_bt_output = """
 Audio
  ├─ Sinks:
@@ -106,38 +114,45 @@ Audio
  │      51. Built-in Audio Analog Stereo        [vol: 0.75]
 """
     with patch.object(manager, '_run_wpctl', return_value=no_bt_output):
-        source = manager.get_default_bluetooth_source()
-        sink = manager.get_default_bluetooth_sink()
+        source = await manager.get_default_bluetooth_source()
+        sink = await manager.get_default_bluetooth_sink()
 
     assert source is None
     assert sink is None
 
 
-def test_wpctl_not_found(manager):
-    with patch('subprocess.run', side_effect=FileNotFoundError):
+@pytest.mark.asyncio
+async def test_wpctl_not_found(manager):
+    with patch('asyncio.create_subprocess_exec', side_effect=FileNotFoundError):
         with pytest.raises(AudioManagerError, match="wpctl no encontrado"):
-            manager._run_wpctl(["status"])
+            await manager._run_wpctl(["status"])
 
 
-def test_wpctl_timeout(manager):
-    with patch('subprocess.run', side_effect=subprocess.TimeoutExpired("wpctl", 5)):
+@pytest.mark.asyncio
+async def test_wpctl_timeout(manager):
+    mock_process = MagicMock()
+    mock_process.communicate.side_effect = asyncio.TimeoutError()
+
+    with patch('asyncio.create_subprocess_exec', return_value=mock_process):
         with pytest.raises(AudioManagerError, match="Timeout"):
-            manager._run_wpctl(["status"])
+            await manager._run_wpctl(["status"])
 
 
-def test_wpctl_error(manager):
-    mock_result = MagicMock()
-    mock_result.returncode = 1
-    mock_result.stderr = "Error: invalid command"
+@pytest.mark.asyncio
+async def test_wpctl_error(manager):
+    mock_process = AsyncMock()
+    mock_process.returncode = 1
+    mock_process.communicate.return_value = (b"", b"Error: invalid command")
 
-    with patch('subprocess.run', return_value=mock_result):
+    with patch('asyncio.create_subprocess_exec', return_value=mock_process):
         with pytest.raises(AudioManagerError, match="wpctl falló"):
-            manager._run_wpctl(["status"])
+            await manager._run_wpctl(["status"])
 
 
-def test_get_status_summary(manager):
+@pytest.mark.asyncio
+async def test_get_status_summary(manager):
     with patch.object(manager, '_run_wpctl', return_value=WPCTL_STATUS_OUTPUT):
-        summary = manager.get_status_summary()
+        summary = await manager.get_status_summary()
 
     assert "Bluetooth" in summary
     assert "UGREEN" in summary

@@ -10,3 +10,13 @@ build/
 *.wav
 *.png
 *.tmp
+
+# LiteRT y Modelos
+models/
+*.litertlm*
+*.xnnpack_cache*
+
+# Configuración local
+.env
+.env.*
+! .env.example

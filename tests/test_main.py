@@ -11,11 +11,17 @@ from src.main import app, AppState, get_app_state
 def mock_app_state():
     """Crea un mock completo del AppState para inyectar en los tests."""
     state = MagicMock(spec=AppState)
-    state.ollama_client = AsyncMock()
-    state.command_executor = AsyncMock()
+    state.litert_client = MagicMock()
+    state.litert_client.engine = MagicMock()
     state.tts_engine = MagicMock()
     state.vision_tool = MagicMock()
+    
+    # audio_manager con métodos asíncronos
     state.audio_manager = MagicMock()
+    state.audio_manager.get_status_summary = AsyncMock(return_value="Bluetooth OK")
+    state.audio_manager.auto_configure_bluetooth = AsyncMock(return_value=("72", "70"))
+    state.audio_manager.set_volume = AsyncMock(return_value=None)
+    
     state.assistant_service = AsyncMock()
     state.audio_recorder = MagicMock()
     state.stt_engine = MagicMock()
@@ -26,10 +32,6 @@ def mock_app_state():
     state.is_recording = False
     state.current_task = None
     
-    # Mocks de respuestas comunes
-    state.ollama_client.health_check.return_value = True
-    state.audio_manager.get_status_summary.return_value = "Bluetooth OK"
-    state.audio_manager.auto_configure_bluetooth.return_value = ("72", "70")
     state.audio_recorder.is_recording = False
     
     return state
@@ -39,6 +41,7 @@ def mock_app_state():
 def client(mock_app_state):
     """Configura el cliente de prueba con inyección de dependencias."""
     app.dependency_overrides[get_app_state] = lambda: mock_app_state
+    # Lifespan call is tricky with TestClient if we don't use it as context manager properly
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()
@@ -48,7 +51,7 @@ def test_status_endpoint(client, mock_app_state):
     response = client.get("/status")
     assert response.status_code == 200
     data = response.json()
-    assert data["ollama_connected"] is True
+    assert data["litert_connected"] is True
     assert data["bluetooth_audio"] == "Bluetooth OK"
     assert data["conversation_length"] == 0
 
@@ -81,7 +84,7 @@ def test_reset_conversation(client, mock_app_state):
     
     response = client.post("/reset")
     assert response.status_code == 200
-    # Verificamos que se llamó al método clear del historial
+    # Verificamos que se vació el historial
     assert mock_app_state.conversation_history == []
 
 
