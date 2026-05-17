@@ -1,64 +1,30 @@
 #!/usr/bin/env bash
 # =============================================================================
-# stop-assistant.sh - Detiene AsistenteIA y Ollama por completo
+# stop-assistant.sh - Detenedor global de emergencia
 # =============================================================================
 
-notify-send "AsistenteIA" "Deteniendo servicio de voz asistente..."
+set -euo pipefail
 
-echo "Deteniendo AsistenteIA..."
+notify-send "AsistenteIA" "Deteniendo todos los servicios..."
 
-# Detener servicio systemd si está activo
-if systemctl --user is-active asistenteia.service &>/dev/null; then
+if systemctl --user is-active asistenteia.service > /dev/null 2>&1; then
     systemctl --user stop asistenteia.service
-    echo "Servicio AsistenteIA detenido."
 fi
 
-# Detener proceso manual si está corriendo
 PID_FILE="/tmp/asistenteia.pid"
 if [ -f "$PID_FILE" ]; then
     PID=$(cat "$PID_FILE")
-    if kill -0 "$PID" 2>/dev/null; then
-        kill "$PID" 2>/dev/null || true
-        sleep 2
-        if kill -0 "$PID" 2>/dev/null; then
-            kill -9 "$PID" 2>/dev/null || true
-        fi
-        echo "Proceso AsistenteIA detenido (PID: $PID)."
-    fi
+    kill "$PID" 2>/dev/null || true
     rm -f "$PID_FILE"
 fi
 
-# Matar cualquier uvicorn residual
-pkill -f "uvicorn src.main:app" 2>/dev/null || true
+pkill -f "python -m src.main" || true
 
-# Descargar modelo de memoria
-if command -v ollama &>/dev/null; then
-    echo "Descargando modelo de memoria..."
-    ollama stop gemma4:e2b 2>/dev/null || true
+if [ -f "/tmp/asistenteia_started_ollama" ]; then
+    echo "-> Deteniendo Ollama residual..."
+    pkill -f "ollama serve" || true
+    rm -f "/tmp/asistenteia_started_ollama"
 fi
 
-# Detener Ollama
-notify-send "AsistenteIA" "Deteniendo Ollama..."
-echo "Deteniendo Ollama..."
-if systemctl --user is-active ollama.service &>/dev/null; then
-    systemctl --user stop ollama.service
-    echo "Servicio Ollama detenido."
-else
-    OLLAMA_PID=$(pgrep -f "ollama serve" 2>/dev/null || true)
-    if [ -n "$OLLAMA_PID" ]; then
-        kill $OLLAMA_PID 2>/dev/null || true
-        sleep 2
-        if pgrep -f "ollama serve" &>/dev/null; then
-            pkill -9 -f "ollama serve" 2>/dev/null || true
-        fi
-        echo "Ollama detenido."
-    else
-        echo "Ollama no está corriendo."
-    fi
-fi
-
-# Limpiar archivos temporales
-rm -f /tmp/asistenteia_started_ollama
-
-notify-send "AsistenteIA" "Todo detenido"
-echo "AsistenteIA y Ollama detenidos."
+notify-send "AsistenteIA" "Todo detenido y limpio."
+echo "Detención completada."

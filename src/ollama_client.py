@@ -7,10 +7,9 @@ from typing import AsyncGenerator, Optional
 import httpx
 from pydantic import BaseModel, Field
 
-logger = logging.getLogger(__name__)
+from src.config import settings
 
-OLLAMA_BASE_URL = "http://localhost:11434"
-DEFAULT_MODEL = "gemma4:e2b"
+logger = logging.getLogger(__name__)
 
 
 class OllamaMessage(BaseModel):
@@ -20,12 +19,12 @@ class OllamaMessage(BaseModel):
 
 
 class OllamaRequest(BaseModel):
-    model: str = Field(default=DEFAULT_MODEL)
+    model: str = Field(default=settings.OLLAMA_MODEL)
     messages: list[OllamaMessage]
     stream: bool = Field(default=False)
     options: dict = Field(default_factory=lambda: {
-        "temperature": 0.3,
-        "num_ctx": 4096,
+        "temperature": settings.OLLAMA_TEMPERATURE,
+        "num_ctx": settings.OLLAMA_NUM_CTX,
     })
 
 
@@ -45,9 +44,9 @@ class OllamaClient:
 
     def __init__(
         self,
-        base_url: str = OLLAMA_BASE_URL,
-        model: str = DEFAULT_MODEL,
-        timeout: float = 120.0,
+        base_url: str = settings.OLLAMA_BASE_URL,
+        model: str = settings.OLLAMA_MODEL,
+        timeout: float = settings.OLLAMA_TIMEOUT,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
@@ -80,6 +79,10 @@ class OllamaClient:
             model=model or self.model,
             messages=messages,
             stream=False,
+            options={
+                "temperature": settings.OLLAMA_TEMPERATURE,
+                "num_ctx": settings.OLLAMA_NUM_CTX,
+            }
         )
 
         try:

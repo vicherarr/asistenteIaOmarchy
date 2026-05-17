@@ -55,9 +55,9 @@ fi
 # Iniciar y habilitar servicio Ollama
 systemctl --user enable --now ollama.service 2>/dev/null || true
 
-# Descargar modelo Gemma 4:e4b
-echo "Descargando modelo gemma4:e2b..."
-ollama pull gemma4:e2b
+# Descargar modelo Ministral 3:3b
+echo "Descargando modelo ministral-3:3b..."
+ollama pull ministral-3:3b
 
 # -----------------------------------------------------------------------------
 # 4. Instalar whisper.cpp para transcripción

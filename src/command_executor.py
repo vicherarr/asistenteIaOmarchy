@@ -1,8 +1,10 @@
 """Módulo de ejecución de comandos del sistema."""
 
+import asyncio
 import json
 import logging
 import re
+import shlex
 import subprocess
 from dataclasses import dataclass
 from typing import Optional
@@ -79,9 +81,9 @@ class CommandExecutor:
         logger.warning(f"Comando bloqueado (no permitido): {command}")
         return False
 
-    def execute(self, command: str, description: str = "") -> tuple[bool, str]:
+    async def execute(self, command: str, description: str = "") -> tuple[bool, str]:
         """
-        Ejecuta un comando del sistema.
+        Ejecuta un comando del sistema de forma segura y asíncrona.
         Devuelve (éxito, salida_o_error).
         """
         if not self._is_safe_command(command):
@@ -92,32 +94,38 @@ class CommandExecutor:
             return True, f"[DRY RUN] {command}"
 
         try:
-            result = subprocess.run(
-                command,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=30,
+            # Parse command safely to avoid shell injection
+            args = shlex.split(command)
+
+            process = await asyncio.create_subprocess_exec(
+                *args,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
             )
 
-            if result.returncode == 0:
+            try:
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30.0)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.communicate()
+                return False, "Timeout ejecutando comando"
+
+            if process.returncode == 0:
                 logger.info(f"Comando ejecutado: {command}")
-                return True, result.stdout.strip()
+                return True, stdout.decode().strip()
             else:
-                error_msg = result.stderr.strip() or f"Código de salida: {result.returncode}"
+                error_msg = stderr.decode().strip() or f"Código de salida: {process.returncode}"
                 logger.error(f"Error ejecutando '{command}': {error_msg}")
                 return False, error_msg
 
-        except subprocess.TimeoutExpired:
-            return False, "Timeout ejecutando comando"
         except Exception as e:
             return False, f"Excepción: {e}"
 
-    def execute_multiple(self, commands: list[SystemCommand]) -> list[tuple[bool, str]]:
-        """Ejecuta múltiples comandos secuencialmente."""
+    async def execute_multiple(self, commands: list[SystemCommand]) -> list[tuple[bool, str]]:
+        """Ejecuta múltiples comandos secuencialmente de forma asíncrona."""
         results = []
         for cmd in commands:
-            success, output = self.execute(cmd.command, cmd.description)
+            success, output = await self.execute(cmd.command, cmd.description)
             results.append((success, output))
         return results
 

@@ -1,65 +1,55 @@
 #!/usr/bin/env bash
+# =============================================================================
+# AsistenteIA - Modern Stop Script (Professional Edition)
+# =============================================================================
+
 set -euo pipefail
 
 PID_FILE="/tmp/asistenteia.pid"
 OLLAMA_FLAG="/tmp/asistenteia_started_ollama"
 
-echo "Deteniendo AsistenteIA..."
+# Cargar configuración para saber qué modelo detener
+MODEL="ministral-3:3b"
+if [ -f ".env" ]; then
+    MODEL=$(grep '^OLLAMA_MODEL=' .env | cut -d '=' -f2 | tr -d '[:space:]' || echo "ministral-3:3b")
+fi
 
-if [ ! -f "$PID_FILE" ]; then
-    echo "No se encontró archivo PID. Buscando proceso..."
-    PID=$(pgrep -f "uvicorn src.main:app" 2>/dev/null || true)
-    if [ -z "$PID" ]; then
-        echo "AsistenteIA no está corriendo."
-    else
+echo "=== Deteniendo AsistenteIA ==="
+
+# 1. Detener el proceso principal del servidor
+if [ -f "$PID_FILE" ]; then
+    PID=$(cat "$PID_FILE")
+    if kill -0 "$PID" 2>/dev/null; then
+        echo "-> Enviando señal de parada al servidor (PID $PID)..."
         kill "$PID" 2>/dev/null || true
-        sleep 2
+        for i in {1..5}; do
+            if ! kill -0 "$PID" 2>/dev/null; then break; fi
+            sleep 1
+        done
         if kill -0 "$PID" 2>/dev/null; then
-            echo "Proceso no respondió a SIGTERM, enviando SIGKILL..."
+            echo "-> Proceso persistente, forzando SIGKILL..."
             kill -9 "$PID" 2>/dev/null || true
         fi
-        echo "AsistenteIA detenido (PID: $PID)."
     fi
+    rm -f "$PID_FILE"
 else
-    PID=$(cat "$PID_FILE")
+    pkill -f "python -m src.main" || true
 fi
 
-if [ -n "${PID:-}" ] && kill -0 "$PID" 2>/dev/null; then
-    kill "$PID" 2>/dev/null || true
-    sleep 2
-    if kill -0 "$PID" 2>/dev/null; then
-        echo "Proceso no respondió a SIGTERM, enviando SIGKILL..."
-        kill -9 "$PID" 2>/dev/null || true
-    fi
-    echo "AsistenteIA detenido (PID: $PID)."
-else
-    echo "El proceso ${PID:-} ya no estaba corriendo."
-fi
-
-rm -f "$PID_FILE"
-
-# Descargar modelo de memoria
+# 2. Gestión de Ollama
 if command -v ollama &>/dev/null; then
-    echo "Descargando modelo de memoria..."
-    ollama stop gemma4:e2b 2>/dev/null || true
+    echo "-> Liberando modelo '$MODEL' de la memoria de la GPU..."
+    ollama stop "$MODEL" 2>/dev/null || true
 fi
 
-# Detener Ollama si lo iniciamos nosotros
 if [ -f "$OLLAMA_FLAG" ]; then
-    echo "Deteniendo Ollama (fue iniciado por AsistenteIA)..."
-    OLLAMA_PID=$(pgrep -f "ollama serve" 2>/dev/null || true)
-    if [ -n "$OLLAMA_PID" ]; then
-        kill $OLLAMA_PID 2>/dev/null || true
-        sleep 3
-        if pgrep -f "ollama serve" &>/dev/null; then
-            echo "Ollama no respondió, forzando..."
-            pkill -9 -f "ollama serve" 2>/dev/null || true
-        fi
-        echo "Ollama detenido."
+    echo "-> Deteniendo instancia de Ollama iniciada por este script..."
+    if systemctl --user list-unit-files | grep -q ollama.service; then
+        systemctl --user stop ollama.service || true
     else
-        echo "Ollama ya no estaba corriendo."
+        pkill -f "ollama serve" || true
     fi
     rm -f "$OLLAMA_FLAG"
-else
-    echo "Ollama no fue iniciado por AsistenteIA, se deja corriendo."
 fi
+
+echo "=== Todo detenido correctamente ==="

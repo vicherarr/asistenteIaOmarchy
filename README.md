@@ -92,7 +92,7 @@ Servidor principal que coordina todos los módulos. Expone una API REST en `127.
 Cliente asíncrono HTTP para comunicarse con la API local de Ollama.
 
 **Características:**
-- Modelo por defecto: `gemma4:e2b`
+- Modelo por defecto: `ministral-3:3b`
 - Temperatura: 0.3, contexto: 4096 tokens
 - Soporte para generación con imágenes (multimodal)
 - Streaming token a token disponible
@@ -220,7 +220,7 @@ sudo pacman -S pipewire wireplumber pipewire-pulse bluez bluez-utils playerctl g
 
 # 2. Instalar Ollama
 yay -S ollama
-ollama pull gemma4:e2b
+ollama pull ministral-3:3b
 
 # 3. Instalar whisper.cpp
 yay -S whisper.cpp

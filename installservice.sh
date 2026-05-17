@@ -1,57 +1,42 @@
 #!/usr/bin/env bash
+# =============================================================================
+# AsistenteIA - Service Installer
+# =============================================================================
+
 set -euo pipefail
 
-# =============================================================================
-# installservice.sh - Instala AsistenteIA como servicio systemd de usuario
-# =============================================================================
-
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SERVICE_FILE="$PROJECT_DIR/services/asistenteia.service"
-SYSTEMD_DIR="$HOME/.config/systemd/user"
+SERVICE_NAME="asistenteia.service"
+SERVICE_SRC="$PROJECT_DIR/services/$SERVICE_NAME"
+SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
 
-echo "=== AsistenteIA - Instalación de servicio systemd ==="
+echo "=== Instalador de Servicio Systemd (Modo Usuario) ==="
 
-# Verificar que el servicio existe
-if [ ! -f "$SERVICE_FILE" ]; then
-    echo "ERROR: No se encontró $SERVICE_FILE"
+if [ ! -f "$SERVICE_SRC" ]; then
+    echo "(!) Error: No se encuentra el archivo de servicio en $SERVICE_SRC"
     exit 1
 fi
 
-# Verificar que el entorno virtual existe
 if [ ! -d "$PROJECT_DIR/venv" ]; then
-    echo "ERROR: Entorno virtual no encontrado. Ejecutar install.sh primero"
+    echo "(!) Error: Entorno virtual no detectado. Ejecuta ./install.sh primero."
     exit 1
 fi
 
-# Verificar que start-assistant.sh existe y es ejecutable
-START_SCRIPT="$PROJECT_DIR/scripts/start-assistant.sh"
-if [ ! -f "$START_SCRIPT" ]; then
-    echo "ERROR: No se encontró $START_SCRIPT"
-    exit 1
-fi
-chmod +x "$START_SCRIPT"
+TEMP_SERVICE=$(mktemp)
+cp "$SERVICE_SRC" "$TEMP_SERVICE"
+ESCAPED_DIR=$(echo "$PROJECT_DIR" | sed 's/\//\\\//g')
 
-# Crear directorio systemd si no existe
-mkdir -p "$SYSTEMD_DIR"
+sed -i "s|^WorkingDirectory=.*|WorkingDirectory=$PROJECT_DIR|" "$TEMP_SERVICE"
+sed -i "s|^ExecStart=.*|ExecStart=$PROJECT_DIR/venv/bin/python -m src.main|" "$TEMP_SERVICE"
 
-# Instalar el servicio
-echo "Instalando servicio..."
-cp "$SERVICE_FILE" "$SYSTEMD_DIR/asistenteia.service"
+mkdir -p "$SYSTEMD_USER_DIR"
+cp "$TEMP_SERVICE" "$SYSTEMD_USER_DIR/$SERVICE_NAME"
+rm "$TEMP_SERVICE"
 
-# Recargar systemd
+echo "-> Recargando demonio de systemd..."
 systemctl --user daemon-reload
+systemctl --user enable "$SERVICE_NAME"
 
-# Habilitar el servicio (arranca con el usuario)
-systemctl --user enable asistenteia.service
-
-echo ""
-echo "=== Servicio instalado correctamente ==="
-echo ""
-echo "Comandos útiles:"
-echo "  systemctl --user start asistenteia        # Iniciar servicio"
-echo "  systemctl --user stop asistenteia         # Detener servicio"
-echo "  systemctl --user restart asistenteia      # Reiniciar servicio"
-echo "  systemctl --user status asistenteia       # Ver estado"
-echo "  journalctl --user -u asistenteia -f       # Ver logs en vivo"
-echo ""
-echo "Nota: El servicio se inicia automáticamente al iniciar sesión."
+echo "=== Servicio instalado y habilitado ==="
+echo "Para iniciar ahora: systemctl --user start $SERVICE_NAME"
+echo "Para ver logs: journalctl --user -u $SERVICE_NAME -f"

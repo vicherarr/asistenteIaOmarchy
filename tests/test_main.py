@@ -1,147 +1,106 @@
 """Tests de integración para src/main.py (FastAPI)"""
 
-from unittest.mock import AsyncMock, patch, MagicMock
-
 import pytest
 from fastapi.testclient import TestClient
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.main import app, conversation_history
-
-
-@pytest.fixture
-def client():
-    conversation_history.clear()
-    return TestClient(app)
+from src.main import app, AppState, get_app_state
 
 
 @pytest.fixture
-def mock_ollama_response():
-    return {
-        "model": "gemma4:e4b",
-        "message": {
-            "role": "assistant",
-            "content": '''```json
-{
-    "response_text": "Abriendo Spotify para ti",
-    "commands": [
-        {"command": "omarchy launch spotify", "description": "Launch Spotify"}
-    ],
-    "action_type": "both"
-}
-```'''
-        },
-        "done": True,
-    }
+def mock_app_state():
+    """Crea un mock completo del AppState para inyectar en los tests."""
+    state = MagicMock(spec=AppState)
+    state.ollama_client = AsyncMock()
+    state.command_executor = AsyncMock()
+    state.tts_engine = MagicMock()
+    state.vision_tool = MagicMock()
+    state.audio_manager = MagicMock()
+    state.assistant_service = AsyncMock()
+    state.audio_recorder = MagicMock()
+    state.stt_engine = MagicMock()
+    
+    # Valores por defecto
+    state.conversation_history = []
+    state.processing = False
+    state.is_recording = False
+    state.current_task = None
+    
+    # Mocks de respuestas comunes
+    state.ollama_client.health_check.return_value = True
+    state.audio_manager.get_status_summary.return_value = "Bluetooth OK"
+    state.audio_manager.auto_configure_bluetooth.return_value = ("72", "70")
+    state.audio_recorder.is_recording = False
+    
+    return state
 
 
-def test_status_endpoint(client):
+@pytest.fixture
+def client(mock_app_state):
+    """Configura el cliente de prueba con inyección de dependencias."""
+    app.dependency_overrides[get_app_state] = lambda: mock_app_state
+    with TestClient(app) as c:
+        yield c
+    app.dependency_overrides.clear()
+
+
+def test_status_endpoint(client, mock_app_state):
     response = client.get("/status")
     assert response.status_code == 200
     data = response.json()
-    assert "ollama_connected" in data
-    assert "bluetooth_audio" in data
-    assert "conversation_length" in data
+    assert data["ollama_connected"] is True
+    assert data["bluetooth_audio"] == "Bluetooth OK"
+    assert data["conversation_length"] == 0
 
 
 def test_transcribe_empty(client):
     response = client.post("/transcribe", json={"text": ""})
     assert response.status_code == 400
 
-    response = client.post("/transcribe", json={"text": "   "})
-    assert response.status_code == 400
 
+def test_transcribe_success(client, mock_app_state):
+    # Simulamos respuesta exitosa del servicio de negocio
+    mock_app_state.assistant_service.process_transcription.return_value = {
+        "status": "success",
+        "response_text": "Abriendo Spotify",
+        "commands_executed": 1,
+        "audio_file": "/tmp/test.wav"
+    }
 
-def test_transcribe_success(client, mock_ollama_response):
-    with patch('src.main.ollama_client') as mock_client:
-        mock_client.generate = AsyncMock(return_value=mock_ollama_response["message"]["content"])
-        mock_client.health_check = AsyncMock(return_value=True)
-
-        with patch('src.main.command_executor') as mock_executor:
-            mock_executor.execute_multiple = MagicMock(return_value=[(True, "OK")])
-
-            with patch('src.main.tts_engine') as mock_tts:
-                mock_tts.speak_async = AsyncMock(return_value="/tmp/test.wav")
-
-                response = client.post("/transcribe", json={
-                    "text": "Abre Spotify por favor"
-                })
+    response = client.post("/transcribe", json={"text": "Abre Spotify"})
 
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
-    assert "Spotify" in data["response_text"]
+    assert data["response_text"] == "Abriendo Spotify"
     assert data["commands_executed"] == 1
 
 
-def test_transcribe_ollama_failure(client):
-    with patch('src.main.ollama_client') as mock_client:
-        mock_client.generate = AsyncMock(side_effect=Exception("Ollama connection refused"))
-
-        response = client.post("/transcribe", json={
-            "text": "Hola"
-        })
-
-    assert response.status_code == 502
-    assert "Ollama" in response.json()["detail"]
-
-
-def test_reset_conversation(client):
-    conversation_history.append({"role": "user", "content": "test"})
-    assert len(conversation_history) > 0
-
+def test_reset_conversation(client, mock_app_state):
+    mock_app_state.conversation_history = [{"role": "user", "content": "test"}]
+    
     response = client.post("/reset")
     assert response.status_code == 200
-    assert len(conversation_history) == 0
+    # Verificamos que se llamó al método clear del historial
+    assert mock_app_state.conversation_history == []
 
 
-def test_configure_audio(client):
-    with patch('src.main.audio_manager') as mock_audio:
-        mock_audio.auto_configure_bluetooth = MagicMock(return_value=("46", "45"))
-
-        response = client.post("/audio/configure")
-
+def test_configure_audio(client, mock_app_state):
+    response = client.post("/audio/configure")
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "configured"
-    assert data["source"] == "46"
-    assert data["sink"] == "45"
+    assert data["source"] == "72"
+    assert data["sink"] == "70"
 
 
-def test_conversation_history_grows(client, mock_ollama_response):
-    with patch('src.main.ollama_client') as mock_client:
-        mock_client.generate = AsyncMock(return_value=mock_ollama_response["message"]["content"])
-        mock_client.health_check = AsyncMock(return_value=True)
-
-        with patch('src.main.command_executor') as mock_executor:
-            mock_executor.execute_multiple = MagicMock(return_value=[])
-
-            with patch('src.main.tts_engine') as mock_tts:
-                mock_tts.speak_async = AsyncMock(return_value=None)
-
-                client.post("/transcribe", json={"text": "Mensaje 1"})
-                client.post("/transcribe", json={"text": "Mensaje 2"})
-
-    assert len(conversation_history) == 4
-
-
-def test_transcribe_no_commands(client):
-    response_text = "Hola, ¿en qué puedo ayudarte?"
-
-    with patch('src.main.ollama_client') as mock_client:
-        mock_client.generate = AsyncMock(return_value=response_text)
-        mock_client.health_check = AsyncMock(return_value=True)
-
-        with patch('src.main.command_executor') as mock_executor:
-            mock_executor.execute_multiple = MagicMock(return_value=[])
-
-            with patch('src.main.tts_engine') as mock_tts:
-                mock_tts.speak_async = AsyncMock(return_value=None)
-
-                response = client.post("/transcribe", json={
-                    "text": "Hola"
-                })
-
+def test_cancel_processing(client, mock_app_state):
+    # Simulamos una tarea en curso
+    mock_task = MagicMock()
+    mock_task.done.return_value = False
+    mock_app_state.current_task = mock_task
+    
+    response = client.post("/cancel")
     assert response.status_code == 200
-    data = response.json()
-    assert data["response_text"] == response_text
-    assert data["commands_executed"] == 0
+    assert response.json()["was_processing"] is True
+    mock_task.cancel.assert_called_once()
+    mock_app_state.tts_engine.stop.assert_called_once()

@@ -1,7 +1,6 @@
 [Unit]
 Description=AsistenteIA - Voice Assistant Orchestrator
-After=network.target ollama.service
-Requires=ollama.service
+After=network.target
 
 [Service]
 Type=simple
@@ -11,6 +10,8 @@ Restart=on-failure
 RestartSec=5
 Environment=PATH=%h/develop/asistenteia/venv/bin:/usr/local/bin:/usr/bin
 Environment=PYTHONUNBUFFERED=1
+Environment=DISPLAY=:0
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
 
 StandardOutput=journal
 StandardError=journal

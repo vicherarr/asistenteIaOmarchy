@@ -12,11 +12,11 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from src.config import settings
+
 logger = logging.getLogger(__name__)
 
 KOKORO_SAMPLE_RATE = 24000
-KOKORO_LANG_CODE = "e"  # Spanish
-KOKORO_VOICE = "em_alex"
 
 
 class TTSError(Exception):
@@ -37,7 +37,7 @@ class TTSEngine:
         """Intenta inicializar Kokoro TTS."""
         try:
             from kokoro import KPipeline
-            self._kokoro_pipeline = KPipeline(lang_code=KOKORO_LANG_CODE)
+            self._kokoro_pipeline = KPipeline(lang_code=settings.KOKORO_LANG)
             logger.info("Kokoro TTS inicializado correctamente")
         except ImportError:
             logger.warning("Kokoro no instalado. Se usará gTTS como fallback.")
@@ -98,7 +98,7 @@ class TTSEngine:
             import soundfile as sf
 
             audio_chunks = []
-            generator = self._kokoro_pipeline(text, voice=KOKORO_VOICE, speed=1.0)
+            generator = self._kokoro_pipeline(text, voice=settings.KOKORO_VOICE, speed=1.0)
 
             for _, _, audio in generator:
                 audio_chunks.append(audio)
@@ -109,7 +109,7 @@ class TTSEngine:
             import numpy as np
             full_audio = np.concatenate(audio_chunks)
 
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False, dir=settings.TEMP_DIR) as tmp_file:
                 wav_path = tmp_file.name
 
             sf.write(wav_path, full_audio, KOKORO_SAMPLE_RATE)
@@ -136,7 +136,7 @@ class TTSEngine:
             logger.error("gTTS tampoco disponible")
             raise TTSError("No hay motor TTS disponible")
 
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp_file:
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False, dir=settings.TEMP_DIR) as tmp_file:
             mp3_path = tmp_file.name
 
         try:
@@ -160,7 +160,7 @@ class TTSEngine:
         try:
             if self._default_sink:
                 if speed != 1.0:
-                    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+                    with tempfile.NamedTemporaryFile(suffix=ext, delete=False, dir=settings.TEMP_DIR) as tmp:
                         sped_path = tmp.name
                     subprocess.run(
                         ["ffmpeg", "-y", "-i", audio_path, "-af", f"atempo={speed}", sped_path],
@@ -211,7 +211,7 @@ class TTSEngine:
 
     def cleanup_temp_files(self, max_age_seconds: int = 3600) -> int:
         cleaned = 0
-        tmp_dir = Path(tempfile.gettempdir())
+        tmp_dir = settings.TEMP_DIR
 
         for pattern in ["*.mp3", "*.wav"]:
             for f in tmp_dir.glob(pattern):

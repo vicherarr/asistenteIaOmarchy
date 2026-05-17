@@ -3,6 +3,7 @@ uvicorn>=0.32.0
 httpx>=0.27.0
 pydantic>=2.9.0
 pydantic-settings>=2.6.0
-kokoro>=0.9.4
+python-dotenv>=1.0.0
+kokoro
 soundfile>=0.12.1
 Pillow>=10.0.0

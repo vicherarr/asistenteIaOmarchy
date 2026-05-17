@@ -10,9 +10,8 @@ from src.ollama_client import (
     OllamaClient,
     OllamaError,
     OllamaMessage,
-    OLLAMA_BASE_URL,
-    DEFAULT_MODEL,
 )
+from src.config import settings
 
 
 @pytest.fixture
@@ -23,7 +22,7 @@ def client():
 @pytest.fixture
 def mock_response_success():
     return {
-        "model": DEFAULT_MODEL,
+        "model": settings.OLLAMA_MODEL,
         "message": {"role": "assistant", "content": "Hola, soy Gemma."},
         "done": True,
     }
@@ -123,7 +122,7 @@ async def test_generate_legacy_response_format(client):
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.json.return_value = {
-        "model": DEFAULT_MODEL,
+        "model": settings.OLLAMA_MODEL,
         "response": "Respuesta formato legacy",
         "done": True,
     }
@@ -143,9 +142,9 @@ def test_ollama_message_model():
 
 def test_client_default_config():
     client = OllamaClient()
-    assert client.base_url == OLLAMA_BASE_URL
-    assert client.model == DEFAULT_MODEL
-    assert client.timeout == 120.0
+    assert client.base_url == settings.OLLAMA_BASE_URL
+    assert client.model == settings.OLLAMA_MODEL
+    assert client.timeout == settings.OLLAMA_TIMEOUT
 
 
 def test_client_custom_config():
