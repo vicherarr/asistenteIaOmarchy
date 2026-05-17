@@ -55,6 +55,7 @@ class CommandExecutor:
         "wl-paste",
         "journalctl",
         "dmesg",
+        "pgrep",
     ]
 
     def __init__(self, dry_run: bool = False):
@@ -73,6 +74,25 @@ class CommandExecutor:
 
         logger.warning(f"Comando bloqueado (no permitido): {command}")
         return False
+
+    async def spawn(self, command: str) -> bool:
+        """Lanza un comando sin esperar a que termine (fire-and-forget)."""
+        if not self._is_safe_command(command):
+            return False
+            
+        try:
+            args = shlex.split(command)
+            subprocess.Popen(
+                args,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True # Desacoplar del proceso padre
+            )
+            logger.info(f"Comando lanzado (spawn): {command}")
+            return True
+        except Exception as e:
+            logger.error(f"Error en spawn '{command}': {e}")
+            return False
 
     async def execute(self, command: str, description: str = "") -> tuple[bool, str]:
         """
@@ -153,6 +173,44 @@ def execute_system_command(command: str) -> str:
     """
     command = _sanitize_tool_args(command)
     executor = CommandExecutor()
+
+    # Lógica especial para Spotify: si se pide solo 'spotify', abrir y reproducir.
+    if command.strip().lower() == "spotify":
+        async def _spotify_flow():
+            # 1. Comprobar si ya está abierto (pgrep devuelve 0 si existe, 1 si no)
+            success, _ = await executor.execute("pgrep -x spotify")
+            if not success:
+                logger.info("Spotify no detectado. Lanzando proceso independiente...")
+                # Usamos spawn con start_new_session=True para que la app gráfica persista
+                await executor.spawn("spotify")
+            else:
+                logger.info("Spotify ya está en ejecución.")
+
+            # 2. Esperar activamente a que aparezca en playerctl (máximo 15s)
+            for i in range(15):
+                # Importante: playerctl -l devuelve 0 si hay reproductores, pero necesitamos filtrar el texto
+                _, players = await executor.execute("playerctl -l")
+                if "spotify" in players.lower():
+                    logger.info(f"Spotify detectado en el bus de medios (intento {i}). Enviando PLAY.")
+                    await asyncio.sleep(2) # Margen para que cargue el DBus y la UI
+                    return await executor.execute("playerctl --player=spotify play")
+                await asyncio.sleep(1)
+            
+            return False, "Timeout: Spotify no apareció en el bus de medios."
+        
+        try:
+            try:
+                loop = asyncio.get_running_loop()
+                success, output = loop.run_until_complete(_spotify_flow())
+            except RuntimeError:
+                success, output = asyncio.run(_spotify_flow())
+            
+            if success:
+                return "Éxito: Spotify abierto y reproducción iniciada."
+            else:
+                return f"Spotify se abrió pero falló el play: {output}"
+        except Exception as e:
+            return f"Error en flujo de Spotify: {e}"
     
     try:
         try:
