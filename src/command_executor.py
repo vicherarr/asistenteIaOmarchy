@@ -56,6 +56,7 @@ class CommandExecutor:
         "journalctl",
         "dmesg",
         "pgrep",
+        "dbus-send",
     ]
 
     def __init__(self, dry_run: bool = False):
@@ -191,9 +192,10 @@ def execute_system_command(command: str) -> str:
                 # Importante: playerctl -l devuelve 0 si hay reproductores, pero necesitamos filtrar el texto
                 _, players = await executor.execute("playerctl -l")
                 if "spotify" in players.lower():
-                    logger.info(f"Spotify detectado en el bus de medios (intento {i}). Enviando PLAY.")
-                    await asyncio.sleep(2) # Margen para que cargue el DBus y la UI
-                    return await executor.execute("playerctl --player=spotify play")
+                    logger.info(f"Spotify detectado en el bus de medios (intento {i}). Enviando PLAY vía D-Bus.")
+                    await asyncio.sleep(2) # Margen para que cargue el DBus
+                    dbus_cmd = "dbus-send --print-reply --dest=org.mpris.MediaPlayer2.spotify /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player.Play"
+                    return await executor.execute(dbus_cmd)
                 await asyncio.sleep(1)
             
             return False, "Timeout: Spotify no apareció en el bus de medios."
@@ -323,8 +325,11 @@ def play_specific_music(query: str) -> str:
         target_uri = f"spotify:search:{query}"
 
     async def _spotify_aggressive_flow(uri: str):
-        # 1. Lanzar/Enfocar Spotify
-        await executor.spawn(f"spotify --uri=\"{uri}\"")
+        # 1. Asegurar que Spotify está abierto
+        success_pgrep, _ = await executor.execute("pgrep -x spotify")
+        if not success_pgrep:
+            logger.info("Spotify no detectado. Lanzando...")
+            await executor.spawn("spotify")
         
         # 2. Esperar a que el reproductor aparezca en el bus de medios (hasta 20s)
         player_ready = False
@@ -339,27 +344,31 @@ def play_specific_music(query: str) -> str:
         if not player_ready:
             return False, "Spotify no apareció en el bus de medios."
 
-        # 3. Secuencia de reproducción forzada
-        # Algunos URIs necesitan un momento para cargar antes de aceptar el comando 'play'
-        await asyncio.sleep(3) 
+        # 3. Secuencia de reproducción nativa vía D-Bus (OpenUri)
+        # Este es el método oficial MPRIS para abrir Y REPRODUCIR un URI inmediatamente
+        logger.info(f"Enviando OpenUri para: {uri}")
+        open_uri_cmd = (
+            f"dbus-send --print-reply --dest=org.mpris.MediaPlayer2.spotify "
+            f"/org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player.OpenUri string:\"{uri}\""
+        )
         
-        # Intentar 'open' si es un URI directo (no search)
-        if not uri.startswith("spotify:search:"):
-            await executor.execute(f"playerctl --player=spotify open \"{uri}\"")
-            await asyncio.sleep(2)
-
-        # Enviar PLAY repetidamente o verificar estado
-        for _ in range(3):
+        await asyncio.sleep(2) # Margen de carga
+        await executor.execute(open_uri_cmd)
+        
+        # 4. Verificación y reintento de Play si se queda pausado
+        await asyncio.sleep(3)
+        for _ in range(2):
             _, status = await executor.execute("playerctl --player=spotify status")
             if "Playing" in status:
                 logger.info("Reproducción confirmada.")
                 return True, "OK"
             
-            logger.info("Intentando forzar reproducción...")
-            await executor.execute("playerctl --player=spotify play")
+            logger.info("El reproductor no arrancó solo. Forzando Play vía D-Bus...")
+            dbus_play = "dbus-send --print-reply --dest=org.mpris.MediaPlayer2.spotify /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player.Play"
+            await executor.execute(dbus_play)
             await asyncio.sleep(2)
             
-        return False, "No se pudo iniciar la reproducción tras varios intentos."
+        return False, "No se pudo iniciar la reproducción tras abrir el URI."
 
     try:
         try:
