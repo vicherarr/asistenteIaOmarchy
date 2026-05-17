@@ -10,33 +10,41 @@ SERVICE_NAME="asistenteia.service"
 SERVICE_SRC="$PROJECT_DIR/services/$SERVICE_NAME"
 SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
 
-echo "=== Instalador de Servicio Systemd (Modo Usuario) ==="
-
-if [ ! -f "$SERVICE_SRC" ]; then
-    echo "(!) Error: No se encuentra el archivo de servicio en $SERVICE_SRC"
-    exit 1
-fi
+echo "=== Instalador de Servicio AsistenteIA ==="
 
 if [ ! -d "$PROJECT_DIR/venv" ]; then
     echo "(!) Error: Entorno virtual no detectado. Ejecuta ./install.sh primero."
     exit 1
 fi
 
-TEMP_SERVICE=$(mktemp)
-cp "$SERVICE_SRC" "$TEMP_SERVICE"
-ESCAPED_DIR=$(echo "$PROJECT_DIR" | sed 's/\//\\\//g')
-
-sed -i "s|^WorkingDirectory=.*|WorkingDirectory=$PROJECT_DIR|" "$TEMP_SERVICE"
-sed -i "s|^ExecStart=.*|ExecStart=$PROJECT_DIR/venv/bin/python -m src.main|" "$TEMP_SERVICE"
-
+# Crear archivo de servicio dinámico
 mkdir -p "$SYSTEMD_USER_DIR"
-cp "$TEMP_SERVICE" "$SYSTEMD_USER_DIR/$SERVICE_NAME"
-rm "$TEMP_SERVICE"
+cat <<EOF > "$SYSTEMD_USER_DIR/$SERVICE_NAME"
+[Unit]
+Description=AsistenteIA - Voice Assistant Orchestrator
+After=network.target
 
-echo "-> Recargando demonio de systemd..."
+[Service]
+Type=simple
+WorkingDirectory=$PROJECT_DIR
+ExecStartPre=/usr/bin/bash -c "/usr/bin/fuser -k 8765/tcp || /usr/bin/true"
+ExecStart=$PROJECT_DIR/venv/bin/python -m src.main
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+Environment=DISPLAY=$DISPLAY
+Environment=WAYLAND_DISPLAY=$WAYLAND_DISPLAY
+Environment=XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
+
+[Install]
+WantedBy=default.target
+EOF
+
+echo "-> Recargando systemd..."
 systemctl --user daemon-reload
 systemctl --user enable "$SERVICE_NAME"
 
-echo "=== Servicio instalado y habilitado ==="
-echo "Para iniciar ahora: systemctl --user start $SERVICE_NAME"
-echo "Para ver logs: journalctl --user -u $SERVICE_NAME -f"
+echo "=== Instalación completada ==="
+echo "Puedes iniciarlo con: ./startservice.sh"
+echo "O ver logs con: journalctl --user -u $SERVICE_NAME -f"

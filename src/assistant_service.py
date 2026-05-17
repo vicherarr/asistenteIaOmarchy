@@ -7,7 +7,17 @@ from pathlib import Path
 from typing import Optional, List
 
 from src.schema import ChatMessage
-from src.command_executor import execute_system_command, get_system_status, read_log_file
+from src.command_executor import (
+    execute_system_command, 
+    get_system_status, 
+    read_log_file, 
+    clipboard_manager,
+    web_search,
+    manage_windows,
+    system_diagnostics,
+    read_web_page,
+    interact_web
+)
 from src.vision_tool import analyze_screen
 from src.litert_client import LiteRTClient
 from src.tts_engine import TTSEngine
@@ -36,7 +46,13 @@ class AssistantService:
             execute_system_command,
             get_system_status,
             analyze_screen,
-            read_log_file
+            read_log_file,
+            clipboard_manager,
+            web_search,
+            manage_windows,
+            system_diagnostics,
+            read_web_page,
+            interact_web
         ]
 
     async def process_audio(
@@ -106,15 +122,13 @@ class AssistantService:
         if pending_image_path:
             logger.info("Imagen detectada de tool 'analyze_screen'. Realizando segunda pasada visual...")
             try:
-                img = Image.open(pending_image_path)
-                # Segunda llamada incluyendo la imagen
+                # Segunda llamada incluyendo la RUTA de la imagen (más estable en 2026)
                 response_text = await self.litert.chat(
                     prompt="Describe qué ves en esta imagen y responde a la petición original del usuario.",
-                    image=img,
+                    image_path=pending_image_path,
                     system_prompt=system_prompt,
                     history=conversation_history # Incluimos el turno actual
                 )
-                img.close()
                 Path(pending_image_path).unlink()
             except Exception as e:
                 logger.error(f"Error procesando imagen pendiente: {e}")
