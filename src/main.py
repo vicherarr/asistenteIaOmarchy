@@ -114,21 +114,35 @@ async def handle_transcription(
     if not request.text.strip():
         raise HTTPException(status_code=400, detail="Texto vacío")
 
+    # Cancelar cualquier tarea en curso (audio o transcripción previa)
     if state.current_task and not state.current_task.done():
         state.current_task.cancel()
+    
+    # Detener TTS si estaba sonando algo de una petición anterior
+    state.tts_engine.stop()
 
-    state.processing = True
-    try:
+    async def run_transcription():
         sink_id = state.audio_manager.default_sink
-        result = await state.assistant_service.process_transcription(
+        return await state.assistant_service.process_transcription(
             text=request.text,
             conversation_history=state.conversation_history,
             sink_id=sink_id,
             max_history=MAX_HISTORY
         )
+
+    state.processing = True
+    state.current_task = asyncio.create_task(run_transcription())
+    
+    try:
+        result = await state.current_task
         return TranscriptionResponse(**result)
+    except asyncio.CancelledError:
+        logger.info("Petición de transcripción cancelada por una nueva.")
+        raise HTTPException(status_code=409, detail="Interrumpido por nueva petición")
     finally:
-        state.processing = False
+        # Solo marcamos como no procesando si no hay una nueva tarea ocupando el lugar
+        if state.current_task.done():
+            state.processing = False
 
 
 @app.post("/listen/toggle")
@@ -218,6 +232,15 @@ async def get_status(state: AppState = Depends(get_app_state)):
         conversation_length=len(state.conversation_history),
         processing=state.processing or state.is_recording,
     )
+
+
+@app.get("/history")
+async def get_history(state: AppState = Depends(get_app_state)):
+    """Devuelve el historial completo o el último mensaje."""
+    return {
+        "history": [msg.dict() for msg in state.conversation_history],
+        "last_response": state.conversation_history[-1].content if state.conversation_history and state.conversation_history[-1].role == "assistant" else None
+    }
 
 
 @app.post("/reset")

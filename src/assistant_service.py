@@ -41,6 +41,7 @@ class AssistantService:
         self.litert = litert_client
         self.tts = tts_engine
         self.stt = stt_engine
+        self._current_tts_task: Optional[asyncio.Task] = None
         # Lista de herramientas para LiteRT
         self.tools = [
             execute_system_command,
@@ -137,17 +138,21 @@ class AssistantService:
         # Guardar respuesta en el historial
         conversation_history.append(ChatMessage(role="assistant", content=response_text))
 
-        audio_file: Optional[str] = None
         if response_text:
             clean_text = strip_markdown(response_text)
-            try:
-                audio_file = await self.tts.speak(clean_text, sink_id=sink_id)
-            except Exception as e:
-                logger.error(f"Error en TTS: {e}")
+            
+            # Cancelar TTS previo si existe
+            if self._current_tts_task and not self._current_tts_task.done():
+                self._current_tts_task.cancel()
+                self.tts.stop() # Asegurar parada inmediata del proceso
+
+            # Iniciamos la síntesis y reproducción en SEGUNDO PLANO
+            # Así la interfaz visual puede mostrar el texto de inmediato
+            self._current_tts_task = asyncio.create_task(self.tts.speak(clean_text, sink_id=sink_id))
 
         return {
             "status": "success",
             "response_text": response_text,
             "commands_executed": 1 if "Éxito" in response_text else 0,
-            "audio_file": audio_file,
+            "audio_file": None, # Ya no esperamos por el path
         }

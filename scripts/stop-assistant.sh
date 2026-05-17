@@ -20,6 +20,14 @@ fi
 
 pkill -f "python -m src.main" || true
 
+GUI_PID_FILE="/tmp/asistenteia-gui.pid"
+if [ -f "$GUI_PID_FILE" ]; then
+    echo "-> Deteniendo interfaz visual..."
+    GUI_PID=$(cat "$GUI_PID_FILE")
+    kill "$GUI_PID" 2>/dev/null || true
+    rm -f "$GUI_PID_FILE"
+fi
+
 if [ -f "/tmp/asistenteia_started_ollama" ]; then
     echo "-> Deteniendo Ollama residual..."
     pkill -f "ollama serve" || true
