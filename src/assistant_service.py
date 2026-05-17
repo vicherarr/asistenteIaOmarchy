@@ -16,7 +16,8 @@ from src.command_executor import (
     manage_windows,
     system_diagnostics,
     read_web_page,
-    interact_web
+    interact_web,
+    play_specific_music
 )
 from src.vision_tool import analyze_screen
 from src.litert_client import LiteRTClient
@@ -53,7 +54,8 @@ class AssistantService:
             manage_windows,
             system_diagnostics,
             read_web_page,
-            interact_web
+            interact_web,
+            play_specific_music
         ]
 
     async def process_audio(

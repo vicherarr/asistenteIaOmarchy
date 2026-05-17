@@ -286,6 +286,96 @@ def web_search(query: str) -> str:
         return f"Error en búsqueda web: {e}"
 
 
+def play_specific_music(query: str) -> str:
+    """
+    Busca y reproduce un artista, canción o álbum específico en Spotify.
+    Usa esto cuando el usuario pida algo concreto (ej: "pon música de Estopa").
+    
+    Args:
+        query: Nombre del artista, canción o álbum a buscar.
+    """
+    query = _sanitize_tool_args(query)
+    # Buscamos de forma muy abierta
+    search_query = f"Spotify artist track album {query}"
+    
+    logger.info(f"Buscando música específica: {query}")
+    results_text = web_search(search_query)
+    
+    # Extraer enlaces de Spotify
+    import re
+    pattern = r'https?://open\.spotify\.com/(?:[a-z]{2}/)?(?:artist|track|album|playlist)/[a-zA-Z0-9]+'
+    spotify_links = re.findall(pattern, results_text)
+    
+    executor = CommandExecutor()
+    target_uri = None
+    
+    if spotify_links:
+        target_link = spotify_links[0]
+        logger.info(f"Enlace de Spotify encontrado: {target_link}")
+        # Convertir a URI nativo
+        uri_match = re.search(r'spotify\.com/(artist|track|album|playlist)/([a-zA-Z0-9]+)', target_link)
+        if uri_match:
+            target_uri = f"spotify:{uri_match.group(1)}:{uri_match.group(2)}"
+        else:
+            target_uri = target_link
+    else:
+        logger.warning(f"No se encontró link directo para '{query}'. Usando búsqueda nativa.")
+        target_uri = f"spotify:search:{query}"
+
+    async def _spotify_aggressive_flow(uri: str):
+        # 1. Lanzar/Enfocar Spotify
+        await executor.spawn(f"spotify --uri=\"{uri}\"")
+        
+        # 2. Esperar a que el reproductor aparezca en el bus de medios (hasta 20s)
+        player_ready = False
+        for i in range(20):
+            _, players = await executor.execute("playerctl -l")
+            if "spotify" in players.lower():
+                player_ready = True
+                logger.info(f"Spotify detectado en el bus tras {i}s.")
+                break
+            await asyncio.sleep(1)
+        
+        if not player_ready:
+            return False, "Spotify no apareció en el bus de medios."
+
+        # 3. Secuencia de reproducción forzada
+        # Algunos URIs necesitan un momento para cargar antes de aceptar el comando 'play'
+        await asyncio.sleep(3) 
+        
+        # Intentar 'open' si es un URI directo (no search)
+        if not uri.startswith("spotify:search:"):
+            await executor.execute(f"playerctl --player=spotify open \"{uri}\"")
+            await asyncio.sleep(2)
+
+        # Enviar PLAY repetidamente o verificar estado
+        for _ in range(3):
+            _, status = await executor.execute("playerctl --player=spotify status")
+            if "Playing" in status:
+                logger.info("Reproducción confirmada.")
+                return True, "OK"
+            
+            logger.info("Intentando forzar reproducción...")
+            await executor.execute("playerctl --player=spotify play")
+            await asyncio.sleep(2)
+            
+        return False, "No se pudo iniciar la reproducción tras varios intentos."
+
+    try:
+        try:
+            loop = asyncio.get_running_loop()
+            success, msg = loop.run_until_complete(_spotify_aggressive_flow(target_uri))
+        except RuntimeError:
+            success, msg = asyncio.run(_spotify_aggressive_flow(target_uri))
+        
+        if success:
+            return f"Reproduciendo '{query}' en Spotify."
+        else:
+            return f"He abierto Spotify con '{query}', pero es posible que tengas que darle al play manualmente ({msg})."
+    except Exception as e:
+        return f"Error en el flujo de música: {e}"
+
+
 def manage_windows(action: str, target: str = "") -> str:
     """
     Gestiona ventanas y escritorios de Hyprland.
