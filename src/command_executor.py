@@ -15,64 +15,48 @@ logger = logging.getLogger(__name__)
 @dataclass
 class SystemCommand:
     command: str
-    description: str
+    description: str = ""
 
 
 @dataclass
 class ParsedResponse:
     response_text: str
     commands: list[SystemCommand]
-    action_type: str
+    action_type: str  # speak, execute, vision, both
 
 
 class CommandExecutorError(Exception):
-    """Errores del ejecutor de comandos."""
+    """Errores en la ejecución de comandos."""
     pass
 
 
 class CommandExecutor:
-    """Ejecuta comandos del sistema de forma segura."""
+    """Ejecutor de comandos del sistema con validación de seguridad."""
 
-    ALLOWED_PREFIXES = (
+    # Lista blanca de comandos permitidos (prefijos)
+    ALLOWED_PREFIXES = [
         "omarchy",
         "hyprctl",
-        "playerctl",
         "wpctl",
+        "playerctl",
+        "nmcli",
+        "bluetoothctl",
+        "systemctl --user",
         "chromium",
-        "notify-send",
-        "pactl",
-        "pavucontrol",
-        "firefox",
-        "thunderbird",
-        "spotify",
-        "vlc",
-        "rhythmbox",
-        "gedit",
-        "kate",
         "alacritty",
-        "kitty",
-        "foot",
-        "nautilus",
-        "dolphin",
-        "thunar",
-        "xreader",
-        "evince",
-        "gnome-calculator",
-        "kcalc",
-        "screenshot",
+        "notify-send",
         "grim",
-        "slurp",
-        "swappy",
-        "omarchy launch",
-        "omarchy search",
-    )
+    ]
 
-    def __init__(self, dry_run: bool = False) -> None:
+    def __init__(self, dry_run: bool = False):
         self.dry_run = dry_run
 
     def _is_safe_command(self, command: str) -> bool:
-        """Verifica si un comando es seguro para ejecutar."""
-        cmd_base = command.split()[0] if command.split() else ""
+        """Verifica si un comando es seguro según la lista blanca."""
+        # Protección básica contra encadenamiento
+        if ";" in command or "&&" in command or "||" in command or "|" in command:
+            logger.warning(f"Comando bloqueado por caracteres sospechosos: {command}")
+            return False
 
         for prefix in self.ALLOWED_PREFIXES:
             if command.startswith(prefix):
@@ -132,17 +116,25 @@ class CommandExecutor:
 
 def parse_gemma_response(raw_text: str) -> ParsedResponse:
     """
-    Parsea la respuesta de Gemma para extraer texto, comandos y tipo de acción.
-    Maneja tanto JSON estructurado como texto plano.
+    Parsea la respuesta del LLM para extraer texto y comandos.
+    Maneja etiquetas de pensamiento (R1), bloques markdown y JSON plano.
     """
-    json_pattern = r"```json\s*([\s\S]*?)\s*```"
-    match = re.search(json_pattern, raw_text)
+    # 1. Limpiar etiquetas de pensamiento de DeepSeek R1 (<thought>...</thought>)
+    clean_text = re.sub(r"<thought>[\s\S]*?</thought>", "", raw_text).strip()
+    
+    # 2. Intentar extraer JSON de bloques de código markdown
+    json_match = re.search(r"```json\s*([\s\S]*?)\s*```", clean_text)
+    if not json_match:
+        # Intentar buscar un objeto JSON plano { ... } si no hay bloques markdown
+        json_match = re.search(r"(\{[\s\S]*?\})", clean_text)
 
-    if match:
-        json_str = match.group(1)
+    if json_match:
         try:
+            json_str = json_match.group(1)
             data = json.loads(json_str)
-            response_text = data.get("response_text", raw_text)
+            
+            # Extraer campos con fallbacks
+            response_text = data.get("response_text", "")
             action_type = data.get("action_type", "speak")
 
             commands = []
@@ -152,30 +144,10 @@ def parse_gemma_response(raw_text: str) -> ParsedResponse:
                     description=cmd_data.get("description", ""),
                 ))
 
-            return ParsedResponse(
-                response_text=response_text,
-                commands=commands,
-                action_type=action_type,
-            )
-
-        except json.JSONDecodeError:
-            logger.warning("JSON inválido en respuesta de Gemma, usando texto plano")
-
-    inline_json_pattern = r"\{[\s\S]*\}"
-    match = re.search(inline_json_pattern, raw_text)
-
-    if match:
-        try:
-            data = json.loads(match.group(0))
-            response_text = data.get("response_text", raw_text)
-            action_type = data.get("action_type", "speak")
-
-            commands = []
-            for cmd_data in data.get("commands", []):
-                commands.append(SystemCommand(
-                    command=cmd_data.get("command", ""),
-                    description=cmd_data.get("description", ""),
-                ))
+            # Si el JSON no tiene texto de respuesta, usamos el texto limpio fuera del JSON
+            if not response_text:
+                response_text = re.sub(r"```json[\s\S]*?```", "", clean_text).strip()
+                response_text = re.sub(r"\{[\s\S]*?\}", "", response_text).strip()
 
             return ParsedResponse(
                 response_text=response_text,
@@ -183,11 +155,13 @@ def parse_gemma_response(raw_text: str) -> ParsedResponse:
                 action_type=action_type,
             )
 
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, AttributeError):
+            logger.warning("Fallo al decodificar JSON sugerido por el modelo")
             pass
 
+    # Si no hay JSON válido, devolver el texto limpio como respuesta verbal
     return ParsedResponse(
-        response_text=raw_text,
+        response_text=clean_text,
         commands=[],
         action_type="speak",
     )

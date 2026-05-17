@@ -25,6 +25,7 @@ class OllamaRequest(BaseModel):
     options: dict = Field(default_factory=lambda: {
         "temperature": settings.OLLAMA_TEMPERATURE,
         "num_ctx": settings.OLLAMA_NUM_CTX,
+        "num_gpu": -1,  # FUERZA LA CARGA EN GPU
     })
 
 
