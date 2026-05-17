@@ -190,8 +190,23 @@ async def toggle_listen(state: AppState = Depends(get_app_state)):
         source_id = state.audio_manager.default_source
         if source_id:
             asyncio.create_task(state.audio_manager.set_volume(source_id, 0.9))
+        
+        # Definir callback para cuando se detecte silencio prolongado
+        def on_silence_detected():
+            logger.info("Auto-stop disparado por silencio.")
+            # Usar httpx para llamar al propio endpoint y simular la pulsación del toggle
+            # Esto asegura que se ejecute toda la lógica de stop_recording y proceso
+            import httpx
+            async def _auto_toggle():
+                async with httpx.AsyncClient() as client:
+                    await client.post(f"http://localhost:{settings.PORT}/listen/toggle")
             
-        state.audio_recorder.start_recording(source_id=source_id)
+            asyncio.create_task(_auto_toggle())
+            
+        state.audio_recorder.start_recording(
+            source_id=source_id, 
+            on_silence_callback=on_silence_detected
+        )
         
         # 2. Refrescar configuración de audio en segundo plano
         asyncio.create_task(state.audio_manager.auto_configure_bluetooth())
