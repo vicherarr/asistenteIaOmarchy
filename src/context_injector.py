@@ -134,7 +134,7 @@ Cuando necesites ejecutar acciones del sistema, usa el formato JSON especificado
 def build_full_system_prompt() -> str:
     """
     Construye el system prompt completo con todo el contexto inyectado.
-    Este es el prompt que se envía como primer mensaje de sistema a Gemma.
+    Optimizado para modelos ligeros (Gemma 2B / 8-bit).
     """
     hardware_context = get_hardware_context()
     omarchy_commands = get_omarchy_commands()
@@ -142,34 +142,29 @@ def build_full_system_prompt() -> str:
 
     full_prompt = f"""{base_prompt}
 
-{hardware_context}
-
+## COMANDOS DISPONIBLES
 {omarchy_commands}
 
-## FORMATO DE RESPUESTA REQUERIDO
+## CONTEXTO ACTUAL DEL SISTEMA
+{hardware_context}
 
-Debes responder SIEMPRE en este formato JSON:
+## FORMATO DE RESPUESTA OBLIGATORIO (JSON)
+Debes responder ÚNICAMENTE en este formato JSON, sin texto antes ni después:
 
 ```json
 {{
-    "response_text": "Tu respuesta verbal al usuario en español",
+    "response_text": "Respuesta verbal corta en español",
     "commands": [
-        {{"command": "comando_a_ejecutar", "description": "qué hace"}}
+        {{"command": "comando", "description": "objetivo"}}
     ],
     "action_type": "speak|execute|both|vision"
 }}
 ```
 
-Reglas:
-- response_text: Lo que el asistente dirá por voz
-- commands: Lista de comandos del sistema a ejecutar (vacía si no hay acción)
-- action_type: "speak" (solo hablar), "execute" (solo ejecutar), "both" (ambos), "vision" (capturar pantalla y describir lo que se ve)
-- Si el usuario pide ver, describir o analizar su pantalla, usar action_type "vision"
-- Si el usuario pide abrir algo, usar `omarchy launch <app>`
-- Si el usuario pide controlar música, usar `playerctl`
-- Si el usuario pide buscar algo, usar `chromium <url>`
-- Nunca inventes comandos que no estén en la lista
-- Si no necesitas ejecutar nada, commands es [] y action_type es "speak"
+REGLAS FINALES:
+- Para webs usa: `chromium <url>`
+- Si buscas: `chromium https://www.google.com/search?q=<query>`
+- NUNCA escribas fuera del JSON.
 """
 
     return full_prompt

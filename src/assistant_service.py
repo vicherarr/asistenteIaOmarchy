@@ -12,6 +12,7 @@ from src.tts_engine import TTSEngine
 from src.vision_tool import VisionTool
 from src.stt_engine import STTEngine
 from src.utils import strip_markdown
+from src.context_injector import build_full_system_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -26,14 +27,12 @@ class AssistantService:
         vision_tool: VisionTool,
         tts_engine: TTSEngine,
         stt_engine: STTEngine,
-        system_prompt: str,
     ):
         self.ollama = ollama_client
         self.executor = command_executor
         self.vision = vision_tool
         self.tts = tts_engine
         self.stt = stt_engine
-        self.system_prompt = system_prompt
 
     async def process_audio(
         self,
@@ -77,9 +76,21 @@ class AssistantService:
         if len(conversation_history) > max_history:
             conversation_history[:] = conversation_history[-max_history:]
 
-        messages = [OllamaMessage(role="system", content=self.system_prompt)] + conversation_history
+        # REGENERAR CONTEXTO DINÁMICO (Hardware + Sistema)
+        system_prompt = build_full_system_prompt()
+        
+        # Copiamos la historia para no modificarla permanentemente con el nudge
+        messages = [OllamaMessage(role="system", content=system_prompt)]
+        for msg in conversation_history[:-1]:
+            messages.append(msg)
+            
+        # Añadimos el último mensaje del usuario con un "nudge" para forzar JSON
+        last_msg = conversation_history[-1]
+        nudge_content = f"{last_msg.content}\n\n(Responde SOLO en JSON)"
+        messages.append(OllamaMessage(role="user", content=nudge_content))
 
         gemma_response = await self.ollama.generate(messages)
+        logger.info(f"Respuesta RAW de Ollama: {gemma_response}")
         parsed = parse_gemma_response(gemma_response)
 
         conversation_history.append(OllamaMessage(role="assistant", content=gemma_response))

@@ -42,14 +42,12 @@ class AppState:
         self.vision_tool = VisionTool()
         self.audio_recorder = AudioRecorder()
         self.stt_engine = STTEngine()
-        self.system_prompt = build_full_system_prompt()
         self.assistant_service = AssistantService(
             ollama_client=self.ollama_client,
             command_executor=self.command_executor,
             vision_tool=self.vision_tool,
             tts_engine=self.tts_engine,
             stt_engine=self.stt_engine,
-            system_prompt=self.system_prompt,
         )
         self.conversation_history: list[OllamaMessage] = []
         self.current_task: Optional[asyncio.Task] = None
@@ -186,28 +184,27 @@ async def toggle_listen(state: AppState = Depends(get_app_state)):
         if state.tts_engine:
             state.tts_engine.stop()
             
-        # Bloquear inmediatamente para evitar doble pulsación durante el delay
+        # Bloquear inmediatamente para evitar doble pulsación
         state.is_recording = True
         
-        # 2. Notificar y despertar Bluetooth
+        # 2. Notificar y empezar a grabar INMEDIATAMENTE (0ms)
+        # Grabamos desde el principio para no perder ni una sílaba
         state.assistant_service.send_notification("Escuchando... habla ahora")
-        
-        async def start_sequence():
-            # Sonido de inicio
-            state.audio_manager.play_system_sound("message-new-instant")
+        source_id = state.audio_manager.default_source
+        if source_id:
+            asyncio.create_task(asyncio.to_thread(state.audio_manager.set_volume, source_id, 0.9))
             
-            # Espera optimizada (800ms) para que el auricular cambie de perfil
-            await asyncio.sleep(0.8)
-            
-            # 3. Empezar a grabar
-            source_id = state.audio_manager.default_source
-            if source_id:
-                await asyncio.to_thread(state.audio_manager.set_volume, source_id, 0.9)
-                
-            state.audio_recorder.start_recording(source_id=source_id)
-            logger.info("Grabación iniciada tras el bip de 800ms")
+        state.audio_recorder.start_recording(source_id=source_id)
+        logger.info("Grabación iniciada inmediatamente (0ms)")
 
-        state.current_task = asyncio.create_task(start_sequence())
+        async def delayed_feedback():
+            # Esperamos 0.8s a que el sistema/Bluetooth se asiente
+            await asyncio.sleep(0.8)
+            # Sonamos el bip para decir "ESTOY LISTO, HABLA"
+            state.audio_manager.play_system_sound("message-new-instant")
+            logger.info("Bip de confirmación emitido a los 800ms")
+
+        state.current_task = asyncio.create_task(delayed_feedback())
         
         # 4. Refrescar configuración de audio en SEGUNDO PLANO
         asyncio.create_task(asyncio.to_thread(state.audio_manager.auto_configure_bluetooth))
