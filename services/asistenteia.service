@@ -12,6 +12,7 @@ Environment=PATH=%h/develop/asistenteia/venv/bin:/usr/local/bin:/usr/bin
 Environment=PYTHONUNBUFFERED=1
 Environment=DISPLAY=:0
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
+Environment=XDG_RUNTIME_DIR=/run/user/%U
 
 StandardOutput=journal
 StandardError=journal

@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import re
+import subprocess
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -157,7 +158,7 @@ async def handle_transcription(
 
 @app.post("/listen/toggle")
 async def toggle_listen(state: AppState = Depends(get_app_state)):
-    """Alterna el estado de grabación del micrófono."""
+    """Alterna el estado de grabación del micrófono de forma ultra-rápida."""
     if state.is_recording:
         # Detener grabación y procesar
         state.is_recording = False
@@ -178,20 +179,33 @@ async def toggle_listen(state: AppState = Depends(get_app_state)):
         else:
             return {"status": "error", "message": "No se pudo obtener el audio"}
     else:
-        # Iniciar nueva grabación
-        # 1. Cancelar cualquier cosa en curso
+        # Iniciar nueva grabación (FLUJO OPTIMIZADO)
+        # 1. Cancelar cualquier cosa en curso (TTS o procesamiento previo)
         if state.current_task and not state.current_task.done():
             state.current_task.cancel()
         if state.tts_engine:
             state.tts_engine.stop()
             
-        # 2. Configurar audio
-        await asyncio.to_thread(state.audio_manager.auto_configure_bluetooth)
-            
-        # 3. Empezar a grabar
+        # 2. Empezar a grabar INMEDIATAMENTE
         state.is_recording = True
-        state.audio_recorder.start_recording()
+        
+        # Intentar usar el micro detectado previamente para ganar milisegundos
+        source_id = state.audio_manager.default_source
+        state.audio_recorder.start_recording(source_id=source_id)
+        
+        # 3. Notificar y emitir un pequeño sonido (con un pequeño delay para el Bluetooth)
         state.assistant_service.send_notification("Escuchando... habla ahora")
+        
+        async def delayed_beep():
+            # Los auriculares BT suelen tardar entre 500ms y 1s en estabilizar el audio 
+            # tras abrir el micro. Usamos 0.8s como valor seguro.
+            await asyncio.sleep(0.8)
+            state.audio_manager.play_system_sound("message-new-instant")
+            
+        asyncio.create_task(delayed_beep())
+        
+        # 4. Refrescar configuración de audio en SEGUNDO PLANO
+        asyncio.create_task(asyncio.to_thread(state.audio_manager.auto_configure_bluetooth))
         
         return {"status": "listening"}
 

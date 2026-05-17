@@ -41,6 +41,14 @@ class AudioManager:
         self._default_source: Optional[str] = None
         self._default_sink: Optional[str] = None
 
+    @property
+    def default_source(self) -> Optional[str]:
+        return self._default_source
+
+    @property
+    def default_sink(self) -> Optional[str]:
+        return self._default_sink
+
     def _run_wpctl(self, args: list[str]) -> str:
         """Ejecuta un comando wpctl y devuelve su salida."""
         try:
@@ -202,6 +210,23 @@ class AudioManager:
             source.node_id if source else None,
             sink.node_id if sink else None,
         )
+
+    def play_system_sound(self, sound_name: str = "audio-volume-change") -> None:
+        """Reproduce un sonido de sistema de forma asíncrona usando pw-play."""
+        sound_path = f"/usr/share/sounds/freedesktop/stereo/{sound_name}.oga"
+        
+        cmd = ["pw-play"]
+        if self._default_sink:
+            # En PipeWire, usamos --target para especificar el nodo de salida
+            cmd.extend(["--target", self._default_sink])
+        cmd.append(sound_path)
+
+        try:
+            logger.info(f"Reproduciendo sonido de sistema: {sound_name} (Target: {self._default_sink or 'default'})")
+            # Lo lanzamos sin esperar (background)
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            logger.warning(f"No se pudo reproducir sonido de sistema: {e}")
 
     def get_status_summary(self) -> str:
         """Devuelve un resumen del estado de audio para inyección de contexto."""

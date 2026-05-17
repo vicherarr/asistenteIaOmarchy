@@ -17,32 +17,34 @@ class AudioRecorder:
         self._process: Optional[subprocess.Popen] = None
         self._current_file: Optional[Path] = None
 
-    def start_recording(self) -> Path:
-        """Inicia la grabación en un archivo temporal."""
+    def start_recording(self, source_id: Optional[str] = None) -> Path:
+        """Inicia la grabación en un archivo temporal de forma rápida."""
         if self._process and self._process.poll() is None:
             logger.warning("Ya hay una grabación en curso")
             return self._current_file
 
-        # Crear archivo temporal
         fd, path = tempfile.mkstemp(suffix=".wav", prefix="asistente_rec_")
-        # Cerramos el descriptor de archivo para que parecord pueda escribir en él
         import os
         os.close(fd)
         
         self._current_file = Path(path)
-
-        logger.info(f"Iniciando grabación en: {self._current_file}")
+        logger.info(f"Iniciando grabación en: {self._current_file} (Dispositivo: {source_id or 'default'})")
         
-        # Lanzar parecord (frecuencia 16kHz es ideal para Whisper)
+        # Construir comando parecord
+        cmd = ["parecord", "--rate=16000", "--channels=1", "--file-format=wav"]
+        if source_id:
+            cmd.extend(["--device", source_id])
+        cmd.append(str(self._current_file))
+
         try:
             self._process = subprocess.Popen(
-                ["parecord", "--rate=16000", "--channels=1", "--file-format=wav", str(self._current_file)],
+                cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
         except FileNotFoundError:
-            logger.error("parecord no encontrado. Asegúrate de tener libpulse o pipewire-pulse instalado.")
-            raise RuntimeError("Herramienta de grabación 'parecord' no encontrada")
+            logger.error("parecord no encontrado")
+            raise RuntimeError("Herramienta 'parecord' no encontrada")
 
         return self._current_file
 
