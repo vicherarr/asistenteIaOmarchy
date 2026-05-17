@@ -105,8 +105,7 @@ class SpotlightWindow(QMainWindow):
         self.animation.setEasingCurve(QEasingCurve.OutCubic)
 
         # Configuración de tamaño inicial
-        self.setFixedSize(600, 80)
-        self.position_window()
+        self.resize(600, 80)
         
         self.last_recording_state = False
         self.pending_gui_request = False
@@ -118,7 +117,6 @@ class SpotlightWindow(QMainWindow):
     @windowHeight.setter
     def windowHeight(self, height):
         self._height = height
-        self.setFixedHeight(height)
 
     def animate_height(self, target_height):
         if self._height == target_height: return
@@ -126,17 +124,6 @@ class SpotlightWindow(QMainWindow):
         self.animation.setStartValue(self._height)
         self.animation.setEndValue(target_height)
         self.animation.start()
-
-    def position_window(self):
-        screen = QApplication.primaryScreen().geometry()
-        margin_right = 20
-        margin_top = 10 # Justo debajo de la barra de Hyprland
-        
-        # Situarlo arriba a la derecha
-        self.move(
-            screen.width() - self.width() - margin_right,
-            margin_top
-        )
 
     @asyncSlot()
     async def on_cancel(self):
@@ -245,7 +232,7 @@ class SpotlightWindow(QMainWindow):
                 self.hide()
         super().keyPressEvent(event)
 
-async def main():
+def main():
     app = QApplication(sys.argv)
     loop = QEventLoop(app)
     asyncio.set_event_loop(loop)
@@ -273,7 +260,7 @@ async def main():
         loop.add_signal_handler(sig, handle_exit)
 
     with loop:
-        await loop.run_forever()
+        loop.run_forever()
 
 if __name__ == "__main__":
     pid_file = "/tmp/asistenteia-gui.pid"
@@ -290,7 +277,7 @@ if __name__ == "__main__":
         f.write(str(os.getpid()))
         
     try:
-        asyncio.run(main())
+        main()
     finally:
         if os.path.exists(pid_file):
             try:
@@ -300,3 +287,4 @@ if __name__ == "__main__":
                     os.remove(pid_file)
             except:
                 pass
+        pass
