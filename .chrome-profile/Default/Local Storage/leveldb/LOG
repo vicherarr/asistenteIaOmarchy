@@ -1,0 +1,5 @@
+2026/05/20-20:48:45.882 5 Creating DB /home/victor/develop/asistenteia/.chrome-profile/Default/Local Storage/leveldb since it was missing.
+2026/05/20-20:48:45.920 5 Reusing MANIFEST /home/victor/develop/asistenteia/.chrome-profile/Default/Local Storage/leveldb/MANIFEST-000001
+2026/05/20-20:49:45.922 5 Level-0 table #5: started
+2026/05/20-20:49:45.942 5 Level-0 table #5: 615558 bytes OK
+2026/05/20-20:49:45.955 5 Delete type=0 #3

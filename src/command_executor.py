@@ -645,6 +645,139 @@ async def read_terminal_screen() -> str:
         return f"Excepción leyendo pantalla de la terminal: {e}"
 
 
+async def control_local_browser(action: str, target: str = "", value: str = "") -> str:
+    """
+    Controla el navegador Chromium visible en tu pantalla a través del protocolo de depuración (CDP).
+    Si el navegador no está abierto con la depuración habilitada, lo lanzará automáticamente.
+    La ventana permanecerá visible para que puedas ver y continuar la interacción manualmente.
+    
+    Args:
+        action: La acción a realizar:
+            'launch': Solo inicia el navegador si no está abierto.
+            'navigate': Va a una URL específica (ej. target='https://google.com').
+            'click': Hace clic en un elemento web usando un selector CSS (ej. target='button.submit').
+            'type': Escribe texto en un campo usando un selector CSS (ej. target='input#search', value='recetas de cocina').
+            'read': Lee el título y el texto visible de la pestaña activa actual.
+            'scroll': Hace scroll vertical (ej. value='500' para bajar, value='-500' para subir).
+        target: URL o selector CSS según la acción.
+        value: Texto a escribir o valor de scroll.
+    """
+    import socket
+    import subprocess
+    import shutil
+    import os
+    import asyncio
+    from playwright.async_api import async_playwright
+    
+    action = _sanitize_tool_args(action)
+    target = _sanitize_tool_args(target)
+    value = _sanitize_tool_args(value)
+
+    def _is_port_open(port: int = 9222) -> bool:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.3):
+                return True
+        except Exception:
+            return False
+
+    # 1. Comprobar si Chromium está activo con CDP habilitado
+    if not _is_port_open(9222):
+        # Intentar lanzarlo
+        profile_path = "/home/victor/develop/asistenteia/.chrome-profile"
+        os.makedirs(profile_path, exist_ok=True)
+        
+        binary = shutil.which("chromium") or shutil.which("google-chrome-stable")
+        if not binary:
+            return "Error: No se encontró Chromium o Google Chrome en el sistema."
+            
+        args = [
+            binary,
+            "--remote-debugging-port=9222",
+            f"--user-data-dir={profile_path}",
+            "--no-first-run",
+            "--no-default-browser-check"
+        ]
+        logger.info(f"Lanzando Chromium visible con CDP habilitado en puerto 9222...")
+        subprocess.Popen(args, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
+        # Esperar a que el puerto responda
+        for _ in range(10):
+            await asyncio.sleep(0.5)
+            if _is_port_open(9222):
+                break
+        else:
+            return "Error: Se intentó lanzar Chromium pero no se detectó respuesta en el puerto 9222."
+
+    if action == "launch":
+        return "Éxito: Navegador Chromium visible iniciado y listo con depuración habilitada en el puerto 9222."
+
+    # 2. Conectarse y realizar la acción mediante Playwright
+    try:
+        async with async_playwright() as p:
+            logger.info("Conectando a Chromium visible vía CDP...")
+            browser = await p.chromium.connect_over_cdp("http://127.0.0.1:9222")
+            
+            # Obtener el contexto y asegurar que hay al menos una pestaña
+            context = browser.contexts[0]
+            page = context.pages[0] if context.pages else await context.new_page()
+            
+            if action == "navigate":
+                if not target:
+                    return "Error: Especifica la URL a navegar en el argumento 'target'."
+                if not target.startswith("http"):
+                    target = "https://" + target
+                
+                logger.info(f"Navegando a {target}...")
+                await page.goto(target, wait_until="networkidle", timeout=15000)
+                title = await page.title()
+                return f"Éxito: Navegado correctamente a '{target}' (Título: '{title}')."
+                
+            elif action == "click":
+                if not target:
+                    return "Error: Especifica el selector CSS para hacer clic en el argumento 'target'."
+                
+                logger.info(f"Haciendo clic en selector '{target}'...")
+                await page.wait_for_selector(target, timeout=5000)
+                await page.click(target)
+                await asyncio.sleep(1.0) # Esperar a que renderice la respuesta
+                return f"Éxito: Se hizo clic en el elemento con selector '{target}'."
+                
+            elif action == "type":
+                if not target:
+                    return "Error: Especifica el selector CSS en 'target' para escribir."
+                
+                logger.info(f"Escribiendo texto en '{target}'...")
+                await page.wait_for_selector(target, timeout=5000)
+                await page.click(target)
+                # Simular escritura real con pequeños retrasos entre teclas
+                await page.type(target, value, delay=50)
+                await asyncio.sleep(0.5)
+                return f"Éxito: Se escribió correctamente '{value}' en el elemento '{target}'."
+                
+            elif action == "read":
+                title = await page.title()
+                content = await page.evaluate("document.body.innerText")
+                snippet = content[:3000] + "\n\n[Contenido de la página truncado por longitud...]" if len(content) > 3000 else content
+                return f"INFORMACIÓN DE PESTAÑA ACTIVA:\n- TÍTULO: {title}\n- URL: {page.url}\n\nCONTENIDO TEXTUAL:\n\n{snippet}"
+                
+            elif action == "scroll":
+                scroll_amount = 500
+                if value:
+                    try:
+                        scroll_amount = int(value)
+                    except ValueError:
+                        pass
+                logger.info(f"Haciendo scroll vertical de {scroll_amount}px...")
+                await page.evaluate(f"window.scrollBy(0, {scroll_amount})")
+                return f"Éxito: Se desplazó la página verticalmente {scroll_amount} píxeles."
+                
+            else:
+                return f"Error: Acción '{action}' no es una acción soportada en control_local_browser."
+    except Exception as e:
+        logger.error(f"Excepción en control_local_browser: {e}")
+        return f"Error controlando el navegador gráfico: {e}"
+
+
 def parse_gemma_response(raw_text: str) -> ParsedResponse:
     """Parsea JSON y limpia etiquetas thought."""
     clean_text = re.sub(r"<thought>[\s\S]*?</thought>", "", raw_text).strip()
