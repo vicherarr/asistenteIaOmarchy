@@ -661,6 +661,11 @@ async def control_local_browser(action: str, target: str = "", value: str = "") 
             'scroll': Hace scroll vertical (ej. value='500' para bajar, value='-500' para subir).
             'clip': Guarda la pestaña activa como nota Markdown en Obsidian (~/Documentos/Obsidian Vault/Clippings/).
                     Devuelve el resumen del contenido y la ruta del archivo guardado.
+            'research': Investigación profunda y persistente sobre un tema. Navega, busca y recopila
+                        información de múltiples fuentes web de forma autónoma, sin rendirse, hasta un
+                        máximo de 30 pasos. Devuelve un informe completo con todo lo encontrado.
+                        Usa target para el tema o pregunta a investigar.
+                        Usa value para el número máximo de pasos (por defecto 30).
         target: URL o selector CSS según la acción.
         value: Texto a escribir o valor de scroll.
     """
@@ -864,6 +869,246 @@ async def control_local_browser(action: str, target: str = "", value: str = "") 
                     f"INICIO DEL CONTENIDO EXTRAÍDO (para resumen):\n{summary_preview}\n"
                 )
                 
+            elif action == "research":
+                import re as _re
+                from datetime import datetime
+                import trafilatura
+
+                if not target:
+                    return "Error: Especifica el tema o pregunta a investigar en el argumento 'target'."
+
+                max_steps = 30
+                if value:
+                    try:
+                        max_steps = min(int(value), 30)
+                    except ValueError:
+                        pass
+
+                query = target
+                logger.info(f"Iniciando investigación profunda ({max_steps} pasos máx): {query}")
+
+                # --- Estado de la investigación ---
+                visited_urls = set()
+                # Lista de (url, titulo, extracto) recopilados
+                gathered: list[dict] = []
+                # Cola de URLs pendientes por visitar
+                pending_urls: list[tuple[str, str]] = []  # (url, titulo)
+                step = 0
+                search_attempts = 0
+                # Variaciones de búsqueda para cuando el primer intento no es suficiente
+                search_variants = [
+                    query,
+                    query + " explicación detallada",
+                    query + " site:wikipedia.org",
+                    query + " tutorial guía",
+                    query + " cómo funciona",
+                ]
+
+                def _extract_url(url: str) -> str | None:
+                    """Extrae texto limpio de una URL usando trafilatura."""
+                    try:
+                        downloaded = trafilatura.fetch_url(url)
+                        if not downloaded:
+                            return None
+                        return trafilatura.extract(
+                            downloaded,
+                            include_comments=False,
+                            include_tables=True,
+                            favor_recall=True
+                        )
+                    except Exception:
+                        return None
+
+                # --- BUCLE PRINCIPAL DE INVESTIGACIÓN ---
+                while step < max_steps:
+                    step += 1
+                    logger.info(f"[Research] Paso {step}/{max_steps} | Fuentes: {len(gathered)} | Pendientes: {len(pending_urls)}")
+
+                    # FASE 1: Si no hay URLs pendientes, lanzar una nueva búsqueda
+                    if not pending_urls:
+                        if search_attempts >= len(search_variants):
+                            logger.info("[Research] Agotadas todas las variantes de búsqueda.")
+                            break
+
+                        current_query = search_variants[search_attempts]
+                        search_attempts += 1
+                        logger.info(f"[Research] Búsqueda #{search_attempts}: '{current_query}'")
+
+                        # Navegar a Google con la query (más fiable para extracción de links)
+                        encoded_q = current_query.replace(' ', '+')
+                        search_url = f"https://www.google.com/search?q={encoded_q}&hl=es"
+                        try:
+                            await page.goto(search_url, wait_until="domcontentloaded", timeout=15000)
+                            await asyncio.sleep(2.0)  # Dar tiempo a Google a renderizar
+                        except Exception as e:
+                            logger.warning(f"[Research] Error navegando a Google: {e}")
+                            # Fallback a DuckDuckGo si Google falla
+                            try:
+                                ddg_url = f"https://duckduckgo.com/?q={encoded_q}"
+                                await page.goto(ddg_url, wait_until="domcontentloaded", timeout=12000)
+                                await asyncio.sleep(2.0)
+                            except Exception as e2:
+                                logger.warning(f"[Research] Fallback DDG también falló: {e2}")
+                                continue
+
+                        # Extraer enlaces de resultados orgánicos de Google
+                        links = await page.evaluate("""
+                            () => {
+                                const results = [];
+                                const seen = new Set();
+                                // Selectores de resultados orgánicos de Google
+                                const selectors = [
+                                    '#search a[href^="https"]',
+                                    '#rso a[href^="https"]',
+                                    '.g a[href^="https"]',
+                                    'a[href^="https"]'
+                                ];
+                                const skipDomains = ['google.com', 'google.es', 'youtube.com',
+                                                    'accounts.google', 'support.google',
+                                                    'maps.google', 'translate.google',
+                                                    'webcache', 'policies.google'];
+                                for (const sel of selectors) {
+                                    document.querySelectorAll(sel).forEach(a => {
+                                        const href = a.href || '';
+                                        const text = (a.innerText || a.textContent || '').trim();
+                                        const skip = skipDomains.some(d => href.includes(d));
+                                        if (href && !skip && !seen.has(href) && text.length > 5) {
+                                            seen.add(href);
+                                            results.push({url: href, title: text.substring(0, 120)});
+                                        }
+                                    });
+                                    if (results.length >= 10) break;
+                                }
+                                return results.slice(0, 10);
+                            }
+                        """)
+
+                        logger.info(f"[Research] Links extraídos de búsqueda: {len(links)}")
+
+                        for link in links:
+                            url_item = link.get('url', '')
+                            title_item = link.get('title', url_item)
+                            if url_item and url_item not in visited_urls:
+                                pending_urls.append((url_item, title_item))
+
+                        logger.info(f"[Research] {len(pending_urls)} URLs encoladas.")
+                        continue
+
+                    # FASE 2: Visitar la siguiente URL pendiente
+                    next_url, next_title = pending_urls.pop(0)
+
+                    if next_url in visited_urls:
+                        continue
+                    visited_urls.add(next_url)
+
+                    logger.info(f"[Research] Visitando: {next_url}")
+
+                    # Navegar en el navegador visible (el usuario ve el progreso)
+                    try:
+                        await page.goto(next_url, wait_until="domcontentloaded", timeout=12000)
+                        await asyncio.sleep(1.0)
+                    except Exception as e:
+                        logger.warning(f"[Research] No se pudo navegar a {next_url}: {e}")
+                        continue
+
+                    # Extraer contenido limpio con trafilatura (más preciso que innerText)
+                    content = await asyncio.to_thread(_extract_url, next_url)
+
+                    # Fallback a innerText si trafilatura falla
+                    if not content:
+                        try:
+                            content = await page.evaluate("document.body.innerText")
+                        except Exception:
+                            content = None
+
+                    if content and len(content.strip()) > 200:
+                        # Guardar hasta 2500 chars por fuente para no saturar
+                        snippet = content.strip()[:2500]
+                        page_title = await page.title()
+                        gathered.append({
+                            "url": next_url,
+                            "titulo": page_title or next_title,
+                            "contenido": snippet,
+                            "paso": step
+                        })
+                        logger.info(f"[Research] Fuente #{len(gathered)} añadida: '{page_title}' ({len(snippet)} chars)")
+
+                        # Si ya tenemos 8+ fuentes ricas, podemos parar antes
+                        if len(gathered) >= 8:
+                            logger.info("[Research] Suficientes fuentes recopiladas. Finalizando bucle.")
+                            break
+
+                # --- COMPILAR EL INFORME FINAL ---
+                if not gathered:
+                    return f"Investigación completada en {step} pasos pero no se encontró contenido útil sobre: {query}"
+
+                now = datetime.now()
+                report_lines = [
+                    f"INFORME DE INVESTIGACIÓN PROFUNDA",
+                    f"Tema: {query}",
+                    f"Pasos ejecutados: {step}/{max_steps}",
+                    f"Fuentes recopiladas: {len(gathered)}",
+                    f"Fecha: {now.strftime('%Y-%m-%d %H:%M')}",
+                    "=" * 60,
+                    ""
+                ]
+
+                for i, src in enumerate(gathered, 1):
+                    report_lines.append(f"--- FUENTE {i}: {src['titulo']} ---")
+                    report_lines.append(f"URL: {src['url']}")
+                    report_lines.append(f"Paso de captura: {src['paso']}")
+                    report_lines.append("")
+                    report_lines.append(src['contenido'])
+                    report_lines.append("")
+
+                full_report = "\n".join(report_lines)
+
+                # Guardar también en Obsidian como nota de investigación
+                try:
+                    vault_dir = "/home/victor/Documentos/Obsidian Vault/Clippings"
+                    os.makedirs(vault_dir, exist_ok=True)
+                    date_str = now.strftime("%Y-%m-%d")
+                    slug = _re.sub(r'[^\w\s-]', '', query.lower())
+                    slug = _re.sub(r'[\s_-]+', '-', slug).strip('-')[:50]
+                    filename = f"{date_str} - investigacion - {slug}.md"
+                    filepath = os.path.join(vault_dir, filename)
+
+                    md_lines = [
+                        f"---",
+                        f"título: \"Investigación: {query}\"",
+                        f"tipo: investigacion",
+                        f"fecha_captura: {date_str} {now.strftime('%H:%M')}",
+                        f"fuentes: {len(gathered)}",
+                        f"pasos: {step}",
+                        f"etiquetas: [investigacion, por-revisar]",
+                        f"---",
+                        f"",
+                        f"# Investigación: {query}",
+                        f"",
+                        f"**Pasos ejecutados:** {step} | **Fuentes:** {len(gathered)} | **Fecha:** {now.strftime('%Y-%m-%d %H:%M')}",
+                        f"",
+                        f"---",
+                        f"",
+                    ]
+                    for i, src in enumerate(gathered, 1):
+                        md_lines.append(f"## Fuente {i}: {src['titulo']}")
+                        md_lines.append(f"> [{src['url']}]({src['url']})")
+                        md_lines.append(f"")
+                        md_lines.append(src['contenido'])
+                        md_lines.append(f"")
+                        md_lines.append(f"---")
+                        md_lines.append(f"")
+
+                    with open(filepath, 'w', encoding='utf-8') as f:
+                        f.write("\n".join(md_lines))
+                    logger.info(f"[Research] Informe guardado en Obsidian: {filename}")
+                    report_lines.append(f"\n[Informe también guardado en Obsidian: {filename}]")
+                    full_report = "\n".join(report_lines)
+                except Exception as e:
+                    logger.warning(f"[Research] No se pudo guardar en Obsidian: {e}")
+
+                return full_report
+
             else:
                 return f"Error: Acción '{action}' no es una acción soportada en control_local_browser."
     except Exception as e:
