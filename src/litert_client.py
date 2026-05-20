@@ -108,15 +108,32 @@ class LiteRTClient:
         history: Optional[List[ChatMessage]],
         image_path: Optional[str]
     ) -> str:
-        """Versión síncrona para ser ejecutada en un thread usando el API 2026."""
+        """Versión síncrona para ser ejecutada en un thread usando el API 2026.
+        
+        Protección de ventana de contexto:
+        - Cada mensaje del historial se trunca a MAX_HIST_MSG_CHARS.
+        - El prompt actual se trunca a MAX_PROMPT_CHARS.
+        - El system prompt se trunca a MAX_SYSTEM_CHARS.
+        Esto garantiza que nunca se supere el límite de 4096 tokens del modelo.
+        """
+        # --- Límites de truncamiento (caracteres aprox. = tokens * 3) ---
+        MAX_SYSTEM_CHARS  = 1200   # ~400 tokens para el system prompt
+        MAX_HIST_MSG_CHARS = 400   # ~133 tokens por mensaje de historial
+        MAX_PROMPT_CHARS  = 1500   # ~500 tokens para el prompt actual
+
+        def _trunc(text: str, limit: int) -> str:
+            if len(text) <= limit:
+                return text
+            return text[:limit] + " [...]"
+
         try:
-            # 1. Preparar historial
+            # 1. Preparar historial con truncamiento
             formatted_messages = []
             
             if system_prompt:
                 formatted_messages.append({
                     "role": "system",
-                    "content": [{"type": "text", "text": system_prompt}]
+                    "content": [{"type": "text", "text": _trunc(system_prompt, MAX_SYSTEM_CHARS)}]
                 })
             
             if history:
@@ -124,14 +141,14 @@ class LiteRTClient:
                     role = "model" if msg.role == "assistant" else msg.role
                     formatted_messages.append({
                         "role": role,
-                        "content": [{"type": "text", "text": msg.content}]
+                        "content": [{"type": "text", "text": _trunc(msg.content, MAX_HIST_MSG_CHARS)}]
                     })
 
             # 2. Crear conversación
             with self.engine.create_conversation(messages=formatted_messages, tools=tools) as conversation:
                 
-                # 3. Construir mensaje actual
-                content_parts = [{"type": "text", "text": prompt}]
+                # 3. Construir mensaje actual (con truncamiento del prompt)
+                content_parts = [{"type": "text", "text": _trunc(prompt, MAX_PROMPT_CHARS)}]
                 
                 if image_path:
                     # Según docs 2026, pasar la ruta ('path') es lo más estable

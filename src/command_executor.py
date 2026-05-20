@@ -856,17 +856,16 @@ async def control_local_browser(action: str, target: str = "", value: str = "") 
                 with open(filepath, 'w', encoding='utf-8') as f:
                     f.write(md_content)
                 
-                # 6. Devolver resumen compacto para que la IA lo lea y lo cuente al usuario
+                # 6. Devolver resumen MUY COMPACTO al modelo (el informe completo ya está en Obsidian)
                 word_count = len(clean_content.split())
-                summary_preview = clean_content[:600].strip()
+                # Solo los primeros 400 chars para no saturar el contexto del LLM
+                summary_preview = clean_content[:400].strip()
                 
                 return (
                     f"CLIP GUARDADO EN OBSIDIAN:\n"
                     f"- Archivo: {filename}\n"
-                    f"- Ruta: {filepath}\n"
                     f"- Palabras extraídas: {word_count}\n"
-                    f"- Truncado: {'Sí (>15000 chars)' if truncated else 'No'}\n\n"
-                    f"INICIO DEL CONTENIDO EXTRAÍDO (para resumen):\n{summary_preview}\n"
+                    f"EXTRACTO INICIAL (para tu resumen oral al usuario):\n{summary_preview}\n"
                 )
                 
             elif action == "research":
@@ -1102,12 +1101,29 @@ async def control_local_browser(action: str, target: str = "", value: str = "") 
                     with open(filepath, 'w', encoding='utf-8') as f:
                         f.write("\n".join(md_lines))
                     logger.info(f"[Research] Informe guardado en Obsidian: {filename}")
-                    report_lines.append(f"\n[Informe también guardado en Obsidian: {filename}]")
-                    full_report = "\n".join(report_lines)
+                    obsidian_note = filename
                 except Exception as e:
                     logger.warning(f"[Research] No se pudo guardar en Obsidian: {e}")
+                    obsidian_note = "(no guardado)"
 
-                return full_report
+                # Devolver RESUMEN COMPACTO al modelo (máx ~1200 chars)
+                # El informe completo ya está en Obsidian. El modelo solo necesita
+                # los titulares y un extracto de cada fuente para hablar con el usuario.
+                compact_lines = [
+                    f"INVESTIGACIÓN COMPLETADA: '{query}'",
+                    f"Pasos: {step} | Fuentes: {len(gathered)} | Nota Obsidian: {obsidian_note}",
+                    ""
+                ]
+                chars_budget = 900  # dejar margen para el resto del contexto
+                for i, src in enumerate(gathered, 1):
+                    entry = f"[{i}] {src['titulo']} ({src['url']})\n{src['contenido'][:120]}..."
+                    if sum(len(l) for l in compact_lines) + len(entry) > chars_budget:
+                        compact_lines.append(f"... y {len(gathered)-i+1} fuentes más en Obsidian.")
+                        break
+                    compact_lines.append(entry)
+                    compact_lines.append("")
+
+                return "\n".join(compact_lines)
 
             else:
                 return f"Error: Acción '{action}' no es una acción soportada en control_local_browser."
