@@ -659,6 +659,8 @@ async def control_local_browser(action: str, target: str = "", value: str = "") 
             'type': Escribe texto en un campo usando un selector CSS (ej. target='input#search', value='recetas de cocina').
             'read': Lee el título y el texto visible de la pestaña activa actual.
             'scroll': Hace scroll vertical (ej. value='500' para bajar, value='-500' para subir).
+            'clip': Guarda la pestaña activa como nota Markdown en Obsidian (~/Documentos/Obsidian Vault/Clippings/).
+                    Devuelve el resumen del contenido y la ruta del archivo guardado.
         target: URL o selector CSS según la acción.
         value: Texto a escribir o valor de scroll.
     """
@@ -770,6 +772,97 @@ async def control_local_browser(action: str, target: str = "", value: str = "") 
                 logger.info(f"Haciendo scroll vertical de {scroll_amount}px...")
                 await page.evaluate(f"window.scrollBy(0, {scroll_amount})")
                 return f"Éxito: Se desplazó la página verticalmente {scroll_amount} píxeles."
+                
+            elif action == "clip":
+                import re as _re
+                from datetime import datetime
+                
+                title = await page.title()
+                url = page.url
+                logger.info(f"Guardando clip de '{title}' en Obsidian...")
+                
+                # 1. Extraer texto limpio usando trafilatura (sin anuncios ni menús)
+                clean_content = None
+                try:
+                    import trafilatura
+                    def _fetch_clean():
+                        downloaded = trafilatura.fetch_url(url)
+                        if downloaded:
+                            return trafilatura.extract(
+                                downloaded,
+                                include_comments=False,
+                                include_tables=True,
+                                favor_recall=True
+                            )
+                        return None
+                    clean_content = await asyncio.to_thread(_fetch_clean)
+                except Exception as e:
+                    logger.warning(f"trafilatura falló ({e}), usando innerText como fallback.")
+                
+                # Fallback: texto visible de la página
+                if not clean_content:
+                    clean_content = await page.evaluate("document.body.innerText")
+                
+                if not clean_content:
+                    return "Error: No se pudo extraer contenido textual de la página actual."
+                
+                # 2. Construir el nombre del archivo (slug limpio del título)
+                now = datetime.now()
+                date_str = now.strftime("%Y-%m-%d")
+                time_str = now.strftime("%H:%M")
+                slug = _re.sub(r'[^\w\s-]', '', title.lower())
+                slug = _re.sub(r'[\s_-]+', '-', slug).strip('-')[:60]
+                filename = f"{date_str} - {slug}.md"
+                
+                vault_dir = "/home/victor/Documentos/Obsidian Vault/Clippings"
+                filepath = os.path.join(vault_dir, filename)
+                
+                # 3. Generar el frontmatter YAML con metadatos enriquecidos
+                frontmatter = (
+                    f"---\n"
+                    f"título: \"{title}\"\n"
+                    f"url: {url}\n"
+                    f"fecha_captura: {date_str} {time_str}\n"
+                    f"etiquetas: [clipping, por-revisar]\n"
+                    f"---\n\n"
+                )
+                
+                # 4. Construir el contenido final del archivo Markdown
+                # Truncar a 15.000 chars para no saturar el vault con artículos enormes
+                max_chars = 15000
+                body = clean_content
+                truncated = False
+                if len(body) > max_chars:
+                    body = body[:max_chars]
+                    truncated = True
+                
+                md_content = (
+                    frontmatter +
+                    f"# {title}\n\n"
+                    f"> **Fuente:** [{url}]({url})\n\n"
+                    f"---\n\n"
+                    f"{body}\n"
+                )
+                if truncated:
+                    md_content += "\n\n---\n*[Contenido truncado — artículo completo disponible en la URL fuente]*\n"
+                
+                # 5. Escribir el archivo en el Vault de Obsidian
+                os.makedirs(vault_dir, exist_ok=True)
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    f.write(md_content)
+                
+                # 6. Devolver resumen compacto para que la IA lo lea y lo cuente al usuario
+                word_count = len(clean_content.split())
+                summary_preview = clean_content[:600].strip()
+                
+                return (
+                    f"CLIP GUARDADO EN OBSIDIAN:\n"
+                    f"- Archivo: {filename}\n"
+                    f"- Ruta: {filepath}\n"
+                    f"- Palabras extraídas: {word_count}\n"
+                    f"- Truncado: {'Sí (>15000 chars)' if truncated else 'No'}\n\n"
+                    f"INICIO DEL CONTENIDO EXTRAÍDO (para resumen):\n{summary_preview}\n"
+                )
                 
             else:
                 return f"Error: Acción '{action}' no es una acción soportada en control_local_browser."
