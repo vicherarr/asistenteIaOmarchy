@@ -128,7 +128,7 @@ class VisionTool:
 
 # --- Funciones para LiteRT Tool Calling ---
 
-def analyze_screen(region: str = "full") -> str:
+async def analyze_screen(region: str = "full") -> str:
     """
     Toma una captura de pantalla para que el asistente pueda 'ver' lo que hay en ella.
     Usa esto si el usuario hace preguntas sobre su pantalla, una ventana abierta, 
@@ -139,20 +139,11 @@ def analyze_screen(region: str = "full") -> str:
     """
     vision = VisionTool()
     
-    async def _do_capture():
+    try:
         if region == "select":
             path = await vision.capture_region()
         else:
             path = await vision.capture_screen()
-        return path
-
-    try:
-        # Ejecutar captura asíncrona en el hilo de LiteRT
-        try:
-            loop = asyncio.get_running_loop()
-            path = loop.run_until_complete(_do_capture())
-        except RuntimeError:
-            path = asyncio.run(_do_capture())
             
         # Redimensionar (síncrono es aceptable aquí)
         resized_path = vision._resize_image(path)

@@ -154,7 +154,7 @@ def _sanitize_tool_args(arg: str) -> str:
     return sanitized.strip()
 
 
-def execute_system_command(command: str) -> str:
+async def execute_system_command(command: str) -> str:
     """
     Ejecuta un comando del sistema en Linux (CachyOS/Hyprland).
     Usa esto para abrir cualquier aplicación instalada.
@@ -201,12 +201,7 @@ def execute_system_command(command: str) -> str:
             return False, "Timeout: Spotify no apareció en el bus de medios."
         
         try:
-            try:
-                loop = asyncio.get_running_loop()
-                success, output = loop.run_until_complete(_spotify_flow())
-            except RuntimeError:
-                success, output = asyncio.run(_spotify_flow())
-            
+            success, output = await _spotify_flow()
             if success:
                 return "Éxito: Spotify abierto y reproducción iniciada."
             else:
@@ -215,12 +210,7 @@ def execute_system_command(command: str) -> str:
             return f"Error en flujo de Spotify: {e}"
     
     try:
-        try:
-            loop = asyncio.get_running_loop()
-            success, output = loop.run_until_complete(executor.execute(command))
-        except RuntimeError:
-            success, output = asyncio.run(executor.execute(command))
-        
+        success, output = await executor.execute(command)
         if success:
             return f"Éxito: {output if output else 'Comando ejecutado correctamente'}"
         else:
@@ -230,7 +220,7 @@ def execute_system_command(command: str) -> str:
         return f"Excepción ejecutando comando: {e}"
 
 
-def clipboard_manager(action: str, content: str = "") -> str:
+async def clipboard_manager(action: str, content: str = "") -> str:
     """
     Lee o escribe contenido en el portapapeles del sistema (Wayland).
     
@@ -245,50 +235,60 @@ def clipboard_manager(action: str, content: str = "") -> str:
         if action == "copy":
             if not content:
                 return "Error: No hay contenido para copiar."
-            process = subprocess.Popen(['wl-copy'], stdin=subprocess.PIPE)
-            process.communicate(input=content.encode())
+            process = await asyncio.create_subprocess_exec(
+                'wl-copy',
+                stdin=subprocess.PIPE
+            )
+            await process.communicate(input=content.encode())
             return f"Éxito: Texto copiado al portapapeles ({len(content)} caracteres)."
         
         elif action == "paste":
-            result = subprocess.run(['wl-paste', '--no-newline'], capture_output=True, text=True, timeout=5)
-            if result.returncode == 0:
-                text = result.stdout.strip()
+            process = await asyncio.create_subprocess_exec(
+                'wl-paste', '--no-newline',
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            if process.returncode == 0:
+                text = stdout.decode().strip()
                 return f"Contenido del portapapeles:\n{text}" if text else "El portapapeles está vacío."
             else:
-                return f"Error leyendo portapapeles: {result.stderr}"
+                return f"Error leyendo portapapeles: {stderr.decode()}"
         else:
             return f"Acción desconocida: {action}."
     except Exception as e:
         return f"Error en clipboard_manager: {e}"
 
 
-def web_search(query: str) -> str:
+async def web_search(query: str) -> str:
     """
     Busca información en internet (DuckDuckGo).
     Usa esto para responder preguntas sobre temas actuales, noticias o documentación técnica.
     """
     query = _sanitize_tool_args(query)
     try:
-        from duckduckgo_search import DDGS
-        with DDGS() as ddgs:
-            # Usamos el método moderno text() de DDGS
-            search_results = list(ddgs.text(query, max_results=5))
-            if not search_results: 
-                return f"No hay resultados para: {query}"
-            
-            summary = f"Resultados para '{query}' (Para abrir un sitio, usa: execute_system_command con 'chromium <URL>'):\n\n"
-            for i, r in enumerate(search_results, 1):
-                url = r.get('href') or r.get('link')
-                summary += f"[{i}] TÍTULO: {r.get('title')}\n"
-                summary += f"    URL: {url}\n"
-                summary += f"    RESUMEN: {r.get('body')}\n\n"
-            return summary
+        def _search():
+            from duckduckgo_search import DDGS
+            with DDGS() as ddgs:
+                return list(ddgs.text(query, max_results=5))
+        
+        search_results = await asyncio.to_thread(_search)
+        if not search_results: 
+            return f"No hay resultados para: {query}"
+        
+        summary = f"Resultados para '{query}' (Para abrir un sitio, usa: execute_system_command con 'chromium <URL>'):\n\n"
+        for i, r in enumerate(search_results, 1):
+            url = r.get('href') or r.get('link')
+            summary += f"[{i}] TÍTULO: {r.get('title')}\n"
+            summary += f"    URL: {url}\n"
+            summary += f"    RESUMEN: {r.get('body')}\n\n"
+        return summary
     except Exception as e:
         logger.error(f"Error en web_search: {e}")
         return f"Error en búsqueda web: {e}"
 
 
-def play_specific_music(query: str) -> str:
+async def play_specific_music(query: str) -> str:
     """
     Busca y reproduce un artista, canción o álbum específico en Spotify.
     Usa esto cuando el usuario pida algo concreto (ej: "pon música de Estopa").
@@ -301,7 +301,7 @@ def play_specific_music(query: str) -> str:
     search_query = f"Spotify artist track album {query}"
     
     logger.info(f"Buscando música específica: {query}")
-    results_text = web_search(search_query)
+    results_text = await web_search(search_query)
     
     # Extraer enlaces de Spotify
     import re
@@ -371,12 +371,7 @@ def play_specific_music(query: str) -> str:
         return False, "No se pudo iniciar la reproducción tras abrir el URI."
 
     try:
-        try:
-            loop = asyncio.get_running_loop()
-            success, msg = loop.run_until_complete(_spotify_aggressive_flow(target_uri))
-        except RuntimeError:
-            success, msg = asyncio.run(_spotify_aggressive_flow(target_uri))
-        
+        success, msg = await _spotify_aggressive_flow(target_uri)
         if success:
             return f"Reproduciendo '{query}' en Spotify."
         else:
@@ -385,7 +380,7 @@ def play_specific_music(query: str) -> str:
         return f"Error en el flujo de música: {e}"
 
 
-def manage_windows(action: str, target: str = "") -> str:
+async def manage_windows(action: str, target: str = "") -> str:
     """
     Gestiona ventanas y escritorios de Hyprland.
     
@@ -419,17 +414,13 @@ def manage_windows(action: str, target: str = "") -> str:
 
     executor = CommandExecutor()
     try:
-        try:
-            loop = asyncio.get_running_loop()
-            success, output = loop.run_until_complete(executor.execute(cmd))
-        except RuntimeError:
-            success, output = asyncio.run(executor.execute(cmd))
+        success, output = await executor.execute(cmd)
         return f"Éxito: {action} {target} ejecutado." if success else f"Error: {output}"
     except Exception as e:
         return f"Error: {e}"
 
 
-def system_diagnostics(component: str = "all") -> str:
+async def system_diagnostics(component: str = "all") -> str:
     """
     Busca errores recientes en audio, bluetooth o kernel.
     """
@@ -442,33 +433,37 @@ def system_diagnostics(component: str = "all") -> str:
         return o
 
     try:
-        loop = asyncio.get_event_loop()
         if component in ("all", "audio"):
-            res += "### Audio:\n" + loop.run_until_complete(_q("journalctl --user -u pipewire -n 5 --no-pager")) + "\n"
+            res += "### Audio:\n" + await _q("journalctl --user -u pipewire -n 5 --no-pager") + "\n"
         if component in ("all", "bluetooth"):
-            res += "### BT:\n" + loop.run_until_complete(_q("journalctl -u bluetooth -n 5 --no-pager")) + "\n"
+            res += "### BT:\n" + await _q("journalctl -u bluetooth -n 5 --no-pager") + "\n"
         return res
     except Exception as e:
         return f"Error: {e}"
 
 
-def get_system_status() -> str:
+async def get_system_status() -> str:
     """Resumen de hardware: CPU, RAM, Audio."""
     from src.context_injector import get_system_context
     return f"Contexto:\n{get_system_context()}"
 
 
-def read_log_file(service: str = "asistenteia") -> str:
+async def read_log_file(service: str = "asistenteia") -> str:
     """Lee logs de systemd."""
     try:
         cmd = f"journalctl --user -u {service} -n 10 --no-pager"
-        result = subprocess.run(shlex.split(cmd), capture_output=True, text=True, timeout=5)
-        return f"Logs de {service}:\n{result.stdout}" if result.returncode == 0 else f"Error: {result.stderr}"
+        process = await asyncio.create_subprocess_shell(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
+        return f"Logs de {service}:\n{stdout.decode()}" if process.returncode == 0 else f"Error: {stderr.decode()}"
     except Exception as e:
         return f"Error: {e}"
 
 
-def read_web_page(url: str) -> str:
+async def read_web_page(url: str) -> str:
     """
     Descarga y extrae el texto principal de una página web (limpio de anuncios y menús).
     Úsala después de web_search para leer el contenido profundo de un artículo o documentación.
@@ -481,18 +476,17 @@ def read_web_page(url: str) -> str:
         return "Error: La URL debe empezar con http:// o https://"
         
     try:
-        import trafilatura
-        
-        logger.info(f"Leyendo contenido de: {url}")
-        downloaded = trafilatura.fetch_url(url)
-        
-        if downloaded is None:
-            return f"Error: No se pudo descargar el contenido de {url}. Puede que el sitio bloquee bots o requiera JavaScript."
+        def _fetch():
+            import trafilatura
+            logger.info(f"Leyendo contenido de: {url}")
+            downloaded = trafilatura.fetch_url(url)
+            if downloaded is None: return None
+            return trafilatura.extract(downloaded, include_comments=False, include_tables=True)
             
-        result = trafilatura.extract(downloaded, include_comments=False, include_tables=True)
+        result = await asyncio.to_thread(_fetch)
         
         if result is None:
-            return "Error: No se pudo extraer texto limpio de esta página. Intenta abrirla manualmente."
+            return f"Error: No se pudo extraer texto limpio de esta página. Intenta abrirla manualmente."
             
         # Truncamiento de seguridad a ~3500 caracteres
         max_chars = 3500
@@ -543,7 +537,7 @@ async def _playwright_task(action: str, target: str, value: str = "") -> str:
             await browser.close()
 
 
-def interact_web(action: str, target: str, value: str = "") -> str:
+async def interact_web(action: str, target: str, value: str = "") -> str:
     """
     Interactúa con sitios web dinámicos (JavaScript, SPAs, Clics). 
     Úsala si 'read_web_page' falla o el sitio requiere interacción.
@@ -558,11 +552,7 @@ def interact_web(action: str, target: str, value: str = "") -> str:
     value = _sanitize_tool_args(value)
     
     try:
-        try:
-            loop = asyncio.get_running_loop()
-            return loop.run_until_complete(_playwright_task(action, target, value))
-        except RuntimeError:
-            return asyncio.run(_playwright_task(action, target, value))
+        return await _playwright_task(action, target, value)
     except Exception as e:
         logger.error(f"Error en interact_web: {e}")
         return f"Error crítico en automatización web: {e}"

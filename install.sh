@@ -11,10 +11,10 @@ set -euo pipefail
 echo "=== AsistenteIA - Instalación en CachyOS ==="
 
 # -----------------------------------------------------------------------------
-# 1. Actualizar sistema
+# 1. Actualizar sistema (opcional, omitido por defecto para evitar roturas)
 # -----------------------------------------------------------------------------
-echo "[1/8] Actualizando sistema..."
-sudo pacman -Syu --noconfirm
+echo "[1/8] Saltando actualización completa del sistema para mayor velocidad..."
+# sudo pacman -Syu --noconfirm
 
 # -----------------------------------------------------------------------------
 # 2. Instalar dependencias base de sistema
@@ -57,17 +57,21 @@ systemctl --user enable --now ollama.service 2>/dev/null || true
 
 # Descargar modelo Ministral 3:3b
 echo "Descargando modelo ministral-3:3b..."
-ollama pull ministral-3:3b
+ollama pull ministral-3:3b || true
 
 # -----------------------------------------------------------------------------
 # 4. Instalar whisper.cpp para transcripción
 # -----------------------------------------------------------------------------
 echo "[4/8] Instalando whisper.cpp..."
 if ! command -v whisper-cli &>/dev/null; then
-    if command -v yay &>/dev/null; then
+    echo "Intentando instalar whisper.cpp vía pacman..."
+    if sudo pacman -S --needed --noconfirm whisper.cpp &>/dev/null; then
+        echo "whisper.cpp instalado correctamente desde los repositorios oficiales."
+    elif command -v yay &>/dev/null; then
+        echo "Instalando whisper.cpp vía AUR (yay)..."
         yay -S --noconfirm whisper.cpp
     else
-        echo "Instalar whisper.cpp manualmente: yay -S whisper.cpp"
+        echo "Instalar whisper.cpp manualmente: yay -S whisper.cpp o sudo pacman -S whisper.cpp"
     fi
 else
     echo "whisper.cpp ya instalado."
@@ -77,6 +81,7 @@ fi
 WHISPER_MODEL="$HOME/.cache/whisper/ggml-base.bin"
 if [ ! -f "$WHISPER_MODEL" ]; then
     echo "Descargando modelo whisper base..."
+    mkdir -p "$HOME/.cache/whisper"
     curl -L -o "$WHISPER_MODEL" \
         "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin"
 fi
@@ -95,12 +100,27 @@ PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$PROJECT_DIR"
 
 if [ ! -d "venv" ]; then
-    python -m venv venv
+    # Usar Python 3.11 para compatibilidad con blis/spacy/thinc
+    # Python 3.14 no es compatible (C API changes rompen la compilación)
+    if command -v python3.11 &>/dev/null; then
+        echo "Usando Python 3.11 para máxima compatibilidad..."
+        python3.11 -m venv venv
+    elif command -v python3.12 &>/dev/null; then
+        echo "Usando Python 3.12..."
+        python3.12 -m venv venv
+    else
+        echo "AVISO: Usando python por defecto. Si falla, instala python3.11 o python3.12."
+        python -m venv venv
+    fi
 fi
 
 source venv/bin/activate
-pip install --upgrade pip
+pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
+
+# Instalar navegadores para Playwright (Dynamic Web Tool)
+echo "Instalando navegadores de Playwright..."
+playwright install chromium
 
 echo ""
 echo "Nota: Kokoro descargará su modelo (~100MB) la primera vez que se ejecute."

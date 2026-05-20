@@ -43,8 +43,7 @@ if [ "$LAUNCH_GUI" = true ]; then
     "$PROJECT_DIR/scripts/start-gui.sh"
 fi
 
-# 3. Dar una pequeña tregua
- para que la GUI registre el cambio de estado
+# 3. Dar una pequeña tregua para que la GUI registre el cambio de estado
 sleep 0.2
 
 # 4. Enviar señal de toggle al servidor para empezar a grabar

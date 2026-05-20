@@ -64,13 +64,38 @@ class LiteRTClient:
         if not self.engine:
             return "Error: Motor LiteRT no inicializado."
 
+        # Wrapper para ejecutar herramientas asíncronas de forma síncrona dentro de LiteRT
+        sync_tools = []
+        if tools:
+            import inspect
+            import functools
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = asyncio.get_event_loop()
+
+            for tool in tools:
+                if inspect.iscoroutinefunction(tool):
+                    def make_wrapper(async_func):
+                        @functools.wraps(async_func)
+                        def wrapper(*args, **kwargs):
+                            future = asyncio.run_coroutine_threadsafe(async_func(*args, **kwargs), loop)
+                            return future.result()
+                        # Preservar la firma original para que el SDK la parse
+                        wrapper.__signature__ = inspect.signature(async_func)
+                        return wrapper
+                    sync_tools.append(make_wrapper(tool))
+                else:
+                    sync_tools.append(tool)
+
         # Asegurar que solo una sesión de inferencia corre a la vez
         async with self._lock:
             # Ejecutamos la inferencia en un hilo separado para no bloquear el event loop
             return await asyncio.to_thread(
                 self._chat_sync, 
                 prompt, 
-                tools, 
+                sync_tools, 
                 system_prompt, 
                 history,
                 image_path

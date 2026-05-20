@@ -9,9 +9,9 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_DIR"
 
 if [ -f ".env" ]; then
-    MODEL_PATH=$(grep '^LITERT_MODEL_PATH=' .env | cut -d '=' -f2 | tr -d '[:space:]' || echo "models/gemma-4-e2b.litertlm")
+    MODEL_PATH=$(grep '^LITERT_MODEL_PATH=' .env | cut -d '=' -f2 | tr -d '[:space:]' || echo "models/gemma-4-e4b.litertlm")
 else
-    MODEL_PATH="models/gemma-4-e2b.litertlm"
+    MODEL_PATH="models/gemma-4-e4b.litertlm"
 fi
 
 echo "=== AsistenteIA: Modo LiteRT ==="

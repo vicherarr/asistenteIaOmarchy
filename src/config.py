@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     OLLAMA_NUM_CTX: int = 4096
 
     # LiteRT
-    LITERT_MODEL_PATH: str = "models/gemma-4-e2b.litertlm"
+    LITERT_MODEL_PATH: str = "models/gemma-4-e4b.litertlm"
 
     # Assistant
     MAX_HISTORY: int = 10
