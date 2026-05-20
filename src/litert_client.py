@@ -69,7 +69,6 @@ class LiteRTClient:
         if tools:
             import inspect
             import functools
-            import asyncio
             try:
                 loop = asyncio.get_running_loop()
             except RuntimeError:
