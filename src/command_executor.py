@@ -558,6 +558,52 @@ async def interact_web(action: str, target: str, value: str = "") -> str:
         return f"Error crítico en automatización web: {e}"
 
 
+async def open_terminal_and_run_command(command: str) -> str:
+    """
+    Abre una terminal gráfica visible (como Alacritty, Kitty o Foot) y ejecuta un comando específico en ella.
+    Mantiene la ventana de la terminal abierta después de ejecutar el comando para que el usuario pueda
+    ver la salida, interactuar con ella o escribir su contraseña de administrador (sudo) si es necesario.
+    
+    Usa esta herramienta cuando el usuario pida "abre una terminal y ejecuta..." o cuando
+    un comando requiera interacción directa del usuario o privilegios de administrador (como sudo).
+    
+    Args:
+        command: El comando exacto de Linux que se ejecutará dentro de la terminal.
+    """
+    import shutil
+    import subprocess
+    
+    command = _sanitize_tool_args(command)
+    
+    # Lista de emuladores de terminal soportados en orden de preferencia
+    terminals = ["alacritty", "kitty", "foot"]
+    chosen_terminal = None
+    for term in terminals:
+        if shutil.which(term):
+            chosen_terminal = term
+            break
+            
+    if not chosen_terminal:
+        return "Error: No se encontró ningún emulador de terminal compatible (Alacritty, Kitty, Foot) instalado."
+        
+    try:
+        # Usamos bash -c para ejecutar el comando y luego iniciar un shell interactivo bash para mantener la ventana abierta
+        shell_cmd = f"{command}; exec bash"
+        args = [chosen_terminal, "-e", "bash", "-c", shell_cmd]
+        
+        logger.info(f"Abriendo terminal {chosen_terminal} con comando: {command}")
+        subprocess.Popen(
+            args,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True
+        )
+        return f"Éxito: Se ha abierto una ventana de {chosen_terminal.capitalize()} ejecutando el comando: {command}"
+    except Exception as e:
+        logger.error(f"Error abriendo terminal {chosen_terminal}: {e}")
+        return f"Error al abrir la terminal: {e}"
+
+
 def parse_gemma_response(raw_text: str) -> ParsedResponse:
     """Parsea JSON y limpia etiquetas thought."""
     clean_text = re.sub(r"<thought>[\s\S]*?</thought>", "", raw_text).strip()
