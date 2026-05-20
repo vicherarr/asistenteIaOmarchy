@@ -157,67 +157,15 @@ def _sanitize_tool_args(arg: str) -> str:
 async def execute_system_command(command: str) -> str:
     """
     Ejecuta un comando del sistema en Linux (CachyOS/Hyprland).
-    Usa esto para abrir cualquier aplicación instalada.
-    
-    COMANDOS COMUNES CONFIRMADOS:
-    - Entorno: 'hyprctl', 'omarchy'
-    - Desarrollo: 'android-studio', 'code', 'alacritty'
-    - Web: 'chromium', 'google-chrome-stable'
-    - Media/Audio: 'spotify', 'wpctl', 'playerctl'
-    - Utilidades: 'nmcli', 'bluetoothctl', 'notify-send'
-    
-    Si el usuario dice 'abre <programa>', usa simplemente el nombre del binario.
-    No inventes prefijos.
+    Usa esto para abrir cualquier aplicación instalada o para ejecutar cualquier comando de consola.
+    Se ejecutará dentro de la terminal persistente visible para el usuario.
     
     Args:
         command: El binario o comando exacto a ejecutar.
     """
     command = _sanitize_tool_args(command)
-    executor = CommandExecutor()
-
-    # Lógica especial para Spotify: si se pide solo 'spotify', abrir y reproducir.
-    if command.strip().lower() == "spotify":
-        async def _spotify_flow():
-            # 1. Comprobar si ya está abierto (pgrep devuelve 0 si existe, 1 si no)
-            success, _ = await executor.execute("pgrep -x spotify")
-            if not success:
-                logger.info("Spotify no detectado. Lanzando proceso independiente...")
-                # Usamos spawn con start_new_session=True para que la app gráfica persista
-                await executor.spawn("spotify")
-            else:
-                logger.info("Spotify ya está en ejecución.")
-
-            # 2. Esperar activamente a que aparezca en playerctl (máximo 15s)
-            for i in range(15):
-                # Importante: playerctl -l devuelve 0 si hay reproductores, pero necesitamos filtrar el texto
-                _, players = await executor.execute("playerctl -l")
-                if "spotify" in players.lower():
-                    logger.info(f"Spotify detectado en el bus de medios (intento {i}). Enviando PLAY vía D-Bus.")
-                    await asyncio.sleep(2) # Margen para que cargue el DBus
-                    dbus_cmd = "dbus-send --print-reply --dest=org.mpris.MediaPlayer2.spotify /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player.Play"
-                    return await executor.execute(dbus_cmd)
-                await asyncio.sleep(1)
-            
-            return False, "Timeout: Spotify no apareció en el bus de medios."
-        
-        try:
-            success, output = await _spotify_flow()
-            if success:
-                return "Éxito: Spotify abierto y reproducción iniciada."
-            else:
-                return f"Spotify se abrió pero falló el play: {output}"
-        except Exception as e:
-            return f"Error en flujo de Spotify: {e}"
-    
-    try:
-        success, output = await executor.execute(command)
-        if success:
-            return f"Éxito: {output if output else 'Comando ejecutado correctamente'}"
-        else:
-            return f"Error: {output}"
-    except Exception as e:
-        logger.error(f"Error en tool execute_system_command: {e}")
-        return f"Excepción ejecutando comando: {e}"
+    logger.info(f"Redirigiendo execute_system_command a terminal visible: {command}")
+    return await open_terminal_and_run_command(command)
 
 
 async def clipboard_manager(action: str, content: str = "") -> str:
@@ -561,20 +509,61 @@ async def interact_web(action: str, target: str, value: str = "") -> str:
 async def open_terminal_and_run_command(command: str) -> str:
     """
     Abre una terminal gráfica visible (como Alacritty, Kitty o Foot) y ejecuta un comando específico en ella.
-    Mantiene la ventana de la terminal abierta después de ejecutar el comando para que el usuario pueda
-    ver la salida, interactuar con ella o escribir su contraseña de administrador (sudo) si es necesario.
-    
-    Usa esta herramienta cuando el usuario pida "abre una terminal y ejecuta..." o cuando
-    un comando requiera interacción directa del usuario o privilegios de administrador (como sudo).
+    Si ya hay una terminal de AsistenteIA abierta, enviará y ejecutará el comando en la misma ventana.
+    Mantiene la ventana de la terminal abierta para que el usuario pueda ver el resultado,
+    interactuar con ella o escribir su contraseña de administrador (sudo) si es necesario.
     
     Args:
         command: El comando exacto de Linux que se ejecutará dentro de la terminal.
     """
     import shutil
     import subprocess
+    import asyncio
     
     command = _sanitize_tool_args(command)
+    session_name = "asistenteia"
     
+    # 1. Comprobar si la sesión de tmux existe y si está activa en pantalla (attached)
+    session_exists = False
+    session_attached = False
+    
+    try:
+        check_session = subprocess.run(
+            ["tmux", "has-session", "-t", session_name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        if check_session.returncode == 0:
+            session_exists = True
+            
+            # Ver si hay clientes conectados/adjuntos a esa sesión
+            check_attached = subprocess.run(
+                ["tmux", "list-sessions", "-F", "#{session_name} #{session_attached}"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            for line in check_attached.stdout.splitlines():
+                parts = line.split()
+                if len(parts) >= 2 and parts[0] == session_name:
+                    if parts[1] != "0":
+                        session_attached = True
+                    break
+    except Exception as e:
+        logger.error(f"Error comprobando estado de tmux: {e}")
+
+    # 2. Si la terminal ya está abierta y acoplada a la sesión, enviamos el comando directamente
+    if session_attached:
+        try:
+            logger.info(f"Enviando comando a sesión de tmux existente: {command}")
+            # Mandamos el comando y un ENTER (C-m)
+            subprocess.run(["tmux", "send-keys", "-t", session_name, command, "C-m"], check=True)
+            return f"Éxito: Se ha enviado el comando a la terminal abierta: {command}"
+        except Exception as e:
+            logger.error(f"Error enviando comando a tmux: {e}")
+            return f"Error al enviar comando a la terminal activa: {e}"
+
+    # 3. Si no está abierta o acoplada, abrimos la ventana de la terminal
     # Lista de emuladores de terminal soportados en orden de preferencia
     terminals = ["alacritty", "kitty", "foot"]
     chosen_terminal = None
@@ -587,21 +576,73 @@ async def open_terminal_and_run_command(command: str) -> str:
         return "Error: No se encontró ningún emulador de terminal compatible (Alacritty, Kitty, Foot) instalado."
         
     try:
-        # Usamos bash -c para ejecutar el comando y luego iniciar un shell interactivo bash para mantener la ventana abierta
-        shell_cmd = f"{command}; exec bash"
-        args = [chosen_terminal, "-e", "bash", "-c", shell_cmd]
-        
-        logger.info(f"Abriendo terminal {chosen_terminal} con comando: {command}")
+        # tmux new-session -A -s <name> se acopla a la sesión si existe, o la crea si no.
+        tmux_cmd = f"tmux new-session -A -s {session_name}"
+        args = [chosen_terminal, "-e", "bash", "-c", tmux_cmd]
+            
+        logger.info(f"Abriendo terminal {chosen_terminal} con sesión tmux '{session_name}'")
         subprocess.Popen(
             args,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True
         )
-        return f"Éxito: Se ha abierto una ventana de {chosen_terminal.capitalize()} ejecutando el comando: {command}"
+        
+        # Esperar un momento a que la terminal y tmux se inicien/adjunten gráficamente antes de mandar las teclas
+        await asyncio.sleep(0.8)
+        
+        # Enviar el comando
+        subprocess.run(["tmux", "send-keys", "-t", session_name, command, "C-m"], check=True)
+        
+        return f"Éxito: Se ha abierto una ventana de {chosen_terminal.capitalize()} y ejecutado: {command}"
     except Exception as e:
-        logger.error(f"Error abriendo terminal {chosen_terminal}: {e}")
-        return f"Error al abrir la terminal: {e}"
+        logger.error(f"Error abriendo terminal/tmux: {e}")
+        return f"Error al abrir la terminal e iniciar la sesión persistente: {e}"
+
+
+async def read_terminal_screen() -> str:
+    """
+    Lee el contenido textual visible en la pantalla de la terminal persistente (sesión tmux 'asistenteia').
+    Usa esto para verificar el resultado de un comando que acabas de ejecutar, comprobar si
+    se produjo un error, o ver si la consola está esperando interacción (ej: pidiendo contraseña de sudo).
+    """
+    import subprocess
+    import asyncio
+    
+    # Pequeño retardo para dar tiempo a la terminal a renderizar los cambios del comando recién enviado
+    await asyncio.sleep(0.8)
+    
+    session_name = "asistenteia"
+    try:
+        # Verificar si la sesión existe
+        check_session = subprocess.run(
+            ["tmux", "has-session", "-t", session_name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        if check_session.returncode != 0:
+            return "La terminal persistente no está iniciada (no hay sesión activa de tmux)."
+            
+        # Capturar el panel activo de la sesión de tmux
+        capture = subprocess.run(
+            ["tmux", "capture-pane", "-p", "-t", session_name],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        if capture.returncode == 0:
+            output = capture.stdout.strip()
+            if not output:
+                return "La pantalla de la terminal está vacía."
+            # Devolver las últimas 40 líneas para que el contexto no se sature pero tenga suficiente detalle
+            lines = output.splitlines()
+            last_lines = lines[-40:]
+            return "CONTENIDO VISIBLE EN LA TERMINAL:\n\n" + "\n".join(last_lines)
+        else:
+            return f"Error al capturar la pantalla de la terminal: {capture.stderr.strip()}"
+    except Exception as e:
+        logger.error(f"Error en read_terminal_screen: {e}")
+        return f"Excepción leyendo pantalla de la terminal: {e}"
 
 
 def parse_gemma_response(raw_text: str) -> ParsedResponse:

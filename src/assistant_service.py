@@ -18,7 +18,8 @@ from src.command_executor import (
     read_web_page,
     interact_web,
     play_specific_music,
-    open_terminal_and_run_command
+    open_terminal_and_run_command,
+    read_terminal_screen
 )
 from src.vision_tool import analyze_screen
 from src.litert_client import LiteRTClient
@@ -57,7 +58,8 @@ class AssistantService:
             read_web_page,
             interact_web,
             play_specific_music,
-            open_terminal_and_run_command
+            open_terminal_and_run_command,
+            read_terminal_screen
         ]
 
     async def process_audio(
