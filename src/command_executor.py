@@ -48,6 +48,9 @@ class CommandExecutor:
         "alacritty",
         "code",
         "android-studio",
+        "thunar",
+        "nautilus",
+        "xdg-open",
         "studio.sh",
         "notify-send",
         "grim",
@@ -368,6 +371,39 @@ async def manage_windows(action: str, target: str = "") -> str:
         return f"Error: {e}"
 
 
+async def open_file_manager(folder: str = "") -> str:
+    """
+    Abre el explorador de archivos (Thunar por defecto, con fallback a Nautilus).
+    
+    Args:
+        folder: Ruta de la carpeta a abrir (opcional). Si no se especifica, abre el home del usuario.
+    """
+    import os
+    import shutil
+    folder = _sanitize_tool_args(folder)
+    executor = CommandExecutor()
+    
+    if folder and not os.path.isdir(folder):
+        return f"Error: La carpeta '{folder}' no existe."
+    
+    file_manager_bin = None
+    for fm in ["thunar", "nautilus", "xdg-open"]:
+        if shutil.which(fm):
+            file_manager_bin = fm
+            break
+    
+    if not file_manager_bin:
+        return "Error: No se encontró ningún explorador de archivos (Thunar, Nautilus o xdg-open)."
+    
+    cmd = f"{file_manager_bin} {folder}" if folder else file_manager_bin
+    
+    try:
+        success = await executor.spawn(cmd)
+        return f"Éxito: Se ha abierto el explorador de archivos ({file_manager_bin}) en {folder or 'tu carpeta personal'}." if success else "Error al abrir el explorador de archivos."
+    except Exception as e:
+        return f"Error: {e}"
+
+
 async def system_diagnostics(component: str = "all") -> str:
     """
     Busca errores recientes en audio, bluetooth o kernel.
@@ -666,6 +702,11 @@ async def control_local_browser(action: str, target: str = "", value: str = "") 
                         máximo de 30 pasos. Devuelve un informe completo con todo lo encontrado.
                         Usa target para el tema o pregunta a investigar.
                         Usa value para el número máximo de pasos (por defecto 30).
+            'translate': Traduce una página web completa al español y la muestra en un panel overlay
+                        dentro del navegador. Navega a la URL, extrae el texto, lo traduce con Google
+                        Translate, e inyecta un panel visual elegante en el lado derecho de la página.
+                        Usa target para la URL de la página a traducir.
+                        Usa value para el idioma destino (por defecto 'es' para español).
         target: URL o selector CSS según la acción.
         value: Texto a escribir o valor de scroll.
     """
@@ -1124,6 +1165,173 @@ async def control_local_browser(action: str, target: str = "", value: str = "") 
                     compact_lines.append("")
 
                 return "\n".join(compact_lines)
+
+            elif action == "translate":
+                if not target:
+                    return "Error: Especifica la URL de la página a traducir en el argumento 'target'."
+
+                url = target if target.startswith("http") else "https://" + target
+                lang = value if value else "es"
+                logger.info(f"Traduciendo página a '{lang}': {url}")
+
+                # 1. Navegar a la página
+                try:
+                    await page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                    await asyncio.sleep(1.5)
+                except Exception as e:
+                    return f"Error navegando a {url}: {e}"
+
+                page_title = await page.title()
+                logger.info(f"Página cargada: {page_title}")
+
+                # 2. Extraer texto estructurado de la página
+                _JS_EXTRACT = """() => {
+                    const skipTags = new Set(['SCRIPT','STYLE','NOSCRIPT','NAV','FOOTER','HEADER','ASIDE','IFRAME']);
+                    const sel = 'h1,h2,h3,h4,h5,h6,p,li,td,th,figcaption,blockquote,dd,dt,article,section';
+                    const blocks = [];
+                    document.querySelectorAll(sel).forEach(el => {
+                        if (skipTags.has(el.tagName)) return;
+                        const t = el.innerText.trim();
+                        if (t.length > 2) {
+                            const tag = el.tagName.toLowerCase();
+                            if (tag.length === 2 && tag.charAt(0) === 'h' && '123456'.indexOf(tag.charAt(1)) !== -1) {
+                                blocks.push('\\n## ' + t + '\\n');
+                            } else if (tag === 'li') {
+                                blocks.push('- ' + t);
+                            } else {
+                                blocks.push(t);
+                            }
+                        }
+                    });
+                    return blocks.join('\\n\\n');
+                }"""
+                raw_text = await page.evaluate(_JS_EXTRACT)
+
+                if not raw_text or len(raw_text.strip()) < 10:
+                    raw_text = await page.evaluate("document.body.innerText")
+                    if not raw_text or len(raw_text.strip()) < 10:
+                        return f"No se pudo extraer texto traducible de {url}."
+
+                MAX_CHARS = 12000
+                truncated = False
+                if len(raw_text) > MAX_CHARS:
+                    raw_text = raw_text[:MAX_CHARS]
+                    truncated = True
+                    logger.info(f"Texto truncado a {MAX_CHARS} caracteres para traducción")
+
+                # 3. Traducir con Google Translate (deep-translator)
+                try:
+                    from deep_translator import GoogleTranslator
+                except ImportError:
+                    try:
+                        import subprocess as _sp
+                        _sp.run(
+                            ["pip3", "install", "deep-translator", "--break-system-packages", "-q"],
+                            check=True, timeout=60
+                        )
+                        from deep_translator import GoogleTranslator
+                    except Exception:
+                        return "Error: Instala deep-translator con: pip install deep-translator"
+
+                def _translate_chunks(text: str, target_lang: str) -> str:
+                    translator = GoogleTranslator(source='auto', target=target_lang)
+                    CHUNK_SIZE = 4500
+                    parts = []
+                    start = 0
+                    while start < len(text):
+                        end = min(start + CHUNK_SIZE, len(text))
+                        chunk = text[start:end]
+                        if end < len(text):
+                            nl = chunk.rfind('\n')
+                            if nl > CHUNK_SIZE // 2:
+                                chunk = chunk[:nl]
+                                start += len(chunk) + 1
+                            else:
+                                start = end
+                        else:
+                            start = end
+                        try:
+                            t = translator.translate(chunk)
+                            parts.append(t if t else chunk)
+                        except Exception:
+                            parts.append(chunk)
+                    return '\n\n'.join(parts)
+
+                translated = await asyncio.to_thread(_translate_chunks, raw_text, lang)
+
+                if not translated or not translated.strip():
+                    return "Error: La traducción devolvió un resultado vacío."
+
+                # 4. Inyectar panel de traducción en la página (overlay visual)
+                _JS_OVERLAY = """(data) => {
+            const overlay = document.createElement('div');
+            overlay.id = '_asistenteia_tr';
+            overlay.style.cssText = 'position:fixed;top:0;right:0;width:50%;height:100vh;background:rgba(255,255,255,0.97);overflow-y:auto;z-index:2147483647;font-family:system-ui,sans-serif;font-size:15px;line-height:1.75;color:#1a1a1a;padding:28px 32px;border-left:4px solid #1a73e8;box-shadow:-6px 0 30px rgba(0,0,0,0.18)';
+            const existing = document.getElementById('_asistenteia_tr');
+            if (existing) existing.remove();
+            if (!document.getElementById('_trStyle')) {
+                const style = document.createElement('style');
+                style.id = '_trStyle';
+                style.textContent = '@keyframes _trSlideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}';
+                document.head.appendChild(style);
+                overlay.style.animation = '_trSlideIn 0.35s ease-out';
+            } else {
+                overlay.style.animation = '_trSlideIn 0.35s ease-out';
+            }
+            const closeBtn = document.createElement('button');
+            closeBtn.textContent = '\\u2715';
+            closeBtn.style.cssText = 'position:sticky;top:0;float:right;background:#1a73e8;color:white;border:none;border-radius:50%;width:36px;height:36px;font-size:20px;cursor:pointer;box-shadow:0 2px 10px rgba(26,115,232,0.4);z-index:2;display:flex;align-items:center;justify-content:center';
+            closeBtn.onmouseover = function() { closeBtn.style.background = '#1557b0'; };
+            closeBtn.onmouseout = function() { closeBtn.style.background = '#1a73e8'; };
+            closeBtn.onclick = function() { overlay.remove(); };
+            overlay.appendChild(closeBtn);
+            const header = document.createElement('div');
+            header.style.cssText = 'clear:both;margin-bottom:20px';
+            header.innerHTML = '<div style="display:flex;align-items:center;gap:10px;margin-bottom:4px"><span style="font-size:28px">\\uD83C\\uDF10</span><h2 style="color:#1a73e8;margin:0;font-size:22px">Traduccion al ' + data.lang.toUpperCase() + '</h2></div><p style="color:#666;margin:0;font-size:13px"><strong>' + data.title + '</strong><br><a href="' + data.url + '" style="color:#1a73e8">' + data.url + '</a></p><hr style="border:none;border-top:1px solid #e0e0e0;margin:14px 0">';
+            overlay.appendChild(header);
+            const contentEl = document.createElement('div');
+            contentEl.style.cssText = 'max-width:100%;word-wrap:break-word';
+            const safe = data.translated.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const lines = safe.split('\\n');
+            let html = '';
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                if (line.startsWith('## ')) {
+                    html += '<h3 style="color:#1a73e8;margin:18px 0 8px;font-size:18px">' + line.substring(3) + '</h3>';
+                } else if (line.startsWith('- ')) {
+                    html += '<li style="margin-left:20px;margin-bottom:4px">' + line.substring(2) + '</li>';
+                } else if (line.trim() === '') {
+                    html += '<br>';
+                } else {
+                    html += line;
+                }
+            }
+            contentEl.innerHTML = '<p style="margin:0 0 12px">' + html + '</p>';
+            if (data.truncated) {
+                contentEl.innerHTML += '<p style="color:#999;font-style:italic;margin-top:16px">[Contenido truncado]</p>';
+            }
+            overlay.appendChild(contentEl);
+            document.body.appendChild(overlay);
+            return 'ok';
+        }"""
+                overlay_result = await page.evaluate(
+                    _JS_OVERLAY,
+                    {"translated": translated, "title": page_title, "url": url, "lang": lang, "truncated": truncated}
+                )
+
+                word_count = len(translated.split())
+                logger.info(f"Traducción completada: {word_count} palabras, idioma: {lang}")
+
+                return (
+                    f"TRADUCCIÓN COMPLETADA\n"
+                    f"Página: {page_title}\n"
+                    f"URL: {url}\n"
+                    f"Palabras traducidas: {word_count}\n"
+                    f"Idioma destino: {lang}\n\n"
+                    f"Se ha inyectado un panel de traducción en el lado derecho del navegador.\n"
+                    f"El usuario puede ver la traducción directamente en la página.\n"
+                    f"Pulsa el botón ✕ del panel para cerrarlo."
+                )
 
             else:
                 return f"Error: Acción '{action}' no es una acción soportada en control_local_browser."
