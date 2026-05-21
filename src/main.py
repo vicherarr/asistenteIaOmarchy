@@ -286,6 +286,7 @@ async def get_status(state: AppState = Depends(get_app_state)):
     litert_ok = state.litert_client.engine is not None
     bt_status = await state.audio_manager.get_status_summary() if state.audio_manager else "No inicializado"
     is_speaking = state.tts_engine._is_playing if state.tts_engine else False
+    logger.info(f"[DEBUG STATUS] speaking={is_speaking}, processing={state.processing}")
 
     return StatusResponse(
         litert_connected=litert_ok,
