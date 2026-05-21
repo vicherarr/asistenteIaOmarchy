@@ -423,6 +423,7 @@ class SpotlightWindow(QMainWindow):
         # Chat Area (Respuesta en Markdown con estilos CSS hermosos)
         self.chat_area = QTextBrowser()
         self.chat_area.setFont(QFont("Inter", 12))
+        self.chat_area.setMinimumHeight(0)
         self.chat_area.setStyleSheet("""
             QTextBrowser {
                 background: transparent;
@@ -588,6 +589,8 @@ class SpotlightWindow(QMainWindow):
     @windowHeight.setter
     def windowHeight(self, height):
         self._height = height
+        if hasattr(self, 'chat_area') and self.chat_area.isVisible():
+            self.chat_area.setMaximumHeight(max(0, height - 110))
         self.setFixedHeight(height)
 
     def animate_height(self, target_height):
@@ -619,8 +622,8 @@ class SpotlightWindow(QMainWindow):
     def on_minimize(self):
         """Si la ventana está expandida, la colapsa. Si ya está colapsada, la oculta."""
         if self._height > 110:
+            self.chat_area.hide()
             self.animate_height(110)
-            QTimer.singleShot(300, self.chat_area.hide)
         else:
             self.hide()
 
@@ -630,27 +633,27 @@ class SpotlightWindow(QMainWindow):
         try:
             # Incrementar época de petición para invalidar cualquier stream asíncrono activo en la UI
             self.current_request_id = getattr(self, 'current_request_id', 0) + 1
+            self.pending_gui_request = False
             
-            async with httpx.AsyncClient() as client:
-                await client.post("http://127.0.0.1:8765/reset")
+            # Reset visual inmediato
+            self.stop_button.set_state("inactive")
+            self.visualizer.set_state("inactive")
+            self.chat_area.clear()
             
-            # Para evitar parpadeos bruscos de la UI, animamos primero la altura
-            # y ocultamos el widget de texto tras finalizar la transición (300ms)
             if self._height > 110:
+                self.chat_area.hide()
                 self.animate_height(110)
-                QTimer.singleShot(300, self.chat_area.hide)
             else:
                 self.chat_area.hide()
                 
-            self.chat_area.clear()
-            self.pending_gui_request = False
             self.input_field.setEnabled(True)
             self.input_field.clear()
-            self.stop_button.set_state("inactive")
-            self.visualizer.set_state("inactive")
-            
             self.input_field.setPlaceholderText("Historial reiniciado.")
             QTimer.singleShot(2000, lambda: self.input_field.setPlaceholderText("Pregunta algo o habla..."))
+            
+            # Llamada al backend en segundo plano desacoplada de la UI
+            async with httpx.AsyncClient() as client:
+                await client.post("http://127.0.0.1:8765/reset")
         except Exception as e:
             print(f"Error reiniciando: {e}")
 
@@ -859,8 +862,8 @@ class SpotlightWindow(QMainWindow):
         # ESC para minimizar o cerrar panel
         if event.key() == Qt.Key_Escape:
             if self._height > 110:
+                self.chat_area.hide()
                 self.animate_height(110)
-                QTimer.singleShot(300, self.chat_area.hide)
             else:
                 self.hide()
                 
