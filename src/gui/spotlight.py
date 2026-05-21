@@ -626,11 +626,23 @@ class SpotlightWindow(QMainWindow):
         try:
             async with httpx.AsyncClient() as client:
                 await client.post("http://127.0.0.1:8765/reset")
+            
+            # Para evitar parpadeos bruscos de la UI, animamos primero la altura
+            # y ocultamos el widget de texto tras finalizar la transición (300ms)
+            if self._height > 110:
+                self.animate_height(110)
+                QTimer.singleShot(300, self.chat_area.hide)
+            else:
+                self.chat_area.hide()
+                
             self.chat_area.clear()
-            self.chat_area.hide()
-            self.animate_height(110)
-            self.input_field.setPlaceholderText("Historial reiniciado.")
+            self.pending_gui_request = False
+            self.input_field.setEnabled(True)
+            self.input_field.clear()
+            self.stop_button.set_state("inactive")
             self.visualizer.set_state("inactive")
+            
+            self.input_field.setPlaceholderText("Historial reiniciado.")
             QTimer.singleShot(2000, lambda: self.input_field.setPlaceholderText("Pregunta algo o habla..."))
         except Exception as e:
             print(f"Error reiniciando: {e}")
@@ -836,10 +848,14 @@ class SpotlightWindow(QMainWindow):
         # Ctrl+R para Reiniciar
         elif event.key() == Qt.Key_R and event.modifiers() & Qt.ControlModifier:
             asyncio.create_task(self.on_reset())
+            event.accept()
+            return
             
         # Ctrl+H para consultar Historial manual
         elif event.key() == Qt.Key_H and event.modifiers() & Qt.ControlModifier:
             asyncio.create_task(self.update_last_response())
+            event.accept()
+            return
             
         # Navegación del historial de comandos con flechas de teclado
         elif event.key() == Qt.Key_Up:
