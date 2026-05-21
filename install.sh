@@ -102,6 +102,26 @@ echo "Esto es automático y se guardará en caché."
 echo ""
 
 # -----------------------------------------------------------------------------
+# 5b. Descargar modelo LiteRT Gemma-4-E4B desde HuggingFace
+# -----------------------------------------------------------------------------
+echo "Descargando modelo LiteRT Gemma-4-E4B-it (~3.6GB)..."
+mkdir -p "$PROJECT_DIR/models"
+if [ ! -f "$PROJECT_DIR/models/gemma-4-E4B-it.litertlm" ]; then
+    python3.12 -c "
+from huggingface_hub import hf_hub_download
+print('Descargando gemma-4-E4B-it.litertlm...')
+path = hf_hub_download(
+    repo_id='litert-community/gemma-4-E4B-it-litert-lm',
+    filename='gemma-4-E4B-it.litertlm',
+    local_dir='$PROJECT_DIR/models'
+)
+print(f'Listo: {path}')
+"
+else
+    echo "Modelo ya descargado."
+fi
+
+# -----------------------------------------------------------------------------
 # 6. Configurar keybinding de Hyprland
 # -----------------------------------------------------------------------------
 echo "[6/7] Configurando keybindings en Hyprland..."
