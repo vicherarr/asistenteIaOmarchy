@@ -68,6 +68,7 @@ class StatusResponse(BaseModel):
     bluetooth_audio: str
     conversation_length: int
     processing: bool
+    speaking: bool = False
 
 
 @asynccontextmanager
@@ -284,12 +285,14 @@ async def get_status(state: AppState = Depends(get_app_state)):
     """Estado actual del asistente."""
     litert_ok = state.litert_client.engine is not None
     bt_status = await state.audio_manager.get_status_summary() if state.audio_manager else "No inicializado"
+    is_speaking = state.tts_engine._is_playing if state.tts_engine else False
 
     return StatusResponse(
         litert_connected=litert_ok,
         bluetooth_audio=bt_status,
         conversation_length=len(state.conversation_history),
         processing=state.processing or state.is_recording,
+        speaking=is_speaking,
     )
 
 

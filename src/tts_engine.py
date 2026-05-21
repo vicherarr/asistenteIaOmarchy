@@ -122,6 +122,8 @@ class TTSEngine:
                 return None
             logger.warning(f"Kokoro streaming falló: {e}, intentando gTTS")
             return await self._speak_gtts(text, sink_id)
+        finally:
+            self._is_playing = False
 
     async def _speak_gtts(self, text: str, sink_id: Optional[str]) -> Optional[str]:
         """Sintetiza usando gTTS (requiere internet)."""
@@ -148,6 +150,8 @@ class TTSEngine:
         except Exception as e:
             logger.error(f"Fallo total en TTS: {e}")
             return None
+        finally:
+            self._is_playing = False
 
     async def _play_audio(self, audio_path: str, sink_id: Optional[str] = None, speed: float = 1.0) -> None:
         """Reproduce audio usando paplay de forma asíncrona."""

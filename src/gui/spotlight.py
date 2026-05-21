@@ -17,7 +17,7 @@ class StateVisualizer(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedSize(60, 30)
-        self.state = "inactive"  # inactive, listening, thinking
+        self.state = "inactive"  # inactive, listening, thinking, speaking
         self.phase = 0.0
         
         self.timer = QTimer(self)
@@ -78,6 +78,50 @@ class StateVisualizer(QWidget):
                 y = h / 2 + 7 * math.sin(self.phase + x * 0.15)
                 path.lineTo(x, y)
             painter.drawPath(path)
+            
+        elif self.state == "speaking":
+            # KITT Scanner - luz roja rebotando con estela
+            painter.setPen(Qt.NoPen)
+            
+            # Posición del scanner (rebote sinusoidal)
+            scanner_pos = 0.5 + 0.4 * math.sin(self.phase * 0.8)
+            scanner_x = w * scanner_pos
+            
+            # Estela (trail) con puntos más pequeños y transparentes
+            trail_points = 12
+            for i in range(trail_points, 0, -1):
+                trail_phase = self.phase * 0.8 - i * 0.15
+                trail_pos = 0.5 + 0.4 * math.sin(trail_phase)
+                trail_x = w * trail_pos
+                alpha = int(180 * (1 - i / trail_points))
+                radius = 4 * (1 - i / trail_points) + 1
+                
+                # Brillo rojo estilo KITT
+                glow = QRadialGradient(QPointF(trail_x, h / 2), radius * 2)
+                glow.setColorAt(0, QColor(235, 50, 50, alpha))
+                glow.setColorAt(0.5, QColor(200, 30, 30, int(alpha * 0.5)))
+                glow.setColorAt(1, QColor(150, 20, 20, 0))
+                
+                painter.setBrush(QBrush(glow))
+                painter.drawEllipse(QPointF(trail_x, h / 2), radius * 2, radius * 2)
+            
+            # Cabeza principal del scanner (brillo intenso)
+            head_glow = QRadialGradient(QPointF(scanner_x, h / 2), 12)
+            head_glow.setColorAt(0, QColor(255, 80, 80, 255))
+            head_glow.setColorAt(0.3, QColor(235, 40, 40, 200))
+            head_glow.setColorAt(0.7, QColor(180, 20, 20, 80))
+            head_glow.setColorAt(1, QColor(120, 10, 10, 0))
+            
+            painter.setBrush(QBrush(head_glow))
+            painter.drawEllipse(QPointF(scanner_x, h / 2), 12, 12)
+            
+            # Centro blanco brillante
+            painter.setBrush(QBrush(QColor(255, 220, 220, 255)))
+            painter.drawEllipse(QPointF(scanner_x, h / 2), 3, 3)
+            
+            # Línea horizontal sutil (barra del scanner)
+            painter.setPen(QPen(QColor(60, 20, 20, 80), 1))
+            painter.drawLine(5, h / 2, w - 5, h / 2)
             
         else:
             # Latido verde minimalista (estado inactivo / listo)
@@ -642,7 +686,11 @@ class SpotlightWindow(QMainWindow):
                     is_processing = data.get("processing", False)
                     
                     # Actualizar visualizador animado y botón Stop dinámicamente
-                    if is_processing:
+                    is_speaking = data.get("speaking", False)
+                    if is_speaking:
+                        self.visualizer.set_state("speaking")
+                        self.stop_button.set_state("active")
+                    elif is_processing:
                         if "Escuchando" in self.input_field.placeholderText():
                             self.visualizer.set_state("listening")
                         else:
