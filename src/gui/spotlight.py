@@ -91,6 +91,253 @@ class StateVisualizer(QWidget):
             painter.setBrush(QBrush(QColor(166, 227, 161, 255)))
             painter.drawEllipse(QPointF(w / 2, h / 2), 3, 3)
 
+class PremiumStopButton(QPushButton):
+    """
+    Un botón de detener/habla premium, interactivo y con animaciones de tipo radar/onda,
+    gradientes dinámicos de Catppuccin y efectos de brillo (glow) de última generación.
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(36, 36)
+        self.setCursor(Qt.PointingHandCursor)
+        
+        # Estados: "inactive", "active", "offline"
+        self._state = "inactive"
+        
+        # Propiedades de animación
+        self._hover_progress = 0.0      # De 0.0 a 1.0
+        self._press_progress = 0.0      # De 0.0 a 1.0
+        self._pulse_phase = 0.0         # Ángulo del pulso sinusoidal
+        self._ripple_radius = 0.0       # Radio del ripple de interrupción
+        self._ripple_opacity = 0.0      # Opacidad del ripple
+        
+        # Animadores
+        self.hover_animator = QPropertyAnimation(self, b"hoverProgress")
+        self.hover_animator.setDuration(200)
+        self.hover_animator.setEasingCurve(QEasingCurve.OutCubic)
+        
+        self.press_animator = QPropertyAnimation(self, b"pressProgress")
+        self.press_animator.setDuration(120)
+        self.press_animator.setEasingCurve(QEasingCurve.OutCubic)
+        
+        # Timer para animación de pulso y ripples activos
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self._update_time)
+        self.timer.start(16)  # ~60 FPS
+        
+        self.setMouseTracking(True)
+        
+    @Property(float)
+    def hoverProgress(self):
+        return self._hover_progress
+        
+    @hoverProgress.setter
+    def hoverProgress(self, val):
+        self._hover_progress = val
+        self.update()
+        
+    @Property(float)
+    def pressProgress(self):
+        return self._press_progress
+        
+    @pressProgress.setter
+    def pressProgress(self, val):
+        self._press_progress = val
+        self.update()
+        
+    def set_state(self, state):
+        if self._state != state:
+            self._state = state
+            if state == "active":
+                self.setToolTip("Interrumpir proceso activo")
+            elif state == "inactive":
+                self.setToolTip("Detener habla / proceso")
+            else:
+                self.setToolTip("Backend desconectado")
+            self.update()
+            
+    def _update_time(self):
+        # Avanzar fase de pulso si está activo
+        if self._state == "active":
+            self._pulse_phase += 0.08
+            self.update()
+            
+        # Animar ripple
+        if self._ripple_opacity > 0.01:
+            self._ripple_radius += 1.5
+            self._ripple_opacity -= 0.08
+            self.update()
+            
+    def enterEvent(self, event):
+        self.hover_animator.stop()
+        self.hover_animator.setStartValue(self._hover_progress)
+        self.hover_animator.setEndValue(1.0)
+        self.hover_animator.start()
+        super().enterEvent(event)
+        
+    def leaveEvent(self, event):
+        self.hover_animator.stop()
+        self.hover_animator.setStartValue(self._hover_progress)
+        self.hover_animator.setEndValue(0.0)
+        self.hover_animator.start()
+        super().leaveEvent(event)
+        
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.press_animator.stop()
+            self.press_animator.setStartValue(self._press_progress)
+            self.press_animator.setEndValue(1.0)
+            self.press_animator.start()
+            
+            # Ripple de clic
+            self._ripple_radius = 5.0
+            self._ripple_opacity = 0.8
+        super().mousePressEvent(event)
+        
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.press_animator.stop()
+            self.press_animator.setStartValue(self._press_progress)
+            self.press_animator.setEndValue(0.0)
+            self.press_animator.start()
+        super().mouseReleaseEvent(event)
+        
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        w = self.width()
+        h = self.height()
+        cx = w / 2.0
+        cy = h / 2.0
+        
+        # 1. Dibujar onda expansiva o radar pulsante en estado activo
+        if self._state == "active":
+            for i in range(2):
+                phase_offset = i * math.pi
+                scale = 1.0 + 0.35 * math.sin(self._pulse_phase + phase_offset)
+                opacity = int(60 * (1.0 - (scale - 0.65) / 0.7))
+                if opacity < 0: opacity = 0
+                if opacity > 255: opacity = 255
+                
+                pulse_r = (w / 2.0 - 4) * scale
+                painter.setPen(QPen(QColor(243, 139, 168, opacity), 1.5))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawEllipse(QPointF(cx, cy), pulse_r, pulse_r)
+                
+        # 2. Dibujar Ripple de clic
+        if self._ripple_opacity > 0.01:
+            opacity_int = int(255 * self._ripple_opacity)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(QColor(243, 139, 168, opacity_int)))
+            painter.drawEllipse(QPointF(cx, cy), self._ripple_radius, self._ripple_radius)
+            
+        # 3. Dibujar fondo del botón con vidrio y gradiente
+        base_radius = (w / 2.0) - 4
+        scale_factor = 1.0 - (0.08 * self._press_progress)
+        draw_r = base_radius * scale_factor
+        
+        if self._state == "active":
+            # Degradado premium rojo coral / melocotón brillante
+            gradient = QLinearGradient(0, 0, 0, h)
+            c1 = QColor(243, 139, 168)  # Red
+            c2 = QColor(250, 179, 135)  # Peach
+            
+            if self._hover_progress > 0.01:
+                # Mezclar más hacia rosa/púrpura en hover
+                c1 = QColor(245, 194, 231)  # Pink
+                c2 = QColor(203, 166, 247)  # Mauve
+                
+            gradient.setColorAt(0.0, c1)
+            gradient.setColorAt(1.0, c2)
+            
+            # Efecto glow de fondo
+            glow_intensity = int(80 + 40 * math.sin(self._pulse_phase))
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(QColor(243, 139, 168, glow_intensity)))
+            painter.drawEllipse(QPointF(cx, cy), draw_r + 2, draw_r + 2)
+            
+            # Fondo principal
+            painter.setBrush(QBrush(gradient))
+            painter.drawEllipse(QPointF(cx, cy), draw_r, draw_r)
+            
+        elif self._state == "inactive":
+            # Glassmorphism gris/azulino Catppuccin
+            bg_opacity = int(25 + 40 * self._hover_progress)
+            border_opacity = int(50 + 100 * self._hover_progress)
+            
+            # Fondo
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(QColor(108, 112, 134, bg_opacity)))
+            painter.drawEllipse(QPointF(cx, cy), draw_r, draw_r)
+            
+            # Borde
+            border_color = QColor(137, 180, 250, border_opacity) if self._hover_progress > 0.01 else QColor(108, 112, 134, border_opacity)
+            painter.setPen(QPen(border_color, 1.2))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawEllipse(QPointF(cx, cy), draw_r, draw_r)
+            
+        else:  # offline
+            # Muted
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(QColor(88, 91, 112, 15)))
+            painter.drawEllipse(QPointF(cx, cy), draw_r, draw_r)
+            
+            painter.setPen(QPen(QColor(88, 91, 112, 40), 1.0))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawEllipse(QPointF(cx, cy), draw_r, draw_r)
+            
+        # 4. Dibujar el ícono central (Vectorizado)
+        icon_size = 8.0 if self._state == "inactive" else 10.0
+        icon_size = icon_size * (1.0 + 0.15 * self._hover_progress) * scale_factor
+        
+        if self._state == "active":
+            # Icono de STOP en color oscuro contrastante
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(QColor(30, 30, 46)))
+            
+            rect_path = QPainterPath()
+            rect_path.addRoundedRect(
+                cx - icon_size / 2.0, 
+                cy - icon_size / 2.0, 
+                icon_size, 
+                icon_size, 
+                2.0, 
+                2.0
+            )
+            painter.drawPath(rect_path)
+            
+        elif self._state == "inactive":
+            # Standby: sutil contorno
+            icon_color = QColor(243, 139, 168) if self._hover_progress > 0.01 else QColor(108, 112, 134)
+            painter.setPen(QPen(icon_color, 2.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            painter.setBrush(Qt.NoBrush)
+            
+            rect_path = QPainterPath()
+            rect_path.addRoundedRect(
+                cx - icon_size / 2.0, 
+                cy - icon_size / 2.0, 
+                icon_size, 
+                icon_size, 
+                1.5, 
+                1.5
+            )
+            painter.drawPath(rect_path)
+            
+        else:  # offline
+            painter.setPen(QPen(QColor(88, 91, 112, 100), 1.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            painter.setBrush(Qt.NoBrush)
+            rect_path = QPainterPath()
+            rect_path.addRoundedRect(
+                cx - icon_size / 2.0, 
+                cy - icon_size / 2.0, 
+                icon_size, 
+                icon_size, 
+                1.5, 
+                1.5
+            )
+            painter.drawPath(rect_path)
+
 class SpotlightWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -143,26 +390,8 @@ class SpotlightWindow(QMainWindow):
         self.visualizer = StateVisualizer()
         self.header_layout.addWidget(self.visualizer)
 
-        # Botón para parar TTS / Cancelar
-        self.stop_button = QPushButton("⏹")
-        self.stop_button.setToolTip("Detener habla / proceso")
-        self.stop_button.setFixedSize(32, 32)
-        self.stop_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(243, 139, 168, 30);
-                border: 1px solid rgba(243, 139, 168, 120);
-                border-radius: 16px;
-                color: #f38ba8;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: rgba(243, 139, 168, 60);
-            }
-            QPushButton:pressed {
-                background-color: #f38ba8;
-                color: #1e1e2e;
-            }
-        """)
+        # Botón para parar TTS / Cancelar (PremiumStopButton animador)
+        self.stop_button = PremiumStopButton()
         self.stop_button.clicked.connect(self.on_cancel)
         self.header_layout.addWidget(self.stop_button)
 
@@ -372,6 +601,9 @@ class SpotlightWindow(QMainWindow):
     async def on_cancel(self):
         """Detiene cualquier proceso o habla en curso."""
         try:
+            # Feedback visual inmediato
+            self.stop_button.set_state("inactive")
+            
             async with httpx.AsyncClient() as client:
                 await client.post("http://127.0.0.1:8765/cancel")
             self.input_field.setPlaceholderText("Interrumpido.")
@@ -417,15 +649,16 @@ class SpotlightWindow(QMainWindow):
                     conversation_length = data.get("conversation_length", 0)
                     is_processing = data.get("processing", False)
                     
-                    # Actualizar visualizador animado
+                    # Actualizar visualizador animado y botón Stop dinámicamente
                     if is_processing:
-                        # Si está escuchando en el micrófono
                         if "Escuchando" in self.input_field.placeholderText():
                             self.visualizer.set_state("listening")
                         else:
                             self.visualizer.set_state("thinking")
+                        self.stop_button.set_state("active")
                     else:
                         self.visualizer.set_state("inactive")
+                        self.stop_button.set_state("inactive")
                     
                     # Actualizar píldoras (Status Pills)
                     if litert_connected:
@@ -508,6 +741,9 @@ class SpotlightWindow(QMainWindow):
                 }
             """)
             self.visualizer.set_state("inactive")
+            
+            # Botón Stop Desconectado
+            self.stop_button.set_state("offline")
 
     async def update_last_response(self):
         """Actualiza el área de chat con el último par de mensajes (usuario y asistente)."""
@@ -551,6 +787,9 @@ class SpotlightWindow(QMainWindow):
         self.chat_area.show()
         
         self.visualizer.set_state("thinking")
+        
+        # Activar el botón de Stop inmediatamente (feedback visual instantáneo)
+        self.stop_button.set_state("active")
         
         # Mostrar lo que el usuario escribe inmediatamente
         self.chat_area.setMarkdown(f"**Tú:** {text}\n\n---\n\n**AsistenteIA:** ...")
