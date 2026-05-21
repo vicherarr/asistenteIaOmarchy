@@ -56,6 +56,7 @@ class STTEngine:
                 "--language", "es",
                 "--no-timestamps",
                 "--beam-size", "5",
+                "--no-gpu",
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )

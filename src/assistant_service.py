@@ -20,7 +20,9 @@ from src.command_executor import (
     play_specific_music,
     open_terminal_and_run_command,
     read_terminal_screen,
-    control_local_browser
+    control_local_browser,
+    send_input_to_terminal,
+    interrupt_terminal_command
 )
 from src.vision_tool import analyze_screen
 from src.litert_client import LiteRTClient
@@ -61,7 +63,9 @@ class AssistantService:
             play_specific_music,
             open_terminal_and_run_command,
             read_terminal_screen,
-            control_local_browser
+            control_local_browser,
+            send_input_to_terminal,
+            interrupt_terminal_command
         ]
 
     async def process_audio(

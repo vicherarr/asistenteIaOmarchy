@@ -708,6 +708,60 @@ async def read_terminal_screen() -> str:
         return f"Excepción leyendo pantalla de la terminal: {e}"
 
 
+async def send_input_to_terminal(input_text: str) -> str:
+    """
+    Envía una entrada de texto directa (como responder a preguntas de confirmación [Y/n] o ingresar datos)
+    al flujo de entrada estándar (stdin) del proceso activo en la terminal persistente visible.
+    
+    Args:
+        input_text: El texto exacto a enviar (ej. 'y', 'n', 'mi_contraseña').
+    """
+    import subprocess
+    input_text = _sanitize_tool_args(input_text)
+    session_name = "asistenteia"
+    try:
+        # Verificar si la sesión existe
+        check_session = subprocess.run(
+            ["tmux", "has-session", "-t", session_name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        if check_session.returncode != 0:
+            return "La terminal persistente no está iniciada (no hay proceso activo al cual enviar entrada)."
+            
+        # Enviar las teclas y presionar ENTER (C-m)
+        subprocess.run(["tmux", "send-keys", "-t", session_name, input_text, "C-m"], check=True)
+        return f"Éxito: Se ha enviado la entrada '{input_text}' al proceso de la terminal."
+    except Exception as e:
+        logger.error(f"Error en send_input_to_terminal: {e}")
+        return f"Error al enviar la entrada a la terminal: {e}"
+
+
+async def interrupt_terminal_command() -> str:
+    """
+    Envía una señal de interrupción Ctrl+C (SIGINT) al comando en ejecución en la terminal persistente
+    para detener un proceso que se ha quedado bloqueado, congelado o en un bucle infinito.
+    """
+    import subprocess
+    session_name = "asistenteia"
+    try:
+        # Verificar si la sesión existe
+        check_session = subprocess.run(
+            ["tmux", "has-session", "-t", session_name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        if check_session.returncode != 0:
+            return "La terminal persistente no está activa (no hay ningún proceso para interrumpir)."
+            
+        # Enviar Ctrl+C
+        subprocess.run(["tmux", "send-keys", "-t", session_name, "C-c"], check=True)
+        return "Éxito: Señal de interrupción Ctrl+C enviada a la terminal para detener el comando activo."
+    except Exception as e:
+        logger.error(f"Error en interrupt_terminal_command: {e}")
+        return f"Error al interrumpir el comando en la terminal: {e}"
+
+
 async def control_local_browser(action: str, target: str = "", value: str = "") -> str:
     """
     Controla el navegador Chromium visible en tu pantalla a través del protocolo de depuración (CDP).

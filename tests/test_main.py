@@ -41,9 +41,22 @@ def mock_app_state():
 def client(mock_app_state):
     """Configura el cliente de prueba con inyección de dependencias."""
     app.dependency_overrides[get_app_state] = lambda: mock_app_state
-    # Lifespan call is tricky with TestClient if we don't use it as context manager properly
-    with TestClient(app) as c:
-        yield c
+    # Parcheamos los motores pesados para que el lifespan no cargue modelos reales ni acceda a hardware
+    with patch("src.main.LiteRTClient") as mock_litert_class, \
+         patch("src.main.TTSEngine"), \
+         patch("src.main.STTEngine"), \
+         patch("src.main.AudioRecorder"), \
+         patch("src.main.AudioManager") as mock_audio_class:
+        
+        # Simular que el motor se cargó correctamente en el mock de la clase
+        mock_litert_class.return_value.engine = MagicMock()
+        
+        # Simular que auto_configure_bluetooth es asíncrono
+        mock_audio_instance = mock_audio_class.return_value
+        mock_audio_instance.auto_configure_bluetooth = AsyncMock(return_value=("mock_source", "mock_sink"))
+        
+        with TestClient(app) as c:
+            yield c
     app.dependency_overrides.clear()
 
 

@@ -261,3 +261,41 @@ async def test_read_terminal_screen_error_status():
         result = await read_terminal_screen()
         assert "ERROR EN TERMINAL" in result
         assert "Código de salida: 127" in result
+
+
+@pytest.mark.asyncio
+async def test_send_input_to_terminal():
+    from src.command_executor import send_input_to_terminal
+    with patch('subprocess.run') as mock_run:
+        # Mock tmux has-session (success)
+        mock_has_session = MagicMock()
+        mock_has_session.returncode = 0
+        
+        # Mock tmux send-keys
+        mock_send_keys = MagicMock()
+        mock_send_keys.returncode = 0
+        
+        mock_run.side_effect = [mock_has_session, mock_send_keys]
+        
+        result = await send_input_to_terminal("yes")
+        assert "Éxito" in result
+        assert "yes" in result
+
+
+@pytest.mark.asyncio
+async def test_interrupt_terminal_command():
+    from src.command_executor import interrupt_terminal_command
+    with patch('subprocess.run') as mock_run:
+        # Mock tmux has-session (success)
+        mock_has_session = MagicMock()
+        mock_has_session.returncode = 0
+        
+        # Mock tmux send-keys Ctrl+C
+        mock_send_keys = MagicMock()
+        mock_send_keys.returncode = 0
+        
+        mock_run.side_effect = [mock_has_session, mock_send_keys]
+        
+        result = await interrupt_terminal_command()
+        assert "Éxito" in result
+        assert "Ctrl+C" in result

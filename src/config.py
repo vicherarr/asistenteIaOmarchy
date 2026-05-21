@@ -15,13 +15,6 @@ class Settings(BaseSettings):
     PORT: int = 8765
     DEBUG: bool = False
     
-    # Ollama
-    OLLAMA_BASE_URL: str = "http://localhost:11434"
-    OLLAMA_MODEL: str = "ministral-3:3b"
-    OLLAMA_TIMEOUT: float = 120.0
-    OLLAMA_TEMPERATURE: float = 0.3
-    OLLAMA_NUM_CTX: int = 4096
-
     # LiteRT
     LITERT_MODEL_PATH: str = "models/gemma-4-e4b.litertlm"
 
@@ -29,7 +22,7 @@ class Settings(BaseSettings):
     MAX_HISTORY: int = 10
     
     # TTS
-    KOKORO_VOICE: str = "em_alex"
+    KOKORO_VOICE: str = "em_santa"
     KOKORO_LANG: str = "e"
     
     # Paths

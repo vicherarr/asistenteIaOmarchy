@@ -128,39 +128,62 @@ class LiteRTClient:
         - El system prompt se trunca a MAX_SYSTEM_CHARS.
         Esto garantiza que nunca se supere el límite de 4096 tokens del modelo.
         """
-        # --- Límites de truncamiento (caracteres aprox. = tokens * 3) ---
-        MAX_SYSTEM_CHARS  = 1200   # ~400 tokens para el system prompt
-        MAX_HIST_MSG_CHARS = 400   # ~133 tokens por mensaje de historial
-        MAX_PROMPT_CHARS  = 1500   # ~500 tokens para el prompt actual
+        # --- Límites de truncamiento dinámico (caracteres aprox. = tokens * 3) ---
+        MAX_SYSTEM_CHARS       = 2400   # ~800 tokens para el system prompt completo
+        MAX_RECENT_MSG_CHARS   = 6000   # ~2000 tokens para los dos mensajes más recientes (sin cortes)
+        MAX_HIST_MSG_CHARS     = 600    # ~200 tokens para mensajes más antiguos del historial
+        MAX_PROMPT_CHARS       = 2000   # ~660 tokens para el prompt actual del usuario
 
-        def _trunc(text: str, limit: int) -> str:
+        def _smart_trunc(text: str, limit: int) -> str:
             if len(text) <= limit:
                 return text
-            return text[:limit] + " [...]"
+            
+            truncated = text[:limit]
+            
+            # Intentar no cortar a mitad de una palabra si hay espacio de retroceso
+            last_space = truncated.rfind(' ')
+            if last_space > limit - 30:
+                truncated = truncated[:last_space]
+                
+            # Prevenir que los bloques de código de markdown (```) queden abiertos
+            code_blocks = truncated.count("```")
+            if code_blocks % 2 != 0:
+                truncated += "\n```"
+                
+            return truncated.strip() + " [...]"
 
         try:
-            # 1. Preparar historial con truncamiento
+            # 1. Preparar historial con enrutamiento de sliding-window inteligente
             formatted_messages = []
             
             if system_prompt:
                 formatted_messages.append({
                     "role": "system",
-                    "content": [{"type": "text", "text": _trunc(system_prompt, MAX_SYSTEM_CHARS)}]
+                    "content": [{"type": "text", "text": _smart_trunc(system_prompt, MAX_SYSTEM_CHARS)}]
                 })
             
             if history:
-                for msg in history:
+                total_msgs = len(history)
+                for idx, msg in enumerate(history):
                     role = "model" if msg.role == "assistant" else msg.role
+                    
+                    # Conservar de forma completa e intacta los dos últimos mensajes del historial
+                    # (el inmediato anterior y su respuesta) para retener logs, códigos de error y respuestas previas
+                    if total_msgs - idx <= 2:
+                        msg_limit = MAX_RECENT_MSG_CHARS
+                    else:
+                        msg_limit = MAX_HIST_MSG_CHARS
+                        
                     formatted_messages.append({
                         "role": role,
-                        "content": [{"type": "text", "text": _trunc(msg.content, MAX_HIST_MSG_CHARS)}]
+                        "content": [{"type": "text", "text": _smart_trunc(msg.content, msg_limit)}]
                     })
 
             # 2. Crear conversación
             with self.engine.create_conversation(messages=formatted_messages, tools=tools) as conversation:
                 
                 # 3. Construir mensaje actual (con truncamiento del prompt)
-                content_parts = [{"type": "text", "text": _trunc(prompt, MAX_PROMPT_CHARS)}]
+                content_parts = [{"type": "text", "text": _smart_trunc(prompt, MAX_PROMPT_CHARS)}]
                 
                 if image_path:
                     # Según docs 2026, pasar la ruta ('path') es lo más estable

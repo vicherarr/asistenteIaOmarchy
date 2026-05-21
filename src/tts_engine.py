@@ -30,14 +30,15 @@ class TTSEngine:
     def __init__(self) -> None:
         self._kokoro_pipeline = None
         self._playback_process: Optional[asyncio.subprocess.Process] = None
+        self._is_playing = False
         self._init_kokoro()
 
     def _init_kokoro(self) -> None:
         """Intenta inicializar Kokoro TTS."""
         try:
             from kokoro import KPipeline
-            self._kokoro_pipeline = KPipeline(lang_code=settings.KOKORO_LANG)
-            logger.info("Kokoro TTS inicializado correctamente")
+            self._kokoro_pipeline = KPipeline(lang_code=settings.KOKORO_LANG, device="cpu")
+            logger.info("Kokoro TTS inicializado correctamente en CPU")
         except ImportError:
             logger.warning("Kokoro no instalado. Se usará gTTS como fallback.")
         except Exception as e:
@@ -50,6 +51,7 @@ class TTSEngine:
             return None
 
         # Si no se pasa sink_id, intentará reproducir al dispositivo por defecto de PipeWire
+        self._is_playing = True
         
         if self._kokoro_pipeline is not None:
             return await self._speak_kokoro(text, sink_id)
@@ -57,39 +59,62 @@ class TTSEngine:
         return await self._speak_gtts(text, sink_id)
 
     async def _speak_kokoro(self, text: str, sink_id: Optional[str]) -> Optional[str]:
-        """Sintetiza usando Kokoro TTS (operación CPU-intensiva en hilo)."""
-        def _generate():
-            import soundfile as sf
+        """Sintetiza usando Kokoro TTS con reproducción en streaming de latencia ultra baja."""
+        def _stream_and_save():
+            import sounddevice as sd
             import numpy as np
+            import soundfile as sf
+
+            # Resolver voz local si existe para evitar latencia de HuggingFace HEAD request
+            voice_val = settings.KOKORO_VOICE
+            if not voice_val.endswith('.pt'):
+                local_path = settings.PROJECT_ROOT / "models" / f"{voice_val}.pt"
+                if local_path.exists():
+                    voice_val = str(local_path)
 
             audio_chunks = []
-            generator = self._kokoro_pipeline(text, voice=settings.KOKORO_VOICE, speed=1.0)
-
-            for _, _, audio in generator:
-                audio_chunks.append(audio)
-
+            generator = self._kokoro_pipeline(text, voice=voice_val, speed=1.0)
+            
+            # Usamos el dispositivo predeterminado de PipeWire (None), el cual cambia automáticamente
+            # al dispositivo de salida activo (incluyendo auriculares bluetooth seleccionados)
+            with sd.OutputStream(samplerate=KOKORO_SAMPLE_RATE, channels=1, dtype='float32') as stream:
+                for _, _, audio in generator:
+                    if not self._is_playing:
+                        logger.info("Generación de audio Kokoro cancelada por interrupción")
+                        break
+                    if audio is not None and len(audio) > 0:
+                        # Convertir PyTorch Tensor (u otro tipo de objeto tensor) a NumPy array en CPU
+                        if hasattr(audio, "cpu"):
+                            audio_np = audio.cpu().numpy()
+                        elif hasattr(audio, "numpy"):
+                            audio_np = audio.numpy()
+                        else:
+                            audio_np = np.array(audio)
+                            
+                        audio_chunks.append(audio_np)
+                        # Reproducir chunk de audio en tiempo real
+                        stream.write(audio_np.astype('float32'))
+            
             if not audio_chunks:
                 return None
-
+                
+            # Guardamos el wav completo por compatibilidad y registro histórico
             full_audio = np.concatenate(audio_chunks)
-            
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False, dir=settings.TEMP_DIR) as tmp_file:
                 wav_path = tmp_file.name
-
             sf.write(wav_path, full_audio, KOKORO_SAMPLE_RATE)
             return wav_path
 
         try:
-            wav_path = await asyncio.to_thread(_generate)
+            wav_path = await asyncio.to_thread(_stream_and_save)
             if not wav_path or not Path(wav_path).exists():
-                raise TTSError("Kokoro falló al generar audio")
+                raise TTSError("Kokoro falló al generar o reproducir audio")
 
-            logger.info(f"Kokoro generó audio: {Path(wav_path).stat().st_size} bytes")
-            await self._play_audio(wav_path, sink_id)
+            logger.info(f"Kokoro finalizó streaming y guardó: {Path(wav_path).stat().st_size} bytes")
             return wav_path
 
         except Exception as e:
-            logger.warning(f"Kokoro falló: {e}, intentando gTTS")
+            logger.warning(f"Kokoro streaming falló: {e}, intentando gTTS")
             return await self._speak_gtts(text, sink_id)
 
     async def _speak_gtts(self, text: str, sink_id: Optional[str]) -> Optional[str]:
@@ -113,7 +138,7 @@ class TTSEngine:
             return None
 
     async def _play_audio(self, audio_path: str, sink_id: Optional[str] = None, speed: float = 1.0) -> None:
-        """Reproduce audio usando paplay o ffplay de forma asíncrona."""
+        """Reproduce audio usando paplay de forma asíncrona."""
         ext = Path(audio_path).suffix.lower()
         
         try:
@@ -129,16 +154,25 @@ class TTSEngine:
                 await ffmpeg.wait()
                 audio_path = sped_path
 
-            # 2. Selección de comando de reproducción
+            # 2. Transcodificar MP3 a WAV si usamos paplay (ya que paplay no soporta MP3 directamente)
+            if ext == ".mp3":
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False, dir=settings.TEMP_DIR) as tmp:
+                    wav_path = tmp.name
+                
+                ffmpeg = await asyncio.create_subprocess_exec(
+                    "ffmpeg", "-y", "-i", audio_path, wav_path,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+                await ffmpeg.wait()
+                audio_path = wav_path
+
+            # 3. Selección de comando de reproducción
             if sink_id:
                 # Si hay un sink Bluetooth específico
                 cmd = ["paplay", "--device", sink_id, audio_path]
             else:
-                # Por defecto a PipeWire
-                if ext == ".mp3":
-                    cmd = ["ffplay", "-nodisp", "-autoexit", "-af", f"atempo={speed}", audio_path]
-                else:
-                    cmd = ["paplay", audio_path] # paplay es preferido en PipeWire/Pulse
+                # Por defecto a PipeWire/Pulse
+                cmd = ["paplay", audio_path]
 
             logger.info(f"Reproduciendo TTS: {' '.join(cmd)}")
             self._playback_process = await asyncio.create_subprocess_exec(
@@ -163,6 +197,13 @@ class TTSEngine:
 
     def stop(self) -> None:
         """Detiene la reproducción en curso."""
+        self._is_playing = False
+        try:
+            import sounddevice as sd
+            sd.stop()
+        except Exception as e:
+            logger.warning(f"No se pudo detener el dispositivo de audio: {e}")
+            
         if self._playback_process and self._playback_process.returncode is None:
             try:
                 self._playback_process.terminate()
