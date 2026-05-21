@@ -114,6 +114,9 @@ class TTSEngine:
             return wav_path
 
         except Exception as e:
+            if not self._is_playing:
+                logger.info("Reproducción de Kokoro fue cancelada/interrumpida por el usuario. No se aplica fallback a gTTS.")
+                return None
             logger.warning(f"Kokoro streaming falló: {e}, intentando gTTS")
             return await self._speak_gtts(text, sink_id)
 
@@ -129,7 +132,13 @@ class TTSEngine:
             return mp3_path
 
         try:
+            if not self._is_playing:
+                logger.info("gTTS abortado antes de la generación por cancelación")
+                return None
             mp3_path = await asyncio.to_thread(_generate)
+            if not self._is_playing:
+                logger.info("gTTS abortado antes de la reproducción por cancelación")
+                return None
             logger.info(f"gTTS generó audio: {Path(mp3_path).stat().st_size} bytes")
             await self._play_audio(mp3_path, sink_id)
             return mp3_path
