@@ -51,16 +51,13 @@ class TTSEngine:
             logger.warning("Texto vacío para TTS")
             return None
 
+        # Si no se pasa sink_id, intentará reproducir al dispositivo por defecto de PipeWire
         self._is_playing = True
-        logger.info(f"TTS _is_playing = True (texto: {text[:50]}...)")
         
-        try:
-            if self._kokoro_pipeline is not None:
-                return await self._speak_kokoro(text, sink_id)
-            return await self._speak_gtts(text, sink_id)
-        finally:
-            self._is_playing = False
-            logger.info("TTS _is_playing = False (audio terminado)")
+        if self._kokoro_pipeline is not None:
+            return await self._speak_kokoro(text, sink_id)
+
+        return await self._speak_gtts(text, sink_id)
 
     async def _speak_kokoro(self, text: str, sink_id: Optional[str]) -> Optional[str]:
         """Sintetiza usando Kokoro TTS con reproducción en streaming de latencia ultra baja."""
@@ -125,6 +122,8 @@ class TTSEngine:
                 return None
             logger.warning(f"Kokoro streaming falló: {e}, intentando gTTS")
             return await self._speak_gtts(text, sink_id)
+        finally:
+            self._is_playing = False
 
     async def _speak_gtts(self, text: str, sink_id: Optional[str]) -> Optional[str]:
         """Sintetiza usando gTTS (requiere internet)."""
@@ -151,6 +150,8 @@ class TTSEngine:
         except Exception as e:
             logger.error(f"Fallo total en TTS: {e}")
             return None
+        finally:
+            self._is_playing = False
 
     async def _play_audio(self, audio_path: str, sink_id: Optional[str] = None, speed: float = 1.0) -> None:
         """Reproduce audio usando paplay de forma asíncrona."""
