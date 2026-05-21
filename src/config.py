@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     
     # LiteRT
-    LITERT_MODEL_PATH: str = "models/gemma-4-e2b.litertlm"
+    LITERT_MODEL_PATH: str = "models/gemma-4-E4B-it.litertlm"
 
     # Assistant
     MAX_HISTORY: int = 10
