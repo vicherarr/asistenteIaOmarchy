@@ -1,2 +1,3 @@
-2026/05/20-20:48:45.879 3095f Creating DB /home/victor/develop/asistenteia/.chrome-profile/Default/Sync Data/LevelDB since it was missing.
-2026/05/20-20:48:45.914 3095f Reusing MANIFEST /home/victor/develop/asistenteia/.chrome-profile/Default/Sync Data/LevelDB/MANIFEST-000001
+2026/05/21-16:44:49.590 465d Reusing MANIFEST /home/victor/develop/asistenteia/.chrome-profile/Default/Sync Data/LevelDB/MANIFEST-000001
+2026/05/21-16:44:49.590 465d Recovering log #3
+2026/05/21-16:44:49.590 465d Reusing old log /home/victor/develop/asistenteia/.chrome-profile/Default/Sync Data/LevelDB/000003.log 

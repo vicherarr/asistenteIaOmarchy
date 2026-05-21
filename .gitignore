@@ -20,3 +20,7 @@ models/
 .env
 .env.*
 ! .env.example
+
+# Carpetas y perfiles locales de navegador
+.chrome-profile/
+.venv/
