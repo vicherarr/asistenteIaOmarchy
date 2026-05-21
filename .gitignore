@@ -24,3 +24,10 @@ models/
 # Carpetas y perfiles locales de navegador
 .chrome-profile/
 .venv/
+
+# Archivos de prueba y temporales a nivel de raíz
+/inspect_litert.py
+/litert_inspection.txt
+/test_*.py
+/test_*.txt
+/wget-log

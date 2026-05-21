@@ -24,7 +24,7 @@ class LiteRTClient:
         self._load_engine()
 
     def _load_engine(self):
-        """Carga el motor LiteRT con estrategia de backend flexible."""
+        """Carga el motor LiteRT con estrategia de backend flexible y robusta."""
         try:
             path = Path(self.model_path)
             if not path.is_absolute():
@@ -36,15 +36,27 @@ class LiteRTClient:
 
             logger.info(f"Cargando motor LiteRT desde {path}...")
             
-            # Intentar carga automática (el SDK elegirá el mejor backend disponible)
+            # 1. Intentar con GPU (Vulkan/WebGPU) para rendimiento y evasión de fallos de CPU en Linux
             try:
-                self.engine = litert_lm.Engine(str(path))
-                logger.info("Motor LiteRT cargado exitosamente (Backend automático).")
-            except Exception as e:
-                logger.warning(f"Carga automática falló ({e}). Intentando fallback a CPU...")
-                # Fallback explícito a CPU para máxima compatibilidad
-                self.engine = litert_lm.Engine(str(path), vision_backend=litert_lm.Backend.CPU)
-                logger.info("Motor LiteRT cargado exitosamente (Fallback CPU).")
+                logger.info("Intentando cargar motor LiteRT con Backend GPU y Vision GPU...")
+                self.engine = litert_lm.Engine(
+                    str(path),
+                    backend=litert_lm.Backend.GPU,
+                    vision_backend=litert_lm.Backend.GPU,
+                    enable_speculative_decoding=True
+                )
+                logger.info("Motor LiteRT cargado exitosamente (Backend GPU con decodificación especulativa).")
+            except Exception as gpu_err:
+                logger.warning(f"Carga con GPU falló ({gpu_err}). Intentando carga automática...")
+                # 2. Intentar carga automática (el SDK elegirá el mejor backend disponible)
+                try:
+                    self.engine = litert_lm.Engine(str(path))
+                    logger.info("Motor LiteRT cargado exitosamente (Backend automático).")
+                except Exception as auto_err:
+                    logger.warning(f"Carga automática falló ({auto_err}). Intentando fallback a CPU...")
+                    # 3. Fallback explícito a CPU para máxima compatibilidad
+                    self.engine = litert_lm.Engine(str(path), vision_backend=litert_lm.Backend.CPU)
+                    logger.info("Motor LiteRT cargado exitosamente (Fallback CPU).")
                 
         except Exception as e:
             logger.error(f"Error fatal cargando motor LiteRT: {e}")

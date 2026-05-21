@@ -559,6 +559,18 @@ async def open_terminal_and_run_command(command: str) -> str:
     command = _sanitize_tool_args(command)
     session_name = "asistenteia"
     
+    # Envolver el comando para capturar el código de salida y mostrar un banner profesional si no es background
+    wrapped_command = command
+    if not command.strip().endswith("&"):
+        wrapped_command = (
+            f"{{ {command.strip()} ; }} ; EXIT_CODE=$? ; "
+            f"if [ $EXIT_CODE -eq 0 ]; then "
+            f"echo -e \"\\n\\033[1;30m[AsistenteIA: Proceso finalizado con código 0]\\033[0m\"; "
+            f"else "
+            f"echo -e \"\\n\\033[1;31m[AsistenteIA: Proceso finalizado con código de error $EXIT_CODE]\\033[0m\"; "
+            f"fi"
+        )
+    
     # 1. Comprobar si la sesión de tmux existe y si está activa en pantalla (attached)
     session_exists = False
     session_attached = False
@@ -592,8 +604,8 @@ async def open_terminal_and_run_command(command: str) -> str:
     if session_attached:
         try:
             logger.info(f"Enviando comando a sesión de tmux existente: {command}")
-            # Mandamos el comando y un ENTER (C-m)
-            subprocess.run(["tmux", "send-keys", "-t", session_name, command, "C-m"], check=True)
+            # Mandamos el comando envuelto y un ENTER (C-m)
+            subprocess.run(["tmux", "send-keys", "-t", session_name, wrapped_command, "C-m"], check=True)
             return f"Éxito: Se ha enviado el comando a la terminal abierta: {command}"
         except Exception as e:
             logger.error(f"Error enviando comando a tmux: {e}")
@@ -613,7 +625,7 @@ async def open_terminal_and_run_command(command: str) -> str:
         
     try:
         # tmux new-session -A -s <name> se acopla a la sesión si existe, o la crea si no.
-        tmux_cmd = f"tmux new-session -A -s {session_name}"
+        tmux_cmd = f"tmux new-session -A -s {session_name} bash"
         args = [chosen_terminal, "-e", "bash", "-c", tmux_cmd]
             
         logger.info(f"Abriendo terminal {chosen_terminal} con sesión tmux '{session_name}'")
@@ -627,8 +639,8 @@ async def open_terminal_and_run_command(command: str) -> str:
         # Esperar un momento a que la terminal y tmux se inicien/adjunten gráficamente antes de mandar las teclas
         await asyncio.sleep(0.8)
         
-        # Enviar el comando
-        subprocess.run(["tmux", "send-keys", "-t", session_name, command, "C-m"], check=True)
+        # Enviar el comando envuelto
+        subprocess.run(["tmux", "send-keys", "-t", session_name, wrapped_command, "C-m"], check=True)
         
         return f"Éxito: Se ha abierto una ventana de {chosen_terminal.capitalize()} y ejecutado: {command}"
     except Exception as e:
@@ -644,6 +656,7 @@ async def read_terminal_screen() -> str:
     """
     import subprocess
     import asyncio
+    import re
     
     # Pequeño retardo para dar tiempo a la terminal a renderizar los cambios del comando recién enviado
     await asyncio.sleep(0.8)
@@ -670,10 +683,24 @@ async def read_terminal_screen() -> str:
             output = capture.stdout.strip()
             if not output:
                 return "La pantalla de la terminal está vacía."
+                
+            # Buscar si hay algún indicador de código de salida en el contenido capturado
+            # El patrón es: [AsistenteIA: Proceso finalizado con código X]
+            exit_code_match = re.search(r"\[AsistenteIA: Proceso finalizado con código(?: de error)? (\d+)\]", output)
+            
             # Devolver las últimas 40 líneas para que el contexto no se sature pero tenga suficiente detalle
             lines = output.splitlines()
             last_lines = lines[-40:]
-            return "CONTENIDO VISIBLE EN LA TERMINAL:\n\n" + "\n".join(last_lines)
+            screen_content = "\n".join(last_lines)
+            
+            if exit_code_match:
+                exit_code = int(exit_code_match.group(1))
+                if exit_code != 0:
+                    return f"❌ ERROR EN TERMINAL (Código de salida: {exit_code})\n\nCONTENIDO VISIBLE EN LA TERMINAL:\n\n{screen_content}"
+                else:
+                    return f"✅ COMANDO COMPLETADO EXITOSAMENTE (Código de salida: 0)\n\nCONTENIDO VISIBLE EN LA TERMINAL:\n\n{screen_content}"
+            
+            return "CONTENIDO VISIBLE EN LA TERMINAL:\n\n" + screen_content
         else:
             return f"Error al capturar la pantalla de la terminal: {capture.stderr.strip()}"
     except Exception as e:

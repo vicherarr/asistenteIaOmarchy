@@ -221,3 +221,43 @@ def test_parsed_response_dataclass():
     assert resp.response_text == "Test response"
     assert resp.commands[0].command == "test"
     assert resp.action_type == "both"
+
+
+@pytest.mark.asyncio
+async def test_read_terminal_screen_success_status():
+    from src.command_executor import read_terminal_screen
+    with patch('subprocess.run') as mock_run:
+        # Mock tmux has-session (success)
+        mock_has_session = MagicMock()
+        mock_has_session.returncode = 0
+        
+        # Mock tmux capture-pane (success with a successful exit code marker)
+        mock_capture = MagicMock()
+        mock_capture.returncode = 0
+        mock_capture.stdout = "ls -la\n[AsistenteIA: Proceso finalizado con código 0]\n"
+        
+        mock_run.side_effect = [mock_has_session, mock_capture]
+        
+        result = await read_terminal_screen()
+        assert "COMANDO COMPLETADO EXITOSAMENTE" in result
+        assert "Código de salida: 0" in result
+
+
+@pytest.mark.asyncio
+async def test_read_terminal_screen_error_status():
+    from src.command_executor import read_terminal_screen
+    with patch('subprocess.run') as mock_run:
+        # Mock tmux has-session (success)
+        mock_has_session = MagicMock()
+        mock_has_session.returncode = 0
+        
+        # Mock tmux capture-pane (success with an error exit code marker)
+        mock_capture = MagicMock()
+        mock_capture.returncode = 0
+        mock_capture.stdout = "cat non_existent\n[AsistenteIA: Proceso finalizado con código de error 127]\n"
+        
+        mock_run.side_effect = [mock_has_session, mock_capture]
+        
+        result = await read_terminal_screen()
+        assert "ERROR EN TERMINAL" in result
+        assert "Código de salida: 127" in result
