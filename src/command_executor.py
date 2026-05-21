@@ -11,6 +11,31 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+EXIT_CODE_EXPLANATIONS = {
+    0: "El comando se ejecutó correctamente sin errores.",
+    1: "Error genérico. El comando falló por una razón no específica.",
+    2: "Uso incorrecto del comando. Se pasaron argumentos inválidos o falta algún parámetro requerido.",
+    126: "El archivo existe pero no tiene permisos de ejecución o no es un ejecutable válido.",
+    127: "Comando no encontrado. El programa que intentas ejecutar no está instalado o no está en el PATH del sistema.",
+    128: "El proceso recibió una señal fatal no manejada.",
+    130: "El proceso fue interrumpido manualmente con Ctrl+C (SIGINT).",
+    137: "El proceso fue terminado abruptamente por falta de memoria (SIGKILL / OOM killer).",
+    139: "El proceso falló con un error de segmentación (SIGSEGV). Accedió a memoria que no le pertenecía.",
+    143: "El proceso recibió una señal de terminación (SIGTERM).",
+}
+
+def explain_exit_code(code: int) -> str:
+    """Devuelve una explicación en lenguaje natural para un código de salida."""
+    if code == 0:
+        return EXIT_CODE_EXPLANATIONS[0]
+    explanation = EXIT_CODE_EXPLANATIONS.get(code)
+    if explanation:
+        return explanation
+    if code > 128:
+        signal_num = code - 128
+        return f"El proceso fue terminado por la señal {signal_num} del sistema."
+    return f"El comando falló con un código de error no estándar ({code})."
+
 
 @dataclass
 class SystemCommand:
@@ -131,7 +156,9 @@ class CommandExecutor:
                 logger.info(f"Comando ejecutado: {command}")
                 return True, stdout.decode().strip()
             else:
-                error_msg = stderr.decode().strip() or f"Código de salida: {process.returncode}"
+                stderr_msg = stderr.decode().strip()
+                explanation = explain_exit_code(process.returncode)
+                error_msg = stderr_msg if stderr_msg else explanation
                 logger.error(f"Error ejecutando '{command}': {error_msg}")
                 return False, error_msg
 
@@ -442,7 +469,12 @@ async def read_log_file(service: str = "asistenteia") -> str:
             stderr=subprocess.PIPE
         )
         stdout, stderr = await process.communicate()
-        return f"Logs de {service}:\n{stdout.decode()}" if process.returncode == 0 else f"Error: {stderr.decode()}"
+        if process.returncode == 0:
+            return f"Logs de {service}:\n{stdout.decode()}"
+        else:
+            explanation = explain_exit_code(process.returncode)
+            stderr_msg = stderr.decode().strip()
+            return f"Error leyendo logs: {stderr_msg or explanation}"
     except Exception as e:
         return f"Error: {e}"
 
@@ -562,12 +594,14 @@ async def open_terminal_and_run_command(command: str) -> str:
     # Envolver el comando para capturar el código de salida y mostrar un banner profesional si no es background
     wrapped_command = command
     if not command.strip().endswith("&"):
+        # Extraer el nombre base del comando para el banner
+        cmd_name = command.strip().split()[0].split("/")[-1] if command.strip() else "comando"
         wrapped_command = (
             f"{{ {command.strip()} ; }} ; EXIT_CODE=$? ; "
             f"if [ $EXIT_CODE -eq 0 ]; then "
-            f"echo -e \"\\n\\033[1;30m[AsistenteIA: Proceso finalizado con código 0]\\033[0m\"; "
+            f"echo -e \"\\n\\033[1;30m[AsistenteIA: '{cmd_name}' finalizado correctamente]\\033[0m\"; "
             f"else "
-            f"echo -e \"\\n\\033[1;31m[AsistenteIA: Proceso finalizado con código de error $EXIT_CODE]\\033[0m\"; "
+            f"echo -e \"\\n\\033[1;31m[AsistenteIA: '{cmd_name}' falló con código de error $EXIT_CODE]\\033[0m\"; "
             f"fi"
         )
     
@@ -685,8 +719,9 @@ async def read_terminal_screen() -> str:
                 return "La pantalla de la terminal está vacía."
                 
             # Buscar si hay algún indicador de código de salida en el contenido capturado
-            # El patrón es: [AsistenteIA: Proceso finalizado con código X]
-            exit_code_match = re.search(r"\[AsistenteIA: Proceso finalizado con código(?: de error)? (\d+)\]", output)
+            # El patrón es: [AsistenteIA: 'comando' finalizado correctamente] o [AsistenteIA: 'comando' falló con código de error X]
+            success_match = re.search(r"\[AsistenteIA: '([^']+)'\s+finalizado correctamente\]", output)
+            exit_code_match = re.search(r"\[AsistenteIA: '([^']+)'\s+falló con código de error (\d+)\]", output)
             
             # Devolver las últimas 40 líneas para que el contexto no se sature pero tenga suficiente detalle
             lines = output.splitlines()
@@ -694,11 +729,14 @@ async def read_terminal_screen() -> str:
             screen_content = "\n".join(last_lines)
             
             if exit_code_match:
-                exit_code = int(exit_code_match.group(1))
-                if exit_code != 0:
-                    return f"❌ ERROR EN TERMINAL (Código de salida: {exit_code})\n\nCONTENIDO VISIBLE EN LA TERMINAL:\n\n{screen_content}"
-                else:
-                    return f"✅ COMANDO COMPLETADO EXITOSAMENTE (Código de salida: 0)\n\nCONTENIDO VISIBLE EN LA TERMINAL:\n\n{screen_content}"
+                cmd_name = exit_code_match.group(1)
+                exit_code = int(exit_code_match.group(2))
+                explanation = explain_exit_code(exit_code)
+                return f"❌ ERROR EN TERMINAL: '{cmd_name}' falló (código {exit_code})\n\nQué significa: {explanation}\n\nCONTENIDO VISIBLE EN LA TERMINAL:\n\n{screen_content}"
+            elif success_match:
+                cmd_name = success_match.group(1)
+                explanation = explain_exit_code(0)
+                return f"✅ '{cmd_name}' completado exitosamente\n\nQué significa: {explanation}\n\nCONTENIDO VISIBLE EN LA TERMINAL:\n\n{screen_content}"
             
             return "CONTENIDO VISIBLE EN LA TERMINAL:\n\n" + screen_content
         else:
