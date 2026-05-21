@@ -394,29 +394,6 @@ class SpotlightWindow(QMainWindow):
         self.stop_button = PremiumStopButton()
         self.stop_button.clicked.connect(self.on_cancel)
         self.header_layout.addWidget(self.stop_button)
-
-        # Botón para minimizar / ocultar panel
-        self.minimize_button = QPushButton("🗕")
-        self.minimize_button.setToolTip("Minimizar / Ocultar panel")
-        self.minimize_button.setFixedSize(32, 32)
-        self.minimize_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(137, 180, 250, 30);
-                border: 1px solid rgba(137, 180, 250, 120);
-                border-radius: 16px;
-                color: #89b4fa;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: rgba(137, 180, 250, 60);
-            }
-            QPushButton:pressed {
-                background-color: #89b4fa;
-                color: #1e1e2e;
-            }
-        """)
-        self.minimize_button.clicked.connect(self.on_minimize)
-        self.header_layout.addWidget(self.minimize_button)
         
         self.main_layout.addLayout(self.header_layout)
 
@@ -582,7 +559,6 @@ class SpotlightWindow(QMainWindow):
         self.last_recording_state = False
         self.pending_gui_request = False
         self._resetting = False
-        self._user_collapsed = False
 
     @Property(int)
     def windowHeight(self):
@@ -621,14 +597,6 @@ class SpotlightWindow(QMainWindow):
         except Exception as e:
             print(f"Error cancelando: {e}")
 
-    def on_minimize(self):
-        """Si la ventana está expandida, la colapsa. Si ya está colapsada, la oculta."""
-        if self._height > 110:
-            self.chat_area.hide()
-            self.animate_height(110)
-        else:
-            self.hide()
-
     @asyncSlot()
     async def on_reset(self):
         """Reinicia el historial de conversacion en el backend."""
@@ -644,12 +612,7 @@ class SpotlightWindow(QMainWindow):
             self.stop_button.set_state("inactive")
             self.visualizer.set_state("inactive")
             self.chat_area.clear()
-            
-            if self._height > 110:
-                self.chat_area.hide()
-                self.animate_height(110)
-            else:
-                self.chat_area.hide()
+            self.chat_area.hide()
                 
             self.input_field.setEnabled(True)
             self.input_field.clear()
@@ -751,7 +714,7 @@ class SpotlightWindow(QMainWindow):
                         """)
                         
                         # Actualizar automáticamente tras finalizar
-                        if not self.isHidden() and not self.pending_gui_request and not self._resetting and not self._user_collapsed:
+                        if not self.isHidden() and not self.pending_gui_request and not self._resetting:
                             await self.update_last_response()
                     
                     self.last_recording_state = is_processing
@@ -866,15 +829,9 @@ class SpotlightWindow(QMainWindow):
                 self.input_field.setFocus()
 
     def keyPressEvent(self, event: QKeyEvent):
-        # ESC para minimizar o cerrar panel
+        # ESC para cerrar panel
         if event.key() == Qt.Key_Escape:
-            if self._height > 110:
-                self._user_collapsed = True
-                self.chat_area.hide()
-                self.animate_height(110)
-                QTimer.singleShot(2000, lambda: setattr(self, '_user_collapsed', False))
-            else:
-                self.hide()
+            self.hide()
                 
         # Ctrl+R para Reiniciar
         elif event.key() == Qt.Key_R and event.modifiers() & Qt.ControlModifier:

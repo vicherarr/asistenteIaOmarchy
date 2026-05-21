@@ -31,6 +31,7 @@ class TTSEngine:
         self._kokoro_pipeline = None
         self._playback_process: Optional[asyncio.subprocess.Process] = None
         self._is_playing = False
+        self._active_stream = None
         self._init_kokoro()
 
     def _init_kokoro(self) -> None:
@@ -78,6 +79,7 @@ class TTSEngine:
             # Usamos el dispositivo predeterminado de PipeWire (None), el cual cambia automáticamente
             # al dispositivo de salida activo (incluyendo auriculares bluetooth seleccionados)
             with sd.OutputStream(samplerate=KOKORO_SAMPLE_RATE, channels=1, dtype='float32') as stream:
+                self._active_stream = stream
                 for _, _, audio in generator:
                     if not self._is_playing:
                         logger.info("Generación de audio Kokoro cancelada por interrupción")
@@ -94,6 +96,7 @@ class TTSEngine:
                         audio_chunks.append(audio_np)
                         # Reproducir chunk de audio en tiempo real
                         stream.write(audio_np.astype('float32'))
+                self._active_stream = None
             
             if not audio_chunks:
                 return None
@@ -207,6 +210,16 @@ class TTSEngine:
     def stop(self) -> None:
         """Detiene la reproducción en curso."""
         self._is_playing = False
+        
+        # Parar stream activo de Kokoro
+        if self._active_stream:
+            try:
+                self._active_stream.stop()
+                self._active_stream.close()
+            except Exception:
+                pass
+            self._active_stream = None
+        
         try:
             import sounddevice as sd
             sd.stop()

@@ -262,6 +262,11 @@ async def cancel_processing(state: AppState = Depends(get_app_state)):
         state.current_task.cancel()
         cancelled = True
 
+    # Cancelar tarea de TTS en segundo plano
+    if state.assistant_service._current_tts_task and not state.assistant_service._current_tts_task.done():
+        state.assistant_service._current_tts_task.cancel()
+        cancelled = True
+
     state.processing = False
     state.is_recording = False
     
