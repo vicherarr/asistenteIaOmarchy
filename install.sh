@@ -13,13 +13,13 @@ echo "=== AsistenteIA - Instalación en CachyOS ==="
 # -----------------------------------------------------------------------------
 # 1. Actualizar sistema (opcional, omitido por defecto para evitar roturas)
 # -----------------------------------------------------------------------------
-echo "[1/8] Saltando actualización completa del sistema para mayor velocidad..."
+echo "[1/7] Saltando actualización completa del sistema para mayor velocidad..."
 # sudo pacman -Syu --noconfirm
 
 # -----------------------------------------------------------------------------
 # 2. Instalar dependencias base de sistema
 # -----------------------------------------------------------------------------
-echo "[2/8] Instalando dependencias base..."
+echo "[2/7] Instalando dependencias base..."
 sudo pacman -S --needed --noconfirm \
     pipewire \
     wireplumber \
@@ -30,6 +30,7 @@ sudo pacman -S --needed --noconfirm \
     playerctl \
     wl-clipboard \
     jq \
+    python3.12 \
     python \
     python-pip \
     python-virtualenv \
@@ -40,7 +41,7 @@ sudo pacman -S --needed --noconfirm \
 # -----------------------------------------------------------------------------
 # 3. Instalar Ollama (vía yay si no está disponible)
 # -----------------------------------------------------------------------------
-echo "[3/8] Instalando Ollama..."
+echo "[3/7] Instalando Ollama..."
 if ! command -v ollama &>/dev/null; then
     if command -v yay &>/dev/null; then
         yay -S --noconfirm ollama
@@ -60,57 +61,30 @@ echo "Descargando modelo ministral-3:3b..."
 ollama pull ministral-3:3b || true
 
 # -----------------------------------------------------------------------------
-# 4. Instalar whisper.cpp para transcripción
+# 4. Instalar grim y slurp para capturas de pantalla
 # -----------------------------------------------------------------------------
-echo "[4/8] Instalando whisper.cpp..."
-if ! command -v whisper-cli &>/dev/null; then
-    echo "Intentando instalar whisper.cpp vía pacman..."
-    if sudo pacman -S --needed --noconfirm whisper.cpp &>/dev/null; then
-        echo "whisper.cpp instalado correctamente desde los repositorios oficiales."
-    elif command -v yay &>/dev/null; then
-        echo "Instalando whisper.cpp vía AUR (yay)..."
-        yay -S --noconfirm whisper.cpp
-    else
-        echo "Instalar whisper.cpp manualmente: yay -S whisper.cpp o sudo pacman -S whisper.cpp"
-    fi
-else
-    echo "whisper.cpp ya instalado."
-fi
-
-# Descargar modelo base de whisper si no existe
-WHISPER_MODEL="$HOME/.cache/whisper/ggml-base.bin"
-if [ ! -f "$WHISPER_MODEL" ]; then
-    echo "Descargando modelo whisper base..."
-    mkdir -p "$HOME/.cache/whisper"
-    curl -L -o "$WHISPER_MODEL" \
-        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin"
-fi
-
-# -----------------------------------------------------------------------------
-# 5. Instalar grim y slurp para capturas de pantalla
-# -----------------------------------------------------------------------------
-echo "[5/8] Instalando grim y slurp..."
+echo "[4/7] Instalando grim y slurp..."
 sudo pacman -S --needed --noconfirm grim slurp
 
 # -----------------------------------------------------------------------------
-# 6. Configurar entorno Python del proyecto (incluye Kokoro TTS)
+# 5. Configurar entorno Python del proyecto (incluye Kokoro TTS y Whisper)
 # -----------------------------------------------------------------------------
-echo "[6/8] Configurando entorno Python..."
+echo "[5/7] Configurando entorno Python..."
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$PROJECT_DIR"
 
 if [ ! -d "venv" ]; then
-    # Usar Python 3.11 para compatibilidad con blis/spacy/thinc
-    # Python 3.14 no es compatible (C API changes rompen la compilación)
-    if command -v python3.11 &>/dev/null; then
-        echo "Usando Python 3.11 para máxima compatibilidad..."
-        python3.11 -m venv venv
-    elif command -v python3.12 &>/dev/null; then
+    # Python 3.12 es la versión recomendada (kokoro/misaki no soportan 3.13+)
+    if command -v python3.12 &>/dev/null; then
         echo "Usando Python 3.12..."
         python3.12 -m venv venv
+    elif command -v python3.11 &>/dev/null; then
+        echo "Usando Python 3.11..."
+        python3.11 -m venv venv
     else
-        echo "AVISO: Usando python por defecto. Si falla, instala python3.11 o python3.12."
-        python -m venv venv
+        echo "ERROR: Se requiere Python 3.11 o 3.12."
+        echo "Instala python3.12 o python3.11 y vuelve a ejecutar este script."
+        exit 1
     fi
 fi
 
@@ -128,9 +102,9 @@ echo "Esto es automático y se guardará en caché."
 echo ""
 
 # -----------------------------------------------------------------------------
-# 7. Configurar keybinding de Hyprland
+# 6. Configurar keybinding de Hyprland
 # -----------------------------------------------------------------------------
-echo "[7/8] Configurando keybindings en Hyprland..."
+echo "[6/7] Configurando keybindings en Hyprland..."
 
 BINDINGS_FILE="$HOME/.config/hypr/bindings.lua"
 if [ -f "$BINDINGS_FILE" ]; then
@@ -150,9 +124,9 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# 8. Instalar servicio systemd
+# 7. Instalar servicio systemd
 # -----------------------------------------------------------------------------
-echo "[8/8] Instalando servicio systemd..."
+echo "[7/7] Instalando servicio systemd..."
 mkdir -p "$HOME/.config/systemd/user"
 cp "$PROJECT_DIR/services/asistenteia.service" "$HOME/.config/systemd/user/"
 systemctl --user daemon-reload

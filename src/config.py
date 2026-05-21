@@ -16,13 +16,13 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     
     # LiteRT
-    LITERT_MODEL_PATH: str = "models/gemma-4-e4b.litertlm"
+    LITERT_MODEL_PATH: str = "models/gemma-4-e2b.litertlm"
 
     # Assistant
     MAX_HISTORY: int = 10
     
     # TTS
-    KOKORO_VOICE: str = "em_santa"
+    KOKORO_VOICE: str = "em_alex"
     KOKORO_LANG: str = "e"
     
     # Paths
