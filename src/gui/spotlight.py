@@ -553,20 +553,30 @@ class SpotlightWindow(QMainWindow):
         self.visualizer.set_state("thinking")
         
         # Mostrar lo que el usuario escribe inmediatamente
-        self.chat_area.setMarkdown(f"**Tú:** {text}\n\n---\n\n_Buscando respuesta..._")
+        self.chat_area.setMarkdown(f"**Tú:** {text}\n\n---\n\n**AsistenteIA:** ...")
 
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post("http://127.0.0.1:8765/transcribe", json={"text": text})
-                if response.status_code == 200:
-                    data = response.json()
-                    response_text = data.get("response_text", "")
-                    full_chat = f"**Tú:** {text}\n\n---\n\n**AsistenteIA:** {response_text}"
-                    self.chat_area.setMarkdown(full_chat)
-                elif response.status_code == 409:
-                    pass
-                else:
-                    self.chat_area.setPlainText(f"Error: {response.status_code}")
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream("POST", "http://127.0.0.1:8765/transcribe/stream", json={"text": text}) as response:
+                    if response.status_code == 200:
+                        first_chunk = True
+                        accumulated_response = ""
+                        async for chunk in response.aiter_text():
+                            if first_chunk:
+                                first_chunk = False
+                                self.chat_area.setMarkdown(f"**Tú:** {text}\n\n---\n\n**AsistenteIA:** ")
+                            accumulated_response += chunk
+                            full_chat = f"**Tú:** {text}\n\n---\n\n**AsistenteIA:** {accumulated_response}"
+                            self.chat_area.setMarkdown(full_chat)
+                            
+                            # Auto-scroll al final
+                            self.chat_area.verticalScrollBar().setValue(
+                                self.chat_area.verticalScrollBar().maximum()
+                            )
+                    elif response.status_code == 409:
+                        pass
+                    else:
+                        self.chat_area.setPlainText(f"Error: {response.status_code}")
         except Exception as e:
             self.chat_area.setPlainText(f"Error de conexión: {e}")
         finally:

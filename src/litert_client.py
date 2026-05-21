@@ -62,6 +62,133 @@ class LiteRTClient:
             logger.error(f"Error fatal cargando motor LiteRT: {e}")
             self.engine = None
 
+    async def chat_stream(
+        self,
+        prompt: str,
+        tools: Optional[List[Callable]] = None,
+        system_prompt: Optional[str] = None,
+        history: Optional[List[ChatMessage]] = None,
+        image_path: Optional[str] = None
+    ):
+        """
+        Envía un mensaje al modelo y transmite los chunks de texto en tiempo real.
+        """
+        if not self.engine:
+            yield "Error: Motor LiteRT no inicializado."
+            return
+
+        # Wrapper para ejecutar herramientas asíncronas de forma síncrona dentro de LiteRT
+        sync_tools = []
+        if tools:
+            import inspect
+            import functools
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = asyncio.get_event_loop()
+
+            for tool in tools:
+                if inspect.iscoroutinefunction(tool):
+                    def make_wrapper(async_func):
+                        @functools.wraps(async_func)
+                        def wrapper(*args, **kwargs):
+                            future = asyncio.run_coroutine_threadsafe(async_func(*args, **kwargs), loop)
+                            return future.result()
+                        wrapper.__signature__ = inspect.signature(async_func)
+                        return wrapper
+                    sync_tools.append(make_wrapper(tool))
+                else:
+                    sync_tools.append(tool)
+
+        queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def run_inference():
+            try:
+                # --- Límites de truncamiento dinámico ---
+                MAX_SYSTEM_CHARS       = 2400
+                MAX_RECENT_MSG_CHARS   = 6000
+                MAX_HIST_MSG_CHARS     = 600
+                MAX_PROMPT_CHARS       = 2000
+
+                def _smart_trunc(text: str, limit: int) -> str:
+                    if len(text) <= limit:
+                        return text
+                    truncated = text[:limit]
+                    last_space = truncated.rfind(' ')
+                    if last_space > limit - 30:
+                        truncated = truncated[:last_space]
+                    code_blocks = truncated.count("```")
+                    if code_blocks % 2 != 0:
+                        truncated += "\n```"
+                    return truncated.strip() + " [...]"
+
+                formatted_messages = []
+                
+                if system_prompt:
+                    formatted_messages.append({
+                        "role": "system",
+                        "content": [{"type": "text", "text": _smart_trunc(system_prompt, MAX_SYSTEM_CHARS)}]
+                    })
+                
+                if history:
+                    total_msgs = len(history)
+                    for idx, msg in enumerate(history):
+                        role = "model" if msg.role == "assistant" else msg.role
+                        if total_msgs - idx <= 2:
+                            msg_limit = MAX_RECENT_MSG_CHARS
+                        else:
+                            msg_limit = MAX_HIST_MSG_CHARS
+                            
+                        formatted_messages.append({
+                            "role": role,
+                            "content": [{"type": "text", "text": _smart_trunc(msg.content, msg_limit)}]
+                        })
+
+                with self.engine.create_conversation(messages=formatted_messages, tools=sync_tools) as conversation:
+                    content_parts = [{"type": "text", "text": _smart_trunc(prompt, MAX_PROMPT_CHARS)}]
+                    if image_path:
+                        content_parts.append({"type": "image", "path": str(image_path)})
+                    
+                    current_message = {
+                        "role": "user",
+                        "content": content_parts
+                    }
+
+                    stream = conversation.send_message_async(current_message)
+                    for chunk in stream:
+                        text_parts = []
+                        if isinstance(chunk, dict):
+                            for part in chunk.get("content", []):
+                                if part.get("type") == "text":
+                                    text_parts.append(part.get("text", ""))
+                        elif hasattr(chunk, "text"):
+                            text_parts.append(chunk.text)
+                        
+                        text_to_send = "".join(text_parts)
+                        if text_to_send:
+                            loop.call_soon_threadsafe(queue.put_nowait, ("text", text_to_send))
+                            
+                loop.call_soon_threadsafe(queue.put_nowait, ("done", None))
+            except Exception as e:
+                logger.error(f"Error en inferencia LiteRT streaming (API 2026): {e}")
+                loop.call_soon_threadsafe(queue.put_nowait, ("error", str(e)))
+
+        async with self._lock:
+            inference_task = asyncio.create_task(asyncio.to_thread(run_inference))
+            try:
+                while True:
+                    msg_type, val = await queue.get()
+                    if msg_type == "text":
+                        yield val
+                    elif msg_type == "done":
+                        break
+                    elif msg_type == "error":
+                        yield f"\n[Error en la generación: {val}]"
+                        break
+            finally:
+                await inference_task
+
     async def chat(
         self, 
         prompt: str, 

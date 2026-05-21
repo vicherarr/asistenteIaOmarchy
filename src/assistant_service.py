@@ -106,17 +106,18 @@ class AssistantService:
         except Exception as e:
             logger.warning(f"No se pudo enviar notificación o bip: {e}")
 
-    async def process_transcription(
+    async def process_transcription_stream(
         self,
         text: str,
         conversation_history: list[ChatMessage],
         sink_id: Optional[str] = None,
         max_history: int = 10
-    ) -> dict:
+    ):
         """
-        Procesa el texto del usuario usando LiteRT y herramientas nativas.
+        Procesa el texto del usuario usando LiteRT y herramientas de forma reactiva,
+        transmitiendo los chunks resultantes en tiempo real.
         """
-        logger.info(f"Procesando transcripción con LiteRT: {text[:100]}...")
+        logger.info(f"Procesando transcripción con LiteRT (streaming): {text[:100]}...")
 
         # Añadir mensaje del usuario al historial
         conversation_history.append(ChatMessage(role="user", content=text))
@@ -131,39 +132,50 @@ class AssistantService:
             logger.error(f"Error cargando system prompt: {e}")
             system_prompt = "Eres un asistente de voz para Linux llamado AsistenteIA."
 
+        # Acumular la respuesta de texto completa en segundo plano
+        accumulated_text = ""
+
         # Primera llamada al modelo
-        # LiteRT ejecutará las herramientas automáticamente si lo considera necesario
-        response_text = await self.litert.chat(
+        async for chunk in self.litert.chat_stream(
             prompt=text,
             tools=self.tools,
             system_prompt=system_prompt,
             history=conversation_history[:-1] # Pasamos el historial previo
-        )
-
-        logger.info(f"Respuesta de LiteRT: {response_text}")
+        ):
+            accumulated_text += chunk
+            yield chunk
 
         # Comprobar si una herramienta de visión dejó una imagen pendiente
         pending_image_path = get_pending_image()
         if pending_image_path:
             logger.info("Imagen detectada de tool 'analyze_screen'. Realizando segunda pasada visual...")
             try:
-                # Segunda llamada incluyendo la RUTA de la imagen (más estable en 2026)
-                response_text = await self.litert.chat(
+                if accumulated_text:
+                    yield "\n\n"
+                    accumulated_text += "\n\n"
+                
+                async for chunk in self.litert.chat_stream(
                     prompt="Describe qué ves en esta imagen y responde a la petición original del usuario.",
                     image_path=pending_image_path,
                     system_prompt=system_prompt,
                     history=conversation_history # Incluimos el turno actual
-                )
-                Path(pending_image_path).unlink()
+                ):
+                    accumulated_text += chunk
+                    yield chunk
+                
+                Path(pending_image_path).unlink(missing_ok=True)
             except Exception as e:
                 logger.error(f"Error procesando imagen pendiente: {e}")
-                response_text = "Lo siento, tuve un problema al procesar la imagen de tu pantalla."
+                err_msg = "\nLo siento, tuve un problema al procesar la imagen de tu pantalla."
+                accumulated_text += err_msg
+                yield err_msg
 
-        # Guardar respuesta en el historial
-        conversation_history.append(ChatMessage(role="assistant", content=response_text))
+        # Guardar respuesta final acumulada en el historial
+        conversation_history.append(ChatMessage(role="assistant", content=accumulated_text))
 
-        if response_text:
-            clean_text = strip_markdown(response_text)
+        # Una vez terminado todo el streaming de texto, procedemos con el TTS en segundo plano
+        if accumulated_text:
+            clean_text = strip_markdown(accumulated_text)
             
             # Cancelar TTS previo si existe
             if self._current_tts_task and not self._current_tts_task.done():
@@ -171,12 +183,30 @@ class AssistantService:
                 self.tts.stop() # Asegurar parada inmediata del proceso
 
             # Iniciamos la síntesis y reproducción en SEGUNDO PLANO
-            # Así la interfaz visual puede mostrar el texto de inmediato
             self._current_tts_task = asyncio.create_task(self.tts.speak(clean_text, sink_id=sink_id))
+
+    async def process_transcription(
+        self,
+        text: str,
+        conversation_history: list[ChatMessage],
+        sink_id: Optional[str] = None,
+        max_history: int = 10
+    ) -> dict:
+        """
+        Versión síncrona para compatibilidad: acumula el stream y devuelve el resultado completo.
+        """
+        response_text = ""
+        async for chunk in self.process_transcription_stream(
+            text=text,
+            conversation_history=conversation_history,
+            sink_id=sink_id,
+            max_history=max_history
+        ):
+            response_text += chunk
 
         return {
             "status": "success",
             "response_text": response_text,
             "commands_executed": 1 if "Éxito" in response_text else 0,
-            "audio_file": None, # Ya no esperamos por el path
+            "audio_file": None,
         }

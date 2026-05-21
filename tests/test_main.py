@@ -92,6 +92,19 @@ def test_transcribe_success(client, mock_app_state):
     assert data["commands_executed"] == 1
 
 
+def test_transcribe_stream_success(client, mock_app_state):
+    async def mock_stream(*args, **kwargs):
+        yield "Abriendo "
+        yield "Spotify"
+
+    mock_app_state.assistant_service.process_transcription_stream = mock_stream
+
+    response = client.post("/transcribe/stream", json={"text": "Abre Spotify"})
+
+    assert response.status_code == 200
+    assert response.text == "Abriendo Spotify"
+
+
 def test_reset_conversation(client, mock_app_state):
     mock_app_state.conversation_history = [{"role": "user", "content": "test"}]
     

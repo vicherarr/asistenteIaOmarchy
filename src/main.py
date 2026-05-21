@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Depends, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from src.audio_manager import AudioManager
@@ -103,6 +103,45 @@ async def global_exception_handler(request: Request, exc: Exception):
         status_code=500,
         content={"status": "error", "message": str(exc)},
     )
+
+
+@app.post("/transcribe/stream")
+async def handle_transcription_stream(
+    request: TranscriptionRequest,
+    state: AppState = Depends(get_app_state)
+):
+    """Endpoint de streaming: recibe texto, procesa con LiteRT en chunks y genera voz al final."""
+    if not request.text.strip():
+        raise HTTPException(status_code=400, detail="Texto vacío")
+
+    # Cancelar cualquier tarea en curso (audio o transcripción previa)
+    if state.current_task and not state.current_task.done():
+        state.current_task.cancel()
+    
+    # Detener TTS si estaba sonando algo de una petición anterior
+    state.tts_engine.stop()
+
+    async def stream_generator():
+        state.processing = True
+        current_task = asyncio.current_task()
+        state.current_task = current_task
+        try:
+            sink_id = state.audio_manager.default_sink
+            async for chunk in state.assistant_service.process_transcription_stream(
+                text=request.text,
+                conversation_history=state.conversation_history,
+                sink_id=sink_id,
+                max_history=MAX_HISTORY
+            ):
+                yield chunk
+        except asyncio.CancelledError:
+            logger.info("Streaming cancelado por una nueva petición o desconexión.")
+            raise
+        finally:
+            if state.current_task == current_task:
+                state.processing = False
+
+    return StreamingResponse(stream_generator(), media_type="text/plain")
 
 
 @app.post("/transcribe", response_model=TranscriptionResponse)
