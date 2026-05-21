@@ -601,6 +601,10 @@ class SpotlightWindow(QMainWindow):
     async def on_cancel(self):
         """Detiene cualquier proceso o habla en curso."""
         try:
+            # Incrementar época para desvincular cualquier tarea asíncrona de UI activa
+            self.current_request_id = getattr(self, 'current_request_id', 0) + 1
+            self.pending_gui_request = False
+            
             # Feedback visual inmediato
             self.stop_button.set_state("inactive")
             
@@ -624,6 +628,9 @@ class SpotlightWindow(QMainWindow):
     async def on_reset(self):
         """Reinicia el historial de conversación en el backend."""
         try:
+            # Incrementar época de petición para invalidar cualquier stream asíncrono activo en la UI
+            self.current_request_id = getattr(self, 'current_request_id', 0) + 1
+            
             async with httpx.AsyncClient() as client:
                 await client.post("http://127.0.0.1:8765/reset")
             
@@ -792,6 +799,10 @@ class SpotlightWindow(QMainWindow):
         self.history_index = -1
         self.temp_input = ""
 
+        # Generar un ID de época único para esta petición
+        self.current_request_id = getattr(self, 'current_request_id', 0) + 1
+        req_id = self.current_request_id
+
         self.pending_gui_request = True
         self.input_field.setEnabled(False)
         self.input_field.setPlaceholderText("Pensando...")
@@ -813,6 +824,10 @@ class SpotlightWindow(QMainWindow):
                         first_chunk = True
                         accumulated_response = ""
                         async for chunk in response.aiter_text():
+                            # Abortar el procesamiento si la época ha cambiado o se canceló
+                            if not self.pending_gui_request or self.current_request_id != req_id:
+                                break
+                                
                             if first_chunk:
                                 first_chunk = False
                                 self.chat_area.setMarkdown(f"**Tú:** {text}\n\n---\n\n**AsistenteIA:** ")
@@ -827,14 +842,18 @@ class SpotlightWindow(QMainWindow):
                     elif response.status_code == 409:
                         pass
                     else:
-                        self.chat_area.setPlainText(f"Error: {response.status_code}")
+                        if self.current_request_id == req_id:
+                            self.chat_area.setPlainText(f"Error: {response.status_code}")
         except Exception as e:
-            self.chat_area.setPlainText(f"Error de conexión: {e}")
+            if self.current_request_id == req_id:
+                self.chat_area.setPlainText(f"Error de conexión: {e}")
         finally:
-            self.pending_gui_request = False
-            self.input_field.setEnabled(True)
-            self.input_field.clear()
-            self.input_field.setFocus()
+            # Solo limpiar o reactivar si somos la misma época
+            if self.current_request_id == req_id:
+                self.pending_gui_request = False
+                self.input_field.setEnabled(True)
+                self.input_field.clear()
+                self.input_field.setFocus()
 
     def keyPressEvent(self, event: QKeyEvent):
         # ESC para minimizar o cerrar panel

@@ -299,9 +299,22 @@ async def get_history(state: AppState = Depends(get_app_state)):
 
 @app.post("/reset")
 async def reset_conversation(state: AppState = Depends(get_app_state)):
-    """Reinicia el historial de conversación."""
+    """Reinicia el historial de conversación y aborta cualquier procesamiento o TTS activo."""
+    if state.current_task and not state.current_task.done():
+        state.current_task.cancel()
+    
+    state.processing = False
+    state.is_recording = False
+    
+    if state.audio_recorder.is_recording:
+        state.audio_recorder.stop_recording()
+
+    if state.tts_engine:
+        state.tts_engine.stop()
+
     state.conversation_history.clear()
-    return {"status": "reset", "message": "Historial de conversación reiniciado"}
+    logger.info("Conversación y estado del backend completamente reiniciados.")
+    return {"status": "reset", "message": "Historial de conversación y procesos del backend reiniciados"}
 
 
 @app.post("/audio/configure")
