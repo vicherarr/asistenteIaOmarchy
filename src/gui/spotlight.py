@@ -581,6 +581,8 @@ class SpotlightWindow(QMainWindow):
         
         self.last_recording_state = False
         self.pending_gui_request = False
+        self._resetting = False
+        self._user_collapsed = False
 
     @Property(int)
     def windowHeight(self):
@@ -629,7 +631,10 @@ class SpotlightWindow(QMainWindow):
 
     @asyncSlot()
     async def on_reset(self):
-        """Reinicia el historial de conversación en el backend."""
+        """Reinicia el historial de conversacion en el backend."""
+        if self._resetting:
+            return
+        self._resetting = True
         try:
             # Incrementar época de petición para invalidar cualquier stream asíncrono activo en la UI
             self.current_request_id = getattr(self, 'current_request_id', 0) + 1
@@ -650,12 +655,14 @@ class SpotlightWindow(QMainWindow):
             self.input_field.clear()
             self.input_field.setPlaceholderText("Historial reiniciado.")
             QTimer.singleShot(2000, lambda: self.input_field.setPlaceholderText("Pregunta algo o habla..."))
+            QTimer.singleShot(500, lambda: setattr(self, '_resetting', False))
             
             # Llamada al backend en segundo plano desacoplada de la UI
             async with httpx.AsyncClient() as client:
                 await client.post("http://127.0.0.1:8765/reset")
         except Exception as e:
             print(f"Error reiniciando: {e}")
+            self._resetting = False
 
     @asyncSlot()
     async def check_backend_status(self):
@@ -744,7 +751,7 @@ class SpotlightWindow(QMainWindow):
                         """)
                         
                         # Actualizar automáticamente tras finalizar
-                        if not self.isHidden() and not self.pending_gui_request:
+                        if not self.isHidden() and not self.pending_gui_request and not self._resetting and not self._user_collapsed:
                             await self.update_last_response()
                     
                     self.last_recording_state = is_processing
@@ -862,8 +869,10 @@ class SpotlightWindow(QMainWindow):
         # ESC para minimizar o cerrar panel
         if event.key() == Qt.Key_Escape:
             if self._height > 110:
+                self._user_collapsed = True
                 self.chat_area.hide()
                 self.animate_height(110)
+                QTimer.singleShot(2000, lambda: setattr(self, '_user_collapsed', False))
             else:
                 self.hide()
                 
@@ -875,6 +884,9 @@ class SpotlightWindow(QMainWindow):
             
         # Ctrl+H para consultar Historial manual
         elif event.key() == Qt.Key_H and event.modifiers() & Qt.ControlModifier:
+            if self._resetting:
+                event.accept()
+                return
             asyncio.create_task(self.update_last_response())
             event.accept()
             return
