@@ -1,5 +1,14 @@
 """Orchestrator principal - Servidor FastAPI del asistente de voz."""
 
+import os
+# Optimización crítica: Limitar hilos de CPU en librerías de álgebra para evitar colisiones
+# de memoria (Segmentation Fault / Core Dump) entre LiteRT GPU, PyTorch CPU y Kokoro.
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 import asyncio
 import logging
 from contextlib import asynccontextmanager
