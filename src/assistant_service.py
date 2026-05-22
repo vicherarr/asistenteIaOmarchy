@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 import subprocess
 from pathlib import Path
 from typing import Optional, List
@@ -24,11 +25,10 @@ from src.command_executor import (
     send_input_to_terminal,
     interrupt_terminal_command
 )
-from src.vision_tool import analyze_screen
 from src.litert_client import LiteRTClient
 from src.tts_engine import TTSEngine
 from src.stt_engine import STTEngine
-from src.utils import strip_markdown, get_pending_image
+from src.utils import strip_markdown
 from src.config import settings
 from PIL import Image
 
@@ -52,7 +52,6 @@ class AssistantService:
         self.tools = [
             execute_system_command,
             get_system_status,
-            analyze_screen,
             read_log_file,
             clipboard_manager,
             web_search,
@@ -67,6 +66,50 @@ class AssistantService:
             send_input_to_terminal,
             interrupt_terminal_command
         ]
+
+    def _extract_sentences(self, text_buffer: str) -> tuple[List[str], str]:
+        """
+        Extrae frases completas del buffer basadas en signos de puntuación (.!?:\n) 
+        seguidos de un espacio o fin de cadena, protegiendo decimales y abreviaciones comunes.
+        """
+        pattern = re.compile(r'([.!?:])(?=\s|$)|(\n)')
+        
+        sentences = []
+        start = 0
+        for match in pattern.finditer(text_buffer):
+            end = match.end()
+            sentence = text_buffer[start:end].strip()
+            if sentence:
+                sentences.append(sentence)
+            start = end
+            
+        remaining = text_buffer[start:]
+        return sentences, remaining
+
+    async def _tts_worker(self, queue: asyncio.Queue, sink_id: Optional[str]) -> None:
+        """Consumidor asíncrono en segundo plano para reproducir frases secuencialmente."""
+        logger.info("Worker de TTS iniciado")
+        try:
+            while True:
+                sentence = await queue.get()
+                if sentence is None:
+                    queue.task_done()
+                    logger.info("Worker de TTS recibió señal de finalización")
+                    break
+                
+                logger.info(f"Worker de TTS sintetizando: '{sentence}'")
+                try:
+                    await self.tts.speak(sentence, sink_id=sink_id)
+                except Exception as e:
+                    logger.error(f"Error reproduciendo frase '{sentence}': {e}")
+                finally:
+                    queue.task_done()
+        except asyncio.CancelledError:
+            logger.info("Worker de TTS cancelado activamente")
+            self.tts.stop()
+            raise
+        except Exception as e:
+            logger.error(f"Error inesperado en worker de TTS: {e}")
 
     async def process_audio(
         self,
@@ -115,9 +158,18 @@ class AssistantService:
     ):
         """
         Procesa el texto del usuario usando LiteRT y herramientas de forma reactiva,
-        transmitiendo los chunks resultantes en tiempo real.
+        transmitiendo los chunks resultantes en tiempo real y sintetizando voz frase a frase.
         """
         logger.info(f"Procesando transcripción con LiteRT (streaming): {text[:100]}...")
+
+        # Cancelar TTS previo si existe
+        if self._current_tts_task and not self._current_tts_task.done():
+            self._current_tts_task.cancel()
+        self.tts.stop() # Asegurar parada inmediata del proceso
+
+        # Inicializar cola de frases y arrancar worker en segundo plano
+        queue = asyncio.Queue()
+        self._current_tts_task = asyncio.create_task(self._tts_worker(queue, sink_id))
 
         # Añadir mensaje del usuario al historial
         conversation_history.append(ChatMessage(role="user", content=text))
@@ -132,58 +184,56 @@ class AssistantService:
             logger.error(f"Error cargando system prompt: {e}")
             system_prompt = "Eres un asistente de voz para Linux llamado AsistenteIA."
 
-        # Acumular la respuesta de texto completa en segundo plano
         accumulated_text = ""
+        sentence_buffer = ""
 
-        # Primera llamada al modelo
-        async for chunk in self.litert.chat_stream(
-            prompt=text,
-            tools=self.tools,
-            system_prompt=system_prompt,
-            history=conversation_history[:-1] # Pasamos el historial previo
-        ):
-            accumulated_text += chunk
-            yield chunk
-
-        # Comprobar si una herramienta de visión dejó una imagen pendiente
-        pending_image_path = get_pending_image()
-        if pending_image_path:
-            logger.info("Imagen detectada de tool 'analyze_screen'. Realizando segunda pasada visual...")
-            try:
-                if accumulated_text:
-                    yield "\n\n"
-                    accumulated_text += "\n\n"
+        try:
+            # Primera llamada al modelo
+            async for chunk in self.litert.chat_stream(
+                prompt=text,
+                tools=self.tools,
+                system_prompt=system_prompt,
+                history=conversation_history[:-1] # Pasamos el historial previo
+            ):
+                accumulated_text += chunk
+                sentence_buffer += chunk
                 
-                async for chunk in self.litert.chat_stream(
-                    prompt="Describe qué ves en esta imagen y responde a la petición original del usuario.",
-                    image_path=pending_image_path,
-                    system_prompt=system_prompt,
-                    history=conversation_history # Incluimos el turno actual
-                ):
-                    accumulated_text += chunk
-                    yield chunk
+                # Extraer y encolar frases completas
+                sentences, sentence_buffer = self._extract_sentences(sentence_buffer)
+                for s in sentences:
+                    clean = strip_markdown(s)
+                    if clean and any(c.isalnum() for c in clean):
+                        await queue.put(clean)
                 
-                Path(pending_image_path).unlink(missing_ok=True)
-            except Exception as e:
-                logger.error(f"Error procesando imagen pendiente: {e}")
-                err_msg = "\nLo siento, tuve un problema al procesar la imagen de tu pantalla."
-                accumulated_text += err_msg
-                yield err_msg
+                yield chunk
 
-        # Guardar respuesta final acumulada en el historial
-        conversation_history.append(ChatMessage(role="assistant", content=accumulated_text))
 
-        # Una vez terminado todo el streaming de texto, procedemos con el TTS en segundo plano
-        if accumulated_text:
-            clean_text = strip_markdown(accumulated_text)
-            
-            # Cancelar TTS previo si existe
+
+            # Encolar lo que quede en el buffer
+            if sentence_buffer.strip():
+                clean = strip_markdown(sentence_buffer)
+                if clean and any(c.isalnum() for c in clean):
+                    await queue.put(clean)
+
+            # Guardar respuesta final acumulada en el historial
+            conversation_history.append(ChatMessage(role="assistant", content=accumulated_text))
+
+        except asyncio.CancelledError:
+            logger.info("process_transcription_stream cancelado. Deteniendo worker de TTS...")
             if self._current_tts_task and not self._current_tts_task.done():
                 self._current_tts_task.cancel()
-                self.tts.stop() # Asegurar parada inmediata del proceso
-
-            # Iniciamos la síntesis y reproducción en SEGUNDO PLANO
-            self._current_tts_task = asyncio.create_task(self.tts.speak(clean_text, sink_id=sink_id))
+            self.tts.stop()
+            raise
+        except Exception as e:
+            logger.error(f"Error en process_transcription_stream: {e}")
+            if self._current_tts_task and not self._current_tts_task.done():
+                self._current_tts_task.cancel()
+            self.tts.stop()
+            raise
+        finally:
+            # Enviar señal de fin al worker
+            if self._current_tts_task and not self._current_tts_task.done():
+                await queue.put(None)
 
     async def process_transcription(
         self,

@@ -38,8 +38,10 @@ class TTSEngine:
         """Intenta inicializar Kokoro TTS."""
         try:
             from kokoro import KPipeline
-            self._kokoro_pipeline = KPipeline(lang_code=settings.KOKORO_LANG, device="cpu")
-            logger.info("Kokoro TTS inicializado correctamente en CPU")
+            # Forzamos CPU para evitar colisión de VRAM y contextos CUDA con LiteRT (Dawn/WebGPU)
+            device = "cpu"
+            self._kokoro_pipeline = KPipeline(lang_code=settings.KOKORO_LANG, device=device)
+            logger.info("Kokoro TTS inicializado correctamente en CPU (Optimizado para liberar GPU)")
         except ImportError:
             logger.warning("Kokoro no instalado. Se usará gTTS como fallback.")
         except Exception as e:

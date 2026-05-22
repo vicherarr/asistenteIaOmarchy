@@ -69,6 +69,10 @@ class StatusResponse(BaseModel):
     conversation_length: int
     processing: bool
     speaking: bool = False
+    gpu_active: bool = False
+    litert_backend: str = "Desconectado"
+
+
 
 
 @asynccontextmanager
@@ -287,13 +291,34 @@ async def get_status(state: AppState = Depends(get_app_state)):
     bt_status = await state.audio_manager.get_status_summary() if state.audio_manager else "No inicializado"
     is_speaking = state.tts_engine._is_playing if state.tts_engine else False
 
+    # Detección verídica del backend de hardware de LiteRT
+    litert_backend = "Desconectado"
+    gpu_active = False
+    if litert_ok and state.litert_client.engine:
+        try:
+            import litert_lm
+            backend_enum = state.litert_client.engine.backend
+            if backend_enum == litert_lm.Backend.GPU:
+                litert_backend = "GPU"
+                gpu_active = True
+            elif backend_enum == litert_lm.Backend.CPU:
+                litert_backend = "CPU"
+            else:
+                litert_backend = "Auto"
+        except Exception:
+            litert_backend = "CPU"
+
     return StatusResponse(
         litert_connected=litert_ok,
         bluetooth_audio=bt_status,
         conversation_length=len(state.conversation_history),
         processing=state.processing or state.is_recording,
         speaking=is_speaking,
+        gpu_active=gpu_active,
+        litert_backend=litert_backend,
     )
+
+
 
 
 @app.get("/history")

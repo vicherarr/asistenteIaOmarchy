@@ -23,8 +23,10 @@ class STTEngine:
 
     def _load_model(self) -> whisper.Whisper:
         if self._model is None:
-            logger.info(f"Cargando modelo Whisper: {self.model_name} (CPU)")
-            self._model = whisper.load_model(self.model_name, device="cpu")
+            # Forzamos CPU para evitar inicializar contextos CUDA que colisionen con LiteRT en GPU
+            device = "cpu"
+            logger.info(f"Cargando modelo Whisper: {self.model_name} (CPU - Optimizado)")
+            self._model = whisper.load_model(self.model_name, device=device)
         return self._model
 
     async def transcribe(self, audio_path: Path) -> str:

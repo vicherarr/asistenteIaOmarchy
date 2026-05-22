@@ -53,12 +53,11 @@ class LiteRTClient:
             if backend_mode == "gpu":
                 try:
                     logger.info("Intentando forzar motor LiteRT con Backend GPU...")
-                    # Nota: vision_backend se mantiene en CPU por incompatibilidad de firmas del codificador de visión de Gemma 4 en GPU
                     self.engine = litert_lm.Engine(
                         str(path),
                         backend=litert_lm.Backend.GPU,
-                        vision_backend=litert_lm.Backend.CPU,
-                        enable_speculative_decoding=True
+                        vision_backend=None,
+                        audio_backend=litert_lm.Backend.CPU
                     )
                     logger.info("Motor LiteRT cargado exitosamente (Backend GPU).")
                     return
@@ -67,14 +66,15 @@ class LiteRTClient:
                     backend_mode = "cpu"
 
             # Estrategia 3: CPU (Máxima compatibilidad)
-            if backend_mode == "cpu" or True:
+            if backend_mode == "cpu":
                 logger.info("Cargando motor LiteRT con Backend CPU...")
                 cpu_delegate = getattr(litert_lm, "Backend", None)
                 if cpu_delegate and hasattr(cpu_delegate, "CPU"):
                     self.engine = litert_lm.Engine(
                         str(path),
                         backend=litert_lm.Backend.CPU,
-                        vision_backend=litert_lm.Backend.CPU
+                        vision_backend=None,
+                        audio_backend=litert_lm.Backend.CPU
                     )
                 else:
                     self.engine = litert_lm.Engine(str(path))

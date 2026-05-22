@@ -567,6 +567,23 @@ class SpotlightWindow(QMainWindow):
         """)
         self.bottom_layout.addWidget(self.history_pill)
         
+        # Pill para Acelerador (GPU/CPU verídico)
+        self.accel_pill = QPushButton("⚙️ CPU")
+        self.accel_pill.setEnabled(False)
+        self.accel_pill.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(137, 180, 250, 20);
+                border: 1px solid rgba(137, 180, 250, 80);
+                border-radius: 10px;
+                color: #89b4fa;
+                font-family: 'Inter';
+                font-size: 10px;
+                padding: 2px 8px;
+            }
+        """)
+        self.bottom_layout.addWidget(self.accel_pill)
+
+        
         self.bottom_layout.addStretch()
         
         # Atajos Rápidos
@@ -702,18 +719,32 @@ class SpotlightWindow(QMainWindow):
                     
                     # Actualizar píldoras (Status Pills)
                     if litert_connected:
-                        self.model_pill.setText("🧠 LiteRT: Listo")
-                        self.model_pill.setStyleSheet("""
-                            QPushButton {
-                                background-color: rgba(166, 227, 161, 20);
-                                border: 1px solid rgba(166, 227, 161, 100);
-                                border-radius: 10px;
-                                color: #a6e3a1;
-                                font-family: 'Inter';
-                                font-size: 10px;
-                                padding: 2px 8px;
-                            }
-                        """)
+                        litert_backend = data.get("litert_backend", "CPU")
+                        self.model_pill.setText(f"🧠 LiteRT: {litert_backend}")
+                        if litert_backend == "GPU":
+                            self.model_pill.setStyleSheet("""
+                                QPushButton {
+                                    background-color: rgba(203, 166, 247, 20);
+                                    border: 1px solid rgba(203, 166, 247, 100);
+                                    border-radius: 10px;
+                                    color: #cba6f7;
+                                    font-family: 'Inter';
+                                    font-size: 10px;
+                                    padding: 2px 8px;
+                                }
+                            """)
+                        else:
+                            self.model_pill.setStyleSheet("""
+                                QPushButton {
+                                    background-color: rgba(166, 227, 161, 20);
+                                    border: 1px solid rgba(166, 227, 161, 100);
+                                    border-radius: 10px;
+                                    color: #a6e3a1;
+                                    font-family: 'Inter';
+                                    font-size: 10px;
+                                    padding: 2px 8px;
+                                }
+                            """)
                     else:
                         self.model_pill.setText("🧠 LiteRT: Error")
                         self.model_pill.setStyleSheet("""
@@ -734,6 +765,36 @@ class SpotlightWindow(QMainWindow):
                     
                     # History Pill
                     self.history_pill.setText(f"󰅪 {conversation_length} msgs")
+                    
+                    # Accel Pill (GPU/CPU verídico)
+                    gpu_active = data.get("gpu_active", False)
+                    if gpu_active:
+                        self.accel_pill.setText("⚡ GPU: Activa")
+                        self.accel_pill.setStyleSheet("""
+                            QPushButton {
+                                background-color: rgba(250, 179, 135, 20);
+                                border: 1px solid rgba(250, 179, 135, 100);
+                                border-radius: 10px;
+                                color: #fab387;
+                                font-family: 'Inter';
+                                font-size: 10px;
+                                padding: 2px 8px;
+                            }
+                        """)
+                    else:
+                        self.accel_pill.setText("⚙️ CPU: Activa")
+                        self.accel_pill.setStyleSheet("""
+                            QPushButton {
+                                background-color: rgba(137, 180, 250, 20);
+                                border: 1px solid rgba(137, 180, 250, 80);
+                                border-radius: 10px;
+                                color: #89b4fa;
+                                font-family: 'Inter';
+                                font-size: 10px;
+                                padding: 2px 8px;
+                            }
+                        """)
+
                     
                     # Cambios de estilo y placeholder en input principal
                     if is_processing and not self.last_recording_state:
@@ -780,10 +841,23 @@ class SpotlightWindow(QMainWindow):
                     padding: 2px 8px;
                 }
             """)
+            self.accel_pill.setText("⚙️ Desconectado")
+            self.accel_pill.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(108, 112, 134, 20);
+                    border: 1px solid rgba(108, 112, 134, 80);
+                    border-radius: 10px;
+                    color: #6c7086;
+                    font-family: 'Inter';
+                    font-size: 10px;
+                    padding: 2px 8px;
+                }
+            """)
             self.visualizer.set_state("inactive")
             
             # Botón Stop Desconectado
             self.stop_button.set_state("offline")
+
 
     async def update_last_response(self):
         """Actualiza el área de chat con el último par de mensajes (usuario y asistente)."""
