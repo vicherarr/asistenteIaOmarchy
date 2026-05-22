@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     
     # LiteRT
     LITERT_MODEL_PATH: str = "models/gemma-4-E4B-it.litertlm"
+    LITERT_BACKEND: str = "auto"
 
     # Assistant
     MAX_HISTORY: int = 10

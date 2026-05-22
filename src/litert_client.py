@@ -35,28 +35,50 @@ class LiteRTClient:
                 return
 
             logger.info(f"Cargando motor LiteRT desde {path}...")
-            
-            # 1. Intentar con GPU (Vulkan/WebGPU) para rendimiento y evasión de fallos de CPU en Linux
-            try:
-                logger.info("Intentando cargar motor LiteRT con Backend GPU y Vision GPU...")
-                self.engine = litert_lm.Engine(
-                    str(path),
-                    backend=litert_lm.Backend.GPU,
-                    vision_backend=litert_lm.Backend.GPU,
-                    enable_speculative_decoding=True
-                )
-                logger.info("Motor LiteRT cargado exitosamente (Backend GPU con decodificación especulativa).")
-            except Exception as gpu_err:
-                logger.warning(f"Carga con GPU falló ({gpu_err}). Intentando carga automática...")
-                # 2. Intentar carga automática (el SDK elegirá el mejor backend disponible)
+            backend_mode = settings.LITERT_BACKEND.lower()
+            logger.info(f"Modo de backend configurado: {backend_mode}")
+
+            # Estrategia 1: Carga automática (Recomendada y 100% estable)
+            if backend_mode == "auto":
                 try:
+                    logger.info("Cargando motor LiteRT de forma automática (segura e interna)...")
                     self.engine = litert_lm.Engine(str(path))
                     logger.info("Motor LiteRT cargado exitosamente (Backend automático).")
+                    return
                 except Exception as auto_err:
                     logger.warning(f"Carga automática falló ({auto_err}). Intentando fallback a CPU...")
-                    # 3. Fallback explícito a CPU para máxima compatibilidad
-                    self.engine = litert_lm.Engine(str(path), vision_backend=litert_lm.Backend.CPU)
-                    logger.info("Motor LiteRT cargado exitosamente (Fallback CPU).")
+                    backend_mode = "cpu"
+
+            # Estrategia 2: Forzar GPU (Para rendimiento avanzado)
+            if backend_mode == "gpu":
+                try:
+                    logger.info("Intentando forzar motor LiteRT con Backend GPU...")
+                    # Nota: vision_backend se mantiene en CPU por incompatibilidad de firmas del codificador de visión de Gemma 4 en GPU
+                    self.engine = litert_lm.Engine(
+                        str(path),
+                        backend=litert_lm.Backend.GPU,
+                        vision_backend=litert_lm.Backend.CPU,
+                        enable_speculative_decoding=True
+                    )
+                    logger.info("Motor LiteRT cargado exitosamente (Backend GPU).")
+                    return
+                except Exception as gpu_err:
+                    logger.warning(f"Carga con GPU forzada falló ({gpu_err}). Intentando fallback a CPU...")
+                    backend_mode = "cpu"
+
+            # Estrategia 3: CPU (Máxima compatibilidad)
+            if backend_mode == "cpu" or True:
+                logger.info("Cargando motor LiteRT con Backend CPU...")
+                cpu_delegate = getattr(litert_lm, "Backend", None)
+                if cpu_delegate and hasattr(cpu_delegate, "CPU"):
+                    self.engine = litert_lm.Engine(
+                        str(path),
+                        backend=litert_lm.Backend.CPU,
+                        vision_backend=litert_lm.Backend.CPU
+                    )
+                else:
+                    self.engine = litert_lm.Engine(str(path))
+                logger.info("Motor LiteRT cargado exitosamente (Backend CPU / Fallback).")
                 
         except Exception as e:
             logger.error(f"Error fatal cargando motor LiteRT: {e}")

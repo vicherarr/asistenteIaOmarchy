@@ -150,7 +150,7 @@ El asistente está optimizado para CachyOS/Arch Linux con Hyprland, y requiere:
 - `grim` y `slurp` (captura de pantalla)
 - `tmux` (terminal persistente)
 - `whisper-cli` (`whisper.cpp`) y modelo `ggml-small.bin` en `~/.cache/whisper/`
-- Modelo LiteRT de Gemma en `models/gemma-4-e4b.litertlm`
+- Modelo LiteRT de Gemma en `models/gemma-4-E4B-it.litertlm`
 
 ### Instalación Rápida
 1. Clonar el repositorio y ejecutar el instalador:

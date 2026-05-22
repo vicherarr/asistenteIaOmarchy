@@ -9,6 +9,8 @@ import subprocess
 from dataclasses import dataclass
 from typing import Optional
 
+from src.config import settings
+
 logger = logging.getLogger(__name__)
 
 EXIT_CODE_EXPLANATIONS = {
@@ -850,7 +852,7 @@ async def control_local_browser(action: str, target: str = "", value: str = "") 
     # 1. Comprobar si Chromium está activo con CDP habilitado
     if not _is_port_open(9222):
         # Intentar lanzarlo
-        profile_path = "/home/victor/develop/asistenteia/.chrome-profile"
+        profile_path = str(settings.PROJECT_ROOT / ".chrome-profile")
         os.makedirs(profile_path, exist_ok=True)
         
         binary = shutil.which("chromium") or shutil.which("google-chrome-stable")
@@ -979,7 +981,7 @@ async def control_local_browser(action: str, target: str = "", value: str = "") 
                 slug = _re.sub(r'[\s_-]+', '-', slug).strip('-')[:60]
                 filename = f"{date_str} - {slug}.md"
                 
-                vault_dir = "/home/victor/Documentos/Obsidian Vault/Clippings"
+                vault_dir = os.path.expanduser("~/Documentos/Obsidian Vault/Clippings")
                 filepath = os.path.join(vault_dir, filename)
                 
                 # 3. Generar el frontmatter YAML con metadatos enriquecidos
@@ -1224,7 +1226,7 @@ async def control_local_browser(action: str, target: str = "", value: str = "") 
 
                 # Guardar también en Obsidian como nota de investigación
                 try:
-                    vault_dir = "/home/victor/Documentos/Obsidian Vault/Clippings"
+                    vault_dir = os.path.expanduser("~/Documentos/Obsidian Vault/Clippings")
                     os.makedirs(vault_dir, exist_ok=True)
                     date_str = now.strftime("%Y-%m-%d")
                     slug = _re.sub(r'[^\w\s-]', '', query.lower())

@@ -107,7 +107,7 @@ echo ""
 echo "Descargando modelo LiteRT Gemma-4-E4B-it (~3.6GB)..."
 mkdir -p "$PROJECT_DIR/models"
 if [ ! -f "$PROJECT_DIR/models/gemma-4-E4B-it.litertlm" ]; then
-    python3.12 -c "
+    "$PROJECT_DIR/venv/bin/python" -c "
 from huggingface_hub import hf_hub_download
 print('Descargando gemma-4-E4B-it.litertlm...')
 path = hf_hub_download(
@@ -146,10 +146,8 @@ fi
 # -----------------------------------------------------------------------------
 # 7. Instalar servicio systemd
 # -----------------------------------------------------------------------------
-echo "[7/7] Instalando servicio systemd..."
-mkdir -p "$HOME/.config/systemd/user"
-cp "$PROJECT_DIR/services/asistenteia.service" "$HOME/.config/systemd/user/"
-systemctl --user daemon-reload
+echo "[7/7] Instalando servicio systemd de forma dinámica..."
+"$PROJECT_DIR/installservice.sh"
 
 # -----------------------------------------------------------------------------
 # Finalización

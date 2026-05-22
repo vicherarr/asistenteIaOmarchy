@@ -10,4 +10,4 @@ cd "$PROJECT_DIR"
 export PYTHONPATH="$PROJECT_DIR"
 
 # Ejecutar con el binario de Python del venv en SEGUNDO PLANO
-./venv/bin/python src/gui/spotlight.py > /dev/null 2>&1 &
+./venv/bin/python src/gui/spotlight.py > /tmp/asistenteia-gui.log 2>&1 &

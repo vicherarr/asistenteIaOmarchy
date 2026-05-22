@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QWidget, QTextBrowser, QFrame, QPushButton
 )
 from PySide6.QtCore import Qt, QTimer, Property, QPropertyAnimation, QEasingCurve, QPointF
-from PySide6.QtGui import QFont, QPalette, QColor, QKeyEvent, QIcon, QPainter, QPen, QBrush, QLinearGradient, QPainterPath
+from PySide6.QtGui import QFont, QPalette, QColor, QKeyEvent, QIcon, QPainter, QPen, QBrush, QLinearGradient, QRadialGradient, QPainterPath
 from qasync import QEventLoop, asyncSlot
 
 class StateVisualizer(QWidget):
