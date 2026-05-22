@@ -205,3 +205,29 @@ def test_rate_limit_exceeded(client, mock_app_state):
     
     # Cleanup funciona
     limiter.cleanup()
+
+
+def test_vad_silence_callback_triggers_local_toggle(client, mock_app_state):
+    """Verifica que el callback de VAD de silencio prolongado invoque localmente toggle_listen."""
+    # 1. Simular inicio de grabación (el asistente no está grabando al inicio)
+    mock_app_state.is_recording = False
+    mock_app_state.audio_recorder.is_recording = False
+    
+    # 2. Hacer POST a /listen/toggle para iniciar la grabación
+    response = client.post("/listen/toggle")
+    assert response.status_code == 200
+    assert response.json()["status"] == "listening"
+    
+    # 3. Extraer el callback de silencio pasado a start_recording
+    mock_app_state.audio_recorder.start_recording.assert_called_once()
+    _, kwargs = mock_app_state.audio_recorder.start_recording.call_args
+    on_silence_callback = kwargs.get("on_silence_callback")
+    assert on_silence_callback is not None
+    
+    # 4. Simular que el VAD detecta silencio ejecutando el callback
+    # Marcamos is_recording=True para simular el estado de grabación activa cuando se dispara
+    mock_app_state.is_recording = True
+    on_silence_callback()
+    
+    # 5. Verificar que se detiene la grabación localmente de forma asíncrona
+    mock_app_state.audio_recorder.stop_recording.assert_called_once()

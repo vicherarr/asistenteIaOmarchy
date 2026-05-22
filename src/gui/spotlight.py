@@ -860,26 +860,31 @@ class SpotlightWindow(QMainWindow):
 
 
     async def update_last_response(self):
-        """Actualiza el área de chat con el último par de mensajes (usuario y asistente)."""
+        """Muestra el historial completo de la conversación."""
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.get("http://127.0.0.1:8765/history")
                 if response.status_code == 200:
                     data = response.json()
                     history = data.get("history", [])
-                    if len(history) >= 2:
-                        user_msg = history[-2].get("content", "")
-                        assistant_msg = history[-1].get("content", "")
-                        
-                        full_chat = f"**Tú:** {user_msg}\n\n---\n\n**AsistenteIA:** {assistant_msg}"
-                        
-                        self.animate_height(480)
-                        self.chat_area.show()
-                        self.chat_area.setMarkdown(full_chat)
-                    elif len(history) == 1:
-                        self.animate_height(480)
-                        self.chat_area.show()
-                        self.chat_area.setMarkdown(f"**Tú:** {history[0].get('content', '')}")
+                    if not history:
+                        return
+
+                    parts = []
+                    for msg in history:
+                        role = msg.get("role", "")
+                        content = msg.get("content", "")
+                        if role == "user":
+                            parts.append(f"**Tú:** {content}")
+                        elif role == "assistant":
+                            parts.append(f"**AsistenteIA:** {content}")
+                        parts.append("---")
+
+                    full_chat = "\n\n".join(parts)
+
+                    self.animate_height(480)
+                    self.chat_area.show()
+                    self.chat_area.setMarkdown(full_chat)
         except Exception as e:
             print(f"Error actualizando historial: {e}")
 

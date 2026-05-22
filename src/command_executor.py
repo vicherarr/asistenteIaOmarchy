@@ -39,17 +39,7 @@ def explain_exit_code(code: int) -> str:
     return f"El comando falló con un código de error no estándar ({code})."
 
 
-@dataclass
-class SystemCommand:
-    command: str
-    description: str = ""
 
-
-@dataclass
-class ParsedResponse:
-    response_text: str
-    commands: list[SystemCommand]
-    action_type: str  # speak, execute, vision, both
 
 
 class CommandExecutorError(Exception):
@@ -87,24 +77,55 @@ class CommandExecutor:
         "dmesg",
         "pgrep",
         "dbus-send",
+        "ls",
+        "cd",
+        "pwd",
+        "echo",
+        "cat",
+        "grep",
+        "find",
+        "head",
+        "tail",
+        "mkdir",
+        "touch",
+        "clear",
     ]
 
     def __init__(self, dry_run: bool = False):
         self.dry_run = dry_run
 
     def _is_safe_command(self, command: str) -> bool:
-        """Verifica si un comando es seguro según la lista blanca."""
-        # Protección básica contra encadenamiento (excepto journalctl que lo necesita para --user)
-        if ";" in command or "&&" in command or "||" in command:
-            logger.warning(f"Comando bloqueado por caracteres sospechosos: {command}")
+        """Verifica si un comando es seguro según la lista blanca.
+        
+        Permite el encadenamiento de comandos (usando &&, ||, ;, o |) siempre que
+        CADA uno de los subcomandos resultantes comience con un prefijo permitido.
+        """
+        cmd_clean = command.strip()
+        if not cmd_clean:
             return False
 
-        for prefix in self.ALLOWED_PREFIXES:
-            if command.startswith(prefix):
-                return True
+        # Dividir por operadores lógicos y tuberías: &&, ||, ;, |
+        import re
+        sub_commands = re.split(r'&&|\|\||;|\|', cmd_clean)
 
-        logger.warning(f"Comando bloqueado (no permitido): {command}")
-        return False
+        for sub in sub_commands:
+            sub = sub.strip()
+            if not sub:
+                continue
+
+            # Validar que este subcomando empieza con algún prefijo permitido
+            sub_safe = False
+            for prefix in self.ALLOWED_PREFIXES:
+                # Evitar colisiones (ej. lspci por ls) verificando delimitador
+                if sub == prefix or sub.startswith(prefix + " ") or sub.startswith(prefix + "\t") or sub.startswith(prefix + "-"):
+                    sub_safe = True
+                    break
+            
+            if not sub_safe:
+                logger.warning(f"Subcomando bloqueado (no permitido): '{sub}' en el comando completo: '{command}'")
+                return False
+
+        return True
 
     async def spawn(self, command: str) -> bool:
         """Lanza un comando sin esperar a que termine (fire-and-forget)."""
@@ -167,13 +188,7 @@ class CommandExecutor:
         except Exception as e:
             return False, f"Excepción: {e}"
 
-    async def execute_multiple(self, commands: list[SystemCommand]) -> list[tuple[bool, str]]:
-        """Ejecuta múltiples comandos secuencialmente de forma asíncrona."""
-        results = []
-        for cmd in commands:
-            success, output = await self.execute(cmd.command, cmd.description)
-            results.append((success, output))
-        return results
+
 
 # --- Funciones para LiteRT Tool Calling ---
 
@@ -610,6 +625,13 @@ async def open_terminal_and_run_command(command: str) -> str:
     import shutil
     
     command = _sanitize_tool_args(command)
+    
+    # Validar la seguridad del comando usando la lista blanca de CommandExecutor
+    executor = CommandExecutor()
+    if not executor._is_safe_command(command):
+        logger.warning(f"Intento de ejecutar comando bloqueado en terminal gráfica: {command}")
+        return f"Error: Comando no permitido por la lista blanca de seguridad del sistema: {command}"
+        
     session_name = "asistenteia"
     
     # Envolver el comando para capturar el código de salida y mostrar un banner profesional si no es background
@@ -880,20 +902,4 @@ async def control_local_browser(action: str, target: str = "", value: str = "") 
         return f"Error controlando el navegador gráfico: {e}"
 
 
-def parse_gemma_response(raw_text: str) -> ParsedResponse:
-    """Parsea JSON y limpia etiquetas thought."""
-    clean_text = re.sub(r"<thought>[\s\S]*?</thought>", "", raw_text).strip()
-    json_match = re.search(r"```json\s*([\s\S]*?)\s*```", clean_text)
-    json_str = json_match.group(1) if json_match else None
-    if not json_str:
-        start = clean_text.find('{')
-        end = clean_text.rfind('}')
-        if start != -1 and end != -1: json_str = clean_text[start:end+1]
 
-    if json_str:
-        try:
-            data = json.loads(json_str)
-            commands = [SystemCommand(command=c.get("command", ""), description=c.get("description", "")) for c in data.get("commands", [])]
-            return ParsedResponse(response_text=data.get("response_text", ""), commands=commands, action_type=data.get("action_type", "speak"))
-        except: pass
-    return ParsedResponse(response_text=clean_text, commands=[], action_type="speak")

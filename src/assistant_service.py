@@ -48,6 +48,7 @@ class AssistantService:
         self.tts = tts_engine
         self.stt = stt_engine
         self._current_tts_task: Optional[asyncio.Task] = None
+        self._current_play_task: Optional[asyncio.Task] = None
         # Lista de herramientas para LiteRT
         self.tools = [
             execute_system_command,
@@ -105,6 +106,7 @@ class AssistantService:
                 if sentence is None:
                     queue_text.task_done()
                     logger.info("Worker de síntesis recibió señal de finalización")
+                    await queue_audio.put(None)
                     break
                 
                 logger.info(f"Sintetizando: '{sentence}'")
@@ -223,6 +225,8 @@ class AssistantService:
         # Cancelar TTS previo si existe
         if self._current_tts_task and not self._current_tts_task.done():
             self._current_tts_task.cancel()
+        if self._current_play_task and not self._current_play_task.done():
+            self._current_play_task.cancel()
         self.tts.stop() # Asegurar parada inmediata del proceso
         self.tts._is_playing = True  # Re-activar para nueva síntesis
 
@@ -234,6 +238,7 @@ class AssistantService:
         synth_task = asyncio.create_task(self._synth_worker(queue_text, queue_audio))
         play_task = asyncio.create_task(self._play_worker(queue_audio))
         self._current_tts_task = synth_task
+        self._current_play_task = play_task
 
         # Añadir mensaje del usuario al historial
         conversation_history.append(ChatMessage(role="user", content=text))
@@ -280,8 +285,60 @@ class AssistantService:
             # Guardar respuesta final acumulada en el historial
             conversation_history.append(ChatMessage(role="assistant", content=accumulated_text))
 
+            # --- Loop Multimodal (Segunda Pasada para analyze_screen) ---
+            from src.utils import get_pending_image
+            pending_image = get_pending_image()
+            if pending_image:
+                logger.info(f"Detectada captura de pantalla pendiente en: {pending_image}. Iniciando segunda pasada multimodal...")
+                
+                # Yield a separator/announcement chunk to the front-end stream
+                announcement = "\n[Analizando imagen de pantalla...]\n"
+                yield announcement
+                
+                # Prompt guía para la segunda pasada
+                vision_prompt = (
+                    "Aquí tienes la captura de pantalla que acabas de solicitar mediante la herramienta "
+                    "analyze_screen. Por favor, analízala detalladamente y responde la pregunta original "
+                    "del usuario en base a lo que puedes ver en la imagen."
+                )
+                
+                image_accumulated_text = ""
+                image_sentence_buffer = ""
+                
+                async for chunk in self.litert.chat_stream(
+                    prompt=vision_prompt,
+                    tools=self.tools,
+                    system_prompt=system_prompt,
+                    history=conversation_history,  # Incluye el historial con el mensaje de la primera pasada
+                    image_path=pending_image
+                ):
+                    image_accumulated_text += chunk
+                    image_sentence_buffer += chunk
+                    
+                    # Extraer y encolar frases de la segunda pasada
+                    sentences, image_sentence_buffer = self._extract_sentences(image_sentence_buffer)
+                    for s in sentences:
+                        clean = strip_markdown(s)
+                        if self._is_speakable(clean):
+                            await queue_text.put(clean)
+                            
+                    yield chunk
+                    
+                # Encolar cualquier remanente del buffer de imagen
+                if image_sentence_buffer.strip():
+                    clean = strip_markdown(image_sentence_buffer)
+                    if self._is_speakable(clean):
+                        await queue_text.put(clean)
+                        
+                # Concatenar la segunda respuesta en el historial de conversación para coherencia
+                conversation_history[-1].content += "\n\n" + image_accumulated_text
+
         except asyncio.CancelledError:
             logger.info("process_transcription_stream cancelado. Deteniendo workers de TTS...")
+            if self._current_tts_task and not self._current_tts_task.done():
+                self._current_tts_task.cancel()
+            if self._current_play_task and not self._current_play_task.done():
+                self._current_play_task.cancel()
             self.tts.stop()
             raise
         except Exception as e:
@@ -292,7 +349,6 @@ class AssistantService:
             # Enviar señal de fin a workers pero NO esperarlos
             # El stream debe cerrarse inmediatamente para que la GUI actualice el texto
             await queue_text.put(None)
-            await queue_audio.put(None)
             # Los workers continúan en background reproduciendo audio pendiente
 
     async def process_transcription(
@@ -320,3 +376,33 @@ class AssistantService:
             "commands_executed": 1 if "Éxito" in response_text else 0,
             "audio_file": None,
         }
+
+    async def cancel_audio_tasks(self) -> None:
+        """Cancela activamente las tareas de audio y síntesis en curso."""
+        cancelled = False
+        if self._current_tts_task and not self._current_tts_task.done():
+            logger.info("Cancelando tarea de síntesis TTS en AssistantService...")
+            self._current_tts_task.cancel()
+            cancelled = True
+            
+        if self._current_play_task and not self._current_play_task.done():
+            logger.info("Cancelando tarea de reproducción TTS en AssistantService...")
+            self._current_play_task.cancel()
+            cancelled = True
+            
+        # Esperar a que terminen si es posible
+        if cancelled:
+            try:
+                tasks = [t for t in (self._current_tts_task, self._current_play_task) if t and not t.done()]
+                if tasks:
+                    await asyncio.wait(tasks, timeout=2.0)
+            except Exception as e:
+                logger.warning(f"Error esperando cancelación de tareas de audio: {e}")
+
+    async def cleanup(self) -> None:
+        """Cierra de forma segura todos los recursos del servicio de negocio."""
+        logger.info("Iniciando cleanup de AssistantService...")
+        await self.cancel_audio_tasks()
+        if self.tts:
+            self.tts.stop()
+            self.tts.close_persistent_stream()
