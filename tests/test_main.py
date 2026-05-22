@@ -187,3 +187,21 @@ def test_health_endpoint_components_down(client, mock_app_state):
         assert data["kokoro"] is False
         assert data["tmux"] is False
         assert data["cdp"] is False
+
+
+def test_rate_limit_exceeded(client, mock_app_state):
+    """Verifica que el RateLimiter bloquea requests excesivos."""
+    from src.main import RateLimiter
+    
+    limiter = RateLimiter(max_requests=3, window_seconds=1.0)
+    
+    # 3 requests permitidos
+    assert limiter.is_allowed("127.0.0.1") is True
+    assert limiter.is_allowed("127.0.0.1") is True
+    assert limiter.is_allowed("127.0.0.1") is True
+    
+    # 4º request bloqueado
+    assert limiter.is_allowed("127.0.0.1") is False
+    
+    # Cleanup funciona
+    limiter.cleanup()

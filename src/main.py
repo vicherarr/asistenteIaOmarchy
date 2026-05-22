@@ -11,6 +11,8 @@ os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
 import asyncio
 import logging
+import time
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -35,6 +37,79 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 MAX_HISTORY = settings.MAX_HISTORY
+
+
+class RateLimiter:
+    """Rate limiter simple en memoria (token bucket por IP)."""
+
+    def __init__(self, max_requests: int = 5, window_seconds: float = 1.0):
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self.requests: dict[str, list[float]] = defaultdict(list)
+
+    def is_allowed(self, client_ip: str) -> bool:
+        now = time.monotonic()
+        window_start = now - self.window_seconds
+
+        # Limpiar requests antiguos
+        self.requests[client_ip] = [
+            t for t in self.requests[client_ip] if t > window_start
+        ]
+
+        if len(self.requests[client_ip]) >= self.max_requests:
+            return False
+
+        self.requests[client_ip].append(now)
+        return True
+
+    def cleanup(self):
+        """Limpia entradas antiguas para evitar memory leak."""
+        now = time.monotonic()
+        cutoff = now - self.window_seconds * 2
+        expired = [
+            ip for ip, times in self.requests.items()
+            if not times or max(times) < cutoff
+        ]
+        for ip in expired:
+            del self.requests[ip]
+
+
+# Instancias de rate limiter por tipo de endpoint
+_rate_limiter_default = RateLimiter(max_requests=5, window_seconds=1.0)
+_rate_limiter_strict = RateLimiter(max_requests=1, window_seconds=2.0)
+
+
+async def rate_limit_middleware(request: Request, call_next):
+    """Middleware que aplica rate limiting según la ruta."""
+    client_ip = request.client.host if request.client else "unknown"
+    path = request.url.path
+
+    # Endpoints de solo lectura sin rate limit
+    if path in ("/health", "/status", "/history"):
+        return await call_next(request)
+
+    # Endpoints estrictos (1 req cada 2s)
+    if path in ("/listen/toggle", "/reset"):
+        limiter = _rate_limiter_strict
+    # Endpoints de streaming (3 req/s)
+    elif path in ("/transcribe/stream",):
+        limiter = RateLimiter(max_requests=3, window_seconds=1.0)
+    # Resto (5 req/s)
+    else:
+        limiter = _rate_limiter_default
+
+    if not limiter.is_allowed(client_ip):
+        logger.warning(f"Rate limit excedido para {client_ip} en {path}")
+        return JSONResponse(
+            status_code=429,
+            content={"status": "error", "message": "Demasiadas peticiones. Espera unos segundos."},
+        )
+
+    # Cleanup periódico
+    if path == "/status":
+        limiter.cleanup()
+
+    return await call_next(request)
 
 
 class AppState:
@@ -155,6 +230,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="AsistenteIA", lifespan=lifespan)
+app.middleware("http")(rate_limit_middleware)
 
 
 @app.exception_handler(Exception)

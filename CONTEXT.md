@@ -1,6 +1,6 @@
 # AsistenteIA - Contexto del Proyecto para Sesiones IA
 
-> **Última actualización:** 22 de mayo de 2026 (Fase 4)
+> **Última actualización:** 22 de mayo de 2026 (Fase 5)
 > **Propósito:** Este documento sirve como referencia completa para cualquier sesión de IA que trabaje en este proyecto. Contiene toda la arquitectura, decisiones técnicas, estado actual y convenciones del código.
 
 ---
@@ -256,10 +256,10 @@ OBSIDIAN_CLIPPINGS=~/Documentos/Obsidian Vault/Clippings
 - [x] **Graceful shutdown:** `lifespan` espera tasks pendientes, cierra TTS, grabación y LiteRT limpiamente
 - [x] **Paths hardcodeados:** Unificados bajo `settings.PROJECT_ROOT`, `settings.TEMP_DIR`, `settings.OBSIDIAN_CLIPPINGS`
 - [x] **Health endpoint:** `GET /health` verifica LiteRT, whisper-cli, Kokoro, tmux session, CDP port
+- [x] **Rate limiting:** Middleware de protección contra spam (5 req/s default, 1 req/2s estricto, 3 req/s streaming)
 
 ### 10.2. Restantes
-- [ ] **Rate limiting:** Sin protección contra spam de requests en endpoints
-- [ ] **Loop multimodal:** `analyze_screen()` genera imagen pero no hay segunda pasada automática en `assistant_service.py` (pausado)
+- [ ] **Loop multimodal:** `analyze_screen()` genera imagen pero no hay segunda pasada automática en `assistant_service.py` (pausado — esperando mejora en tool calling multimodal de LiteRT-LM)
 
 ---
 
@@ -338,10 +338,11 @@ El archivo `config/system_prompt.txt` define:
 8. **TTS Pipeline:** Doble cola con `synthesize_only()` + `play_audio_array()` y `sd.OutputStream` persistente
 9. **ContextInjector:** 100% async con `asyncio.gather()` para consultas paralelas de hardware
 10. **Browser package:** `src/browser/` con 5 sub-módulos (launcher, navigation, clip, research, translate)
-11. **Tests:** 101 tests unitarios cubren todos los módulos
+11. **Tests:** 102 tests unitarios cubren todos los módulos
 12. **Health endpoint:** `GET /health` verifica LiteRT, whisper-cli, Kokoro, tmux, CDP (puerto 9222)
 13. **Graceful shutdown:** `lifespan` espera tasks pendientes (3s timeout), cierra TTS stream, grabación y LiteRT
 14. **Paths unificados:** `settings.PROJECT_ROOT`, `settings.TEMP_DIR`, `settings.OBSIDIAN_VAULT`, `settings.OBSIDIAN_CLIPPINGS`
+15. **Rate limiting:** Middleware con 3 niveles: default (5 req/s), strict (1 req/2s para /listen/toggle, /reset), streaming (3 req/s)
 
 ---
 
@@ -362,6 +363,7 @@ El archivo `config/system_prompt.txt` define:
 | **Mayo 2026** | **Fase 2: TTS pipeline doble cola (synth \|\| play), _extract_sentences con coma** |
 | **Mayo 2026** | **Fase 3: Browser refactor en 5 sub-módulos, pending_image movido a AppState** |
 | **Mayo 2026** | **Fase 4: Graceful shutdown, paths unificados bajo settings, health endpoint** |
+| **Mayo 2026** | **Fase 5: Rate limiting middleware (3 niveles: default, strict, streaming)** |
 
 ---
 

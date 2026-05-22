@@ -649,6 +649,15 @@ async def open_terminal_and_run_command(command: str) -> str:
         try:
             logger.info(f"Enviando comando a sesión de tmux existente: {command}")
             await _run_tmux_cmd(["send-keys", "-t", session_name, wrapped_command, "C-m"])
+            # Esperar a que el comando termine y capturar output
+            await asyncio.sleep(1.0)
+            ok_capture, screen_output = await _run_tmux_cmd(["capture-pane", "-p", "-t", session_name])
+            if ok_capture and screen_output:
+                # Devolver últimas 40 líneas
+                lines = screen_output.splitlines()
+                last_lines = lines[-40:]
+                screen_content = "\n".join(last_lines)
+                return f"Éxito: Comando ejecutado: {command}\n\nSALIDA DE LA TERMINAL:\n{screen_content}"
             return f"Éxito: Se ha enviado el comando a la terminal abierta: {command}"
         except Exception as e:
             logger.error(f"Error enviando comando a tmux: {e}")
@@ -684,6 +693,15 @@ async def open_terminal_and_run_command(command: str) -> str:
         
         # Enviar el comando envuelto
         await _run_tmux_cmd(["send-keys", "-t", session_name, wrapped_command, "C-m"])
+        
+        # Esperar a que el comando termine y capturar output
+        await asyncio.sleep(1.0)
+        ok_capture, screen_output = await _run_tmux_cmd(["capture-pane", "-p", "-t", session_name])
+        if ok_capture and screen_output:
+            lines = screen_output.splitlines()
+            last_lines = lines[-40:]
+            screen_content = "\n".join(last_lines)
+            return f"Éxito: Terminal {chosen_terminal.capitalize()} abierta y comando ejecutado: {command}\n\nSALIDA DE LA TERMINAL:\n{screen_content}"
         
         return f"Éxito: Se ha abierto una ventana de {chosen_terminal.capitalize()} y ejecutado: {command}"
     except Exception as e:

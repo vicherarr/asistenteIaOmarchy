@@ -224,6 +224,7 @@ class AssistantService:
         if self._current_tts_task and not self._current_tts_task.done():
             self._current_tts_task.cancel()
         self.tts.stop() # Asegurar parada inmediata del proceso
+        self.tts._is_playing = True  # Re-activar para nueva síntesis
 
         # Pipeline de doble cola: texto → síntesis → audio → reproducción
         queue_text = asyncio.Queue()
@@ -288,17 +289,11 @@ class AssistantService:
             self.tts.stop()
             raise
         finally:
-            # Enviar señal de fin al worker de síntesis
+            # Enviar señal de fin a workers pero NO esperarlos
+            # El stream debe cerrarse inmediatamente para que la GUI actualice el texto
             await queue_text.put(None)
-            # Esperar a que el synth worker termine
-            if synth_task and not synth_task.done():
-                await synth_task
-            
-            # Enviar señal de fin al worker de reproducción
             await queue_audio.put(None)
-            # Esperar a que el play worker termine (reproduce audio pendiente)
-            if play_task and not play_task.done():
-                await play_task
+            # Los workers continúan en background reproduciendo audio pendiente
 
     async def process_transcription(
         self,

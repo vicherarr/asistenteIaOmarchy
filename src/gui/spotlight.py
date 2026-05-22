@@ -12,8 +12,6 @@ from PySide6.QtCore import Qt, QTimer, Property, QPropertyAnimation, QEasingCurv
 from PySide6.QtGui import QFont, QPalette, QColor, QKeyEvent, QIcon, QPainter, QPen, QBrush, QLinearGradient, QRadialGradient, QPainterPath
 from qasync import QEventLoop, asyncSlot
 
-from src.config import settings
-
 class StateVisualizer(QWidget):
     """Visualizador dinámico que renderiza animaciones basadas en el estado del asistente."""
     def __init__(self, parent=None):
@@ -1033,7 +1031,7 @@ def main():
         loop.run_forever()
 
 if __name__ == "__main__":
-    pid_file = str(settings.TEMP_DIR / "asistenteia-gui.pid")
+    pid_file = "/tmp/asistenteia-gui.pid"
     if os.path.exists(pid_file):
         try:
             with open(pid_file, "r") as f:
