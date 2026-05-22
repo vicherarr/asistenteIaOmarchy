@@ -167,30 +167,43 @@ class LiteRTClient:
                             "content": [{"type": "text", "text": _smart_trunc(msg.content, msg_limit)}]
                         })
 
-                with self.engine.create_conversation(messages=formatted_messages, tools=sync_tools) as conversation:
-                    content_parts = [{"type": "text", "text": _smart_trunc(prompt, MAX_PROMPT_CHARS)}]
-                    if image_path:
-                        content_parts.append({"type": "image", "path": str(image_path)})
-                    
-                    current_message = {
-                        "role": "user",
-                        "content": content_parts
-                    }
+                content_parts = [{"type": "text", "text": _smart_trunc(prompt, MAX_PROMPT_CHARS)}]
+                if image_path:
+                    content_parts.append({"type": "image", "path": str(image_path)})
+                
+                current_message = {
+                    "role": "user",
+                    "content": content_parts
+                }
 
-                    stream = conversation.send_message_async(current_message)
-                    for chunk in stream:
-                        text_parts = []
-                        if isinstance(chunk, dict):
-                            for part in chunk.get("content", []):
-                                if part.get("type") == "text":
-                                    text_parts.append(part.get("text", ""))
-                        elif hasattr(chunk, "text"):
-                            text_parts.append(chunk.text)
-                        
-                        text_to_send = "".join(text_parts)
-                        if text_to_send:
-                            loop.call_soon_threadsafe(queue.put_nowait, ("text", text_to_send))
-                            
+                # Intentar con herramientas primero; si falla por tool call parsing, reintentar sin ellas
+                tools_to_use = sync_tools
+                for attempt in range(2):
+                    try:
+                        with self.engine.create_conversation(messages=formatted_messages, tools=tools_to_use) as conversation:
+                            stream = conversation.send_message_async(current_message)
+                            for chunk in stream:
+                                text_parts = []
+                                if isinstance(chunk, dict):
+                                    for part in chunk.get("content", []):
+                                        if part.get("type") == "text":
+                                            text_parts.append(part.get("text", ""))
+                                elif hasattr(chunk, "text"):
+                                    text_parts.append(chunk.text)
+                                
+                                text_to_send = "".join(text_parts)
+                                if text_to_send:
+                                    loop.call_soon_threadsafe(queue.put_nowait, ("text", text_to_send))
+                            break  # Éxito
+                    except Exception as e:
+                        err_str = str(e)
+                        if "Failed to parse tool calls" in err_str or "INVALID_ARGUMENT" in err_str:
+                            if attempt == 0:
+                                logger.warning("Tool call parsing failed, retrying without tools...")
+                                tools_to_use = None
+                                continue
+                        raise
+
                 loop.call_soon_threadsafe(queue.put_nowait, ("done", None))
             except Exception as e:
                 logger.error(f"Error en inferencia LiteRT streaming (API 2026): {e}")
@@ -328,39 +341,49 @@ class LiteRTClient:
                         "content": [{"type": "text", "text": _smart_trunc(msg.content, msg_limit)}]
                     })
 
-            # 2. Crear conversación
-            with self.engine.create_conversation(messages=formatted_messages, tools=tools) as conversation:
-                
-                # 3. Construir mensaje actual (con truncamiento del prompt)
-                content_parts = [{"type": "text", "text": _smart_trunc(prompt, MAX_PROMPT_CHARS)}]
-                
-                if image_path:
-                    # Según docs 2026, pasar la ruta ('path') es lo más estable
-                    content_parts.append({"type": "image", "path": str(image_path)})
-                
-                current_message = {
-                    "role": "user",
-                    "content": content_parts
-                }
-
-                # 4. Enviar mensaje
-                response = conversation.send_message(current_message)
-
-                # 5. Extraer respuesta de texto
-                if isinstance(response, dict):
-                    text = ""
-                    for part in response.get("content", []):
-                        if part.get("type") == "text":
-                            text += part.get("text", "")
-                    return text.strip()
-                
-                if hasattr(response, "text"):
-                    return response.text
-                
+            # 2. Crear conversación con retry si falla tool calling
+            tools_to_use = tools
+            for attempt in range(2):
                 try:
-                    return response["content"][0]["text"]
-                except:
-                    return str(response)
+                    with self.engine.create_conversation(messages=formatted_messages, tools=tools_to_use) as conversation:
+                        
+                        # 3. Construir mensaje actual (con truncamiento del prompt)
+                        content_parts = [{"type": "text", "text": _smart_trunc(prompt, MAX_PROMPT_CHARS)}]
+                        
+                        if image_path:
+                            content_parts.append({"type": "image", "path": str(image_path)})
+                        
+                        current_message = {
+                            "role": "user",
+                            "content": content_parts
+                        }
+
+                        # 4. Enviar mensaje
+                        response = conversation.send_message(current_message)
+
+                        # 5. Extraer respuesta de texto
+                        if isinstance(response, dict):
+                            text = ""
+                            for part in response.get("content", []):
+                                if part.get("type") == "text":
+                                    text += part.get("text", "")
+                            return text.strip()
+                        
+                        if hasattr(response, "text"):
+                            return response.text
+                        
+                        try:
+                            return response["content"][0]["text"]
+                        except:
+                            return str(response)
+                except Exception as e:
+                    err_str = str(e)
+                    if "Failed to parse tool calls" in err_str or "INVALID_ARGUMENT" in err_str:
+                        if attempt == 0:
+                            logger.warning("Tool call parsing failed in chat, retrying without tools...")
+                            tools_to_use = None
+                            continue
+                    raise
 
         except Exception as e:
             logger.error(f"Error en inferencia LiteRT (API 2026): {e}")

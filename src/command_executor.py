@@ -458,15 +458,18 @@ async def system_diagnostics(component: str = "all") -> str:
 async def get_system_status() -> str:
     """Resumen de hardware: CPU, RAM, Audio."""
     from src.context_injector import get_system_context
-    return f"Contexto:\n{get_system_context()}"
+    return f"Contexto:\n{await get_system_context()}"
 
 
 async def read_log_file(service: str = "asistenteia") -> str:
-    """Lee logs de systemd."""
+    """Lee logs de systemd de forma segura sin shell injection."""
     try:
-        cmd = f"journalctl --user -u {service} -n 10 --no-pager"
-        process = await asyncio.create_subprocess_shell(
-            cmd,
+        process = await asyncio.create_subprocess_exec(
+            "journalctl",
+            "--user",
+            "-u", service,
+            "-n", "10",
+            "--no-pager",
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE
         )
@@ -576,6 +579,24 @@ async def interact_web(action: str, target: str, value: str = "") -> str:
         return f"Error crítico en automatización web: {e}"
 
 
+async def _run_tmux_cmd(args: list[str], timeout: float = 5.0) -> tuple[bool, str]:
+    """Ejecuta un comando tmux de forma asíncrona. Devuelve (éxito, salida)."""
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "tmux", *args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+        if process.returncode == 0:
+            return True, stdout.decode().strip()
+        return False, stderr.decode().strip()
+    except asyncio.TimeoutError:
+        return False, "Timeout ejecutando tmux"
+    except Exception as e:
+        return False, str(e)
+
+
 async def open_terminal_and_run_command(command: str) -> str:
     """
     Abre una terminal gráfica visible (como Alacritty, Kitty o Foot) y ejecuta un comando específico en ella.
@@ -587,8 +608,6 @@ async def open_terminal_and_run_command(command: str) -> str:
         command: El comando exacto de Linux que se ejecutará dentro de la terminal.
     """
     import shutil
-    import subprocess
-    import asyncio
     
     command = _sanitize_tool_args(command)
     session_name = "asistenteia"
@@ -608,31 +627,20 @@ async def open_terminal_and_run_command(command: str) -> str:
         )
     
     # 1. Comprobar si la sesión de tmux existe y si está activa en pantalla (attached)
-    session_exists = False
     session_attached = False
     
     try:
-        check_session = subprocess.run(
-            ["tmux", "has-session", "-t", session_name],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-        if check_session.returncode == 0:
-            session_exists = True
-            
+        ok, _ = await _run_tmux_cmd(["has-session", "-t", session_name])
+        if ok:
             # Ver si hay clientes conectados/adjuntos a esa sesión
-            check_attached = subprocess.run(
-                ["tmux", "list-sessions", "-F", "#{session_name} #{session_attached}"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            for line in check_attached.stdout.splitlines():
-                parts = line.split()
-                if len(parts) >= 2 and parts[0] == session_name:
-                    if parts[1] != "0":
-                        session_attached = True
-                    break
+            ok_sessions, output = await _run_tmux_cmd(["list-sessions", "-F", "#{session_name} #{session_attached}"])
+            if ok_sessions:
+                for line in output.splitlines():
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[0] == session_name:
+                        if parts[1] != "0":
+                            session_attached = True
+                        break
     except Exception as e:
         logger.error(f"Error comprobando estado de tmux: {e}")
 
@@ -640,8 +648,7 @@ async def open_terminal_and_run_command(command: str) -> str:
     if session_attached:
         try:
             logger.info(f"Enviando comando a sesión de tmux existente: {command}")
-            # Mandamos el comando envuelto y un ENTER (C-m)
-            subprocess.run(["tmux", "send-keys", "-t", session_name, wrapped_command, "C-m"], check=True)
+            await _run_tmux_cmd(["send-keys", "-t", session_name, wrapped_command, "C-m"])
             return f"Éxito: Se ha enviado el comando a la terminal abierta: {command}"
         except Exception as e:
             logger.error(f"Error enviando comando a tmux: {e}")
@@ -676,7 +683,7 @@ async def open_terminal_and_run_command(command: str) -> str:
         await asyncio.sleep(0.8)
         
         # Enviar el comando envuelto
-        subprocess.run(["tmux", "send-keys", "-t", session_name, wrapped_command, "C-m"], check=True)
+        await _run_tmux_cmd(["send-keys", "-t", session_name, wrapped_command, "C-m"])
         
         return f"Éxito: Se ha abierto una ventana de {chosen_terminal.capitalize()} y ejecutado: {command}"
     except Exception as e:
@@ -690,8 +697,6 @@ async def read_terminal_screen() -> str:
     Usa esto para verificar el resultado de un comando que acabas de ejecutar, comprobar si
     se produjo un error, o ver si la consola está esperando interacción (ej: pidiendo contraseña de sudo).
     """
-    import subprocess
-    import asyncio
     import re
     
     # Pequeño retardo para dar tiempo a la terminal a renderizar los cambios del comando recién enviado
@@ -700,28 +705,17 @@ async def read_terminal_screen() -> str:
     session_name = "asistenteia"
     try:
         # Verificar si la sesión existe
-        check_session = subprocess.run(
-            ["tmux", "has-session", "-t", session_name],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-        if check_session.returncode != 0:
+        ok, _ = await _run_tmux_cmd(["has-session", "-t", session_name])
+        if not ok:
             return "La terminal persistente no está iniciada (no hay sesión activa de tmux)."
             
         # Capturar el panel activo de la sesión de tmux
-        capture = subprocess.run(
-            ["tmux", "capture-pane", "-p", "-t", session_name],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-        if capture.returncode == 0:
-            output = capture.stdout.strip()
+        ok_capture, output = await _run_tmux_cmd(["capture-pane", "-p", "-t", session_name])
+        if ok_capture:
             if not output:
                 return "La pantalla de la terminal está vacía."
                 
             # Buscar si hay algún indicador de código de salida en el contenido capturado
-            # El patrón es: [AsistenteIA: 'comando' finalizado correctamente] o [AsistenteIA: 'comando' falló con código de error X]
             success_match = re.search(r"\[AsistenteIA: '([^']+)'\s+finalizado correctamente\]", output)
             exit_code_match = re.search(r"\[AsistenteIA: '([^']+)'\s+falló con código de error (\d+)\]", output)
             
@@ -742,7 +736,7 @@ async def read_terminal_screen() -> str:
             
             return "CONTENIDO VISIBLE EN LA TERMINAL:\n\n" + screen_content
         else:
-            return f"Error al capturar la pantalla de la terminal: {capture.stderr.strip()}"
+            return f"Error al capturar la pantalla de la terminal: {output}"
     except Exception as e:
         logger.error(f"Error en read_terminal_screen: {e}")
         return f"Excepción leyendo pantalla de la terminal: {e}"
@@ -756,21 +750,16 @@ async def send_input_to_terminal(input_text: str) -> str:
     Args:
         input_text: El texto exacto a enviar (ej. 'y', 'n', 'mi_contraseña').
     """
-    import subprocess
     input_text = _sanitize_tool_args(input_text)
     session_name = "asistenteia"
     try:
         # Verificar si la sesión existe
-        check_session = subprocess.run(
-            ["tmux", "has-session", "-t", session_name],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-        if check_session.returncode != 0:
+        ok, _ = await _run_tmux_cmd(["has-session", "-t", session_name])
+        if not ok:
             return "La terminal persistente no está iniciada (no hay proceso activo al cual enviar entrada)."
             
         # Enviar las teclas y presionar ENTER (C-m)
-        subprocess.run(["tmux", "send-keys", "-t", session_name, input_text, "C-m"], check=True)
+        await _run_tmux_cmd(["send-keys", "-t", session_name, input_text, "C-m"])
         return f"Éxito: Se ha enviado la entrada '{input_text}' al proceso de la terminal."
     except Exception as e:
         logger.error(f"Error en send_input_to_terminal: {e}")
@@ -782,20 +771,15 @@ async def interrupt_terminal_command() -> str:
     Envía una señal de interrupción Ctrl+C (SIGINT) al comando en ejecución en la terminal persistente
     para detener un proceso que se ha quedado bloqueado, congelado o en un bucle infinito.
     """
-    import subprocess
     session_name = "asistenteia"
     try:
         # Verificar si la sesión existe
-        check_session = subprocess.run(
-            ["tmux", "has-session", "-t", session_name],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-        if check_session.returncode != 0:
+        ok, _ = await _run_tmux_cmd(["has-session", "-t", session_name])
+        if not ok:
             return "La terminal persistente no está activa (no hay ningún proceso para interrumpir)."
             
         # Enviar Ctrl+C
-        subprocess.run(["tmux", "send-keys", "-t", session_name, "C-c"], check=True)
+        await _run_tmux_cmd(["send-keys", "-t", session_name, "C-c"])
         return "Éxito: Señal de interrupción Ctrl+C enviada a la terminal para detener el comando activo."
     except Exception as e:
         logger.error(f"Error en interrupt_terminal_command: {e}")
@@ -831,629 +815,46 @@ async def control_local_browser(action: str, target: str = "", value: str = "") 
         target: URL o selector CSS según la acción.
         value: Texto a escribir o valor de scroll.
     """
-    import socket
-    import subprocess
-    import shutil
-    import os
-    import asyncio
+    from src.browser import (
+        ensure_browser, get_page,
+        browser_navigate, browser_click, browser_type, browser_read, browser_scroll,
+        browser_clip, browser_research, browser_translate,
+    )
     from playwright.async_api import async_playwright
-    
+
     action = _sanitize_tool_args(action)
     target = _sanitize_tool_args(target)
     value = _sanitize_tool_args(value)
 
-    def _is_port_open(port: int = 9222) -> bool:
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.3):
-                return True
-        except Exception:
-            return False
-
-    # 1. Comprobar si Chromium está activo con CDP habilitado
-    if not _is_port_open(9222):
-        # Intentar lanzarlo
-        profile_path = str(settings.PROJECT_ROOT / ".chrome-profile")
-        os.makedirs(profile_path, exist_ok=True)
-        
-        binary = shutil.which("chromium") or shutil.which("google-chrome-stable")
-        if not binary:
-            return "Error: No se encontró Chromium o Google Chrome en el sistema."
-            
-        args = [
-            binary,
-            "--remote-debugging-port=9222",
-            f"--user-data-dir={profile_path}",
-            "--no-first-run",
-            "--no-default-browser-check"
-        ]
-        logger.info(f"Lanzando Chromium visible con CDP habilitado en puerto 9222...")
-        subprocess.Popen(args, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        
-        # Esperar a que el puerto responda
-        for _ in range(10):
-            await asyncio.sleep(0.5)
-            if _is_port_open(9222):
-                break
-        else:
-            return "Error: Se intentó lanzar Chromium pero no se detectó respuesta en el puerto 9222."
+    # 1. Asegurar que Chromium está corriendo con CDP
+    error = await ensure_browser()
+    if error:
+        return error
 
     if action == "launch":
         return "Éxito: Navegador Chromium visible iniciado y listo con depuración habilitada en el puerto 9222."
 
-    # 2. Conectarse y realizar la acción mediante Playwright
+    # 2. Conectar y despachar acción (playwright context manager mantiene la conexión viva)
     try:
         async with async_playwright() as p:
-            logger.info("Conectando a Chromium visible vía CDP...")
-            browser = await p.chromium.connect_over_cdp("http://127.0.0.1:9222")
-            
-            # Obtener el contexto y asegurar que hay al menos una pestaña
-            context = browser.contexts[0]
-            page = context.pages[0] if context.pages else await context.new_page()
-            
+            page = await get_page(p)
+
             if action == "navigate":
-                if not target:
-                    return "Error: Especifica la URL a navegar en el argumento 'target'."
-                if not target.startswith("http"):
-                    target = "https://" + target
-                
-                logger.info(f"Navegando a {target}...")
-                await page.goto(target, wait_until="networkidle", timeout=15000)
-                title = await page.title()
-                return f"Éxito: Navegado correctamente a '{target}' (Título: '{title}')."
-                
+                return await browser_navigate(page, target)
             elif action == "click":
-                if not target:
-                    return "Error: Especifica el selector CSS para hacer clic en el argumento 'target'."
-                
-                logger.info(f"Haciendo clic en selector '{target}'...")
-                await page.wait_for_selector(target, timeout=5000)
-                await page.click(target)
-                await asyncio.sleep(1.0) # Esperar a que renderice la respuesta
-                return f"Éxito: Se hizo clic en el elemento con selector '{target}'."
-                
+                return await browser_click(page, target)
             elif action == "type":
-                if not target:
-                    return "Error: Especifica el selector CSS en 'target' para escribir."
-                
-                logger.info(f"Escribiendo texto en '{target}'...")
-                await page.wait_for_selector(target, timeout=5000)
-                await page.click(target)
-                # Simular escritura real con pequeños retrasos entre teclas
-                await page.type(target, value, delay=50)
-                await asyncio.sleep(0.5)
-                return f"Éxito: Se escribió correctamente '{value}' en el elemento '{target}'."
-                
+                return await browser_type(page, target, value)
             elif action == "read":
-                title = await page.title()
-                content = await page.evaluate("document.body.innerText")
-                snippet = content[:3000] + "\n\n[Contenido de la página truncado por longitud...]" if len(content) > 3000 else content
-                return f"INFORMACIÓN DE PESTAÑA ACTIVA:\n- TÍTULO: {title}\n- URL: {page.url}\n\nCONTENIDO TEXTUAL:\n\n{snippet}"
-                
+                return await browser_read(page)
             elif action == "scroll":
-                scroll_amount = 500
-                if value:
-                    try:
-                        scroll_amount = int(value)
-                    except ValueError:
-                        pass
-                logger.info(f"Haciendo scroll vertical de {scroll_amount}px...")
-                await page.evaluate(f"window.scrollBy(0, {scroll_amount})")
-                return f"Éxito: Se desplazó la página verticalmente {scroll_amount} píxeles."
-                
+                return await browser_scroll(page, value)
             elif action == "clip":
-                import re as _re
-                from datetime import datetime
-                
-                title = await page.title()
-                url = page.url
-                logger.info(f"Guardando clip de '{title}' en Obsidian...")
-                
-                # 1. Extraer texto limpio usando trafilatura (sin anuncios ni menús)
-                clean_content = None
-                try:
-                    import trafilatura
-                    def _fetch_clean():
-                        downloaded = trafilatura.fetch_url(url)
-                        if downloaded:
-                            return trafilatura.extract(
-                                downloaded,
-                                include_comments=False,
-                                include_tables=True,
-                                favor_recall=True
-                            )
-                        return None
-                    clean_content = await asyncio.to_thread(_fetch_clean)
-                except Exception as e:
-                    logger.warning(f"trafilatura falló ({e}), usando innerText como fallback.")
-                
-                # Fallback: texto visible de la página
-                if not clean_content:
-                    clean_content = await page.evaluate("document.body.innerText")
-                
-                if not clean_content:
-                    return "Error: No se pudo extraer contenido textual de la página actual."
-                
-                # 2. Construir el nombre del archivo (slug limpio del título)
-                now = datetime.now()
-                date_str = now.strftime("%Y-%m-%d")
-                time_str = now.strftime("%H:%M")
-                slug = _re.sub(r'[^\w\s-]', '', title.lower())
-                slug = _re.sub(r'[\s_-]+', '-', slug).strip('-')[:60]
-                filename = f"{date_str} - {slug}.md"
-                
-                vault_dir = os.path.expanduser("~/Documentos/Obsidian Vault/Clippings")
-                filepath = os.path.join(vault_dir, filename)
-                
-                # 3. Generar el frontmatter YAML con metadatos enriquecidos
-                frontmatter = (
-                    f"---\n"
-                    f"título: \"{title}\"\n"
-                    f"url: {url}\n"
-                    f"fecha_captura: {date_str} {time_str}\n"
-                    f"etiquetas: [clipping, por-revisar]\n"
-                    f"---\n\n"
-                )
-                
-                # 4. Construir el contenido final del archivo Markdown
-                # Truncar a 15.000 chars para no saturar el vault con artículos enormes
-                max_chars = 15000
-                body = clean_content
-                truncated = False
-                if len(body) > max_chars:
-                    body = body[:max_chars]
-                    truncated = True
-                
-                md_content = (
-                    frontmatter +
-                    f"# {title}\n\n"
-                    f"> **Fuente:** [{url}]({url})\n\n"
-                    f"---\n\n"
-                    f"{body}\n"
-                )
-                if truncated:
-                    md_content += "\n\n---\n*[Contenido truncado — artículo completo disponible en la URL fuente]*\n"
-                
-                # 5. Escribir el archivo en el Vault de Obsidian
-                os.makedirs(vault_dir, exist_ok=True)
-                with open(filepath, 'w', encoding='utf-8') as f:
-                    f.write(md_content)
-                
-                # 6. Devolver resumen MUY COMPACTO al modelo (el informe completo ya está en Obsidian)
-                word_count = len(clean_content.split())
-                # Solo los primeros 400 chars para no saturar el contexto del LLM
-                summary_preview = clean_content[:400].strip()
-                
-                return (
-                    f"CLIP GUARDADO EN OBSIDIAN:\n"
-                    f"- Archivo: {filename}\n"
-                    f"- Palabras extraídas: {word_count}\n"
-                    f"EXTRACTO INICIAL (para tu resumen oral al usuario):\n{summary_preview}\n"
-                )
-                
+                return await browser_clip(page)
             elif action == "research":
-                import re as _re
-                from datetime import datetime
-                import trafilatura
-
-                if not target:
-                    return "Error: Especifica el tema o pregunta a investigar en el argumento 'target'."
-
-                max_steps = 30
-                if value:
-                    try:
-                        max_steps = min(int(value), 30)
-                    except ValueError:
-                        pass
-
-                query = target
-                logger.info(f"Iniciando investigación profunda ({max_steps} pasos máx): {query}")
-
-                # --- Estado de la investigación ---
-                visited_urls = set()
-                # Lista de (url, titulo, extracto) recopilados
-                gathered: list[dict] = []
-                # Cola de URLs pendientes por visitar
-                pending_urls: list[tuple[str, str]] = []  # (url, titulo)
-                step = 0
-                search_attempts = 0
-                # Variaciones de búsqueda para cuando el primer intento no es suficiente
-                search_variants = [
-                    query,
-                    query + " explicación detallada",
-                    query + " site:wikipedia.org",
-                    query + " tutorial guía",
-                    query + " cómo funciona",
-                ]
-
-                def _extract_url(url: str) -> str | None:
-                    """Extrae texto limpio de una URL usando trafilatura."""
-                    try:
-                        downloaded = trafilatura.fetch_url(url)
-                        if not downloaded:
-                            return None
-                        return trafilatura.extract(
-                            downloaded,
-                            include_comments=False,
-                            include_tables=True,
-                            favor_recall=True
-                        )
-                    except Exception:
-                        return None
-
-                # --- BUCLE PRINCIPAL DE INVESTIGACIÓN ---
-                while step < max_steps:
-                    step += 1
-                    logger.info(f"[Research] Paso {step}/{max_steps} | Fuentes: {len(gathered)} | Pendientes: {len(pending_urls)}")
-
-                    # FASE 1: Si no hay URLs pendientes, lanzar una nueva búsqueda
-                    if not pending_urls:
-                        if search_attempts >= len(search_variants):
-                            logger.info("[Research] Agotadas todas las variantes de búsqueda.")
-                            break
-
-                        current_query = search_variants[search_attempts]
-                        search_attempts += 1
-                        logger.info(f"[Research] Búsqueda #{search_attempts}: '{current_query}'")
-
-                        # Navegar a Google con la query (más fiable para extracción de links)
-                        encoded_q = current_query.replace(' ', '+')
-                        search_url = f"https://www.google.com/search?q={encoded_q}&hl=es"
-                        try:
-                            await page.goto(search_url, wait_until="domcontentloaded", timeout=15000)
-                            await asyncio.sleep(2.0)  # Dar tiempo a Google a renderizar
-                        except Exception as e:
-                            logger.warning(f"[Research] Error navegando a Google: {e}")
-                            # Fallback a DuckDuckGo si Google falla
-                            try:
-                                ddg_url = f"https://duckduckgo.com/?q={encoded_q}"
-                                await page.goto(ddg_url, wait_until="domcontentloaded", timeout=12000)
-                                await asyncio.sleep(2.0)
-                            except Exception as e2:
-                                logger.warning(f"[Research] Fallback DDG también falló: {e2}")
-                                continue
-
-                        # Extraer enlaces de resultados orgánicos de Google
-                        links = await page.evaluate("""
-                            () => {
-                                const results = [];
-                                const seen = new Set();
-                                // Selectores de resultados orgánicos de Google
-                                const selectors = [
-                                    '#search a[href^="https"]',
-                                    '#rso a[href^="https"]',
-                                    '.g a[href^="https"]',
-                                    'a[href^="https"]'
-                                ];
-                                const skipDomains = ['google.com', 'google.es', 'youtube.com',
-                                                    'accounts.google', 'support.google',
-                                                    'maps.google', 'translate.google',
-                                                    'webcache', 'policies.google'];
-                                for (const sel of selectors) {
-                                    document.querySelectorAll(sel).forEach(a => {
-                                        const href = a.href || '';
-                                        const text = (a.innerText || a.textContent || '').trim();
-                                        const skip = skipDomains.some(d => href.includes(d));
-                                        if (href && !skip && !seen.has(href) && text.length > 5) {
-                                            seen.add(href);
-                                            results.push({url: href, title: text.substring(0, 120)});
-                                        }
-                                    });
-                                    if (results.length >= 10) break;
-                                }
-                                return results.slice(0, 10);
-                            }
-                        """)
-
-                        logger.info(f"[Research] Links extraídos de búsqueda: {len(links)}")
-
-                        for link in links:
-                            url_item = link.get('url', '')
-                            title_item = link.get('title', url_item)
-                            if url_item and url_item not in visited_urls:
-                                pending_urls.append((url_item, title_item))
-
-                        logger.info(f"[Research] {len(pending_urls)} URLs encoladas.")
-                        continue
-
-                    # FASE 2: Visitar la siguiente URL pendiente
-                    next_url, next_title = pending_urls.pop(0)
-
-                    if next_url in visited_urls:
-                        continue
-                    visited_urls.add(next_url)
-
-                    logger.info(f"[Research] Visitando: {next_url}")
-
-                    # Navegar en el navegador visible (el usuario ve el progreso)
-                    try:
-                        await page.goto(next_url, wait_until="domcontentloaded", timeout=12000)
-                        await asyncio.sleep(1.0)
-                    except Exception as e:
-                        logger.warning(f"[Research] No se pudo navegar a {next_url}: {e}")
-                        continue
-
-                    # Extraer contenido limpio con trafilatura (más preciso que innerText)
-                    content = await asyncio.to_thread(_extract_url, next_url)
-
-                    # Fallback a innerText si trafilatura falla
-                    if not content:
-                        try:
-                            content = await page.evaluate("document.body.innerText")
-                        except Exception:
-                            content = None
-
-                    if content and len(content.strip()) > 200:
-                        # Guardar hasta 2500 chars por fuente para no saturar
-                        snippet = content.strip()[:2500]
-                        page_title = await page.title()
-                        gathered.append({
-                            "url": next_url,
-                            "titulo": page_title or next_title,
-                            "contenido": snippet,
-                            "paso": step
-                        })
-                        logger.info(f"[Research] Fuente #{len(gathered)} añadida: '{page_title}' ({len(snippet)} chars)")
-
-                        # Si ya tenemos 8+ fuentes ricas, podemos parar antes
-                        if len(gathered) >= 8:
-                            logger.info("[Research] Suficientes fuentes recopiladas. Finalizando bucle.")
-                            break
-
-                # --- COMPILAR EL INFORME FINAL ---
-                if not gathered:
-                    return f"Investigación completada en {step} pasos pero no se encontró contenido útil sobre: {query}"
-
-                now = datetime.now()
-                report_lines = [
-                    f"INFORME DE INVESTIGACIÓN PROFUNDA",
-                    f"Tema: {query}",
-                    f"Pasos ejecutados: {step}/{max_steps}",
-                    f"Fuentes recopiladas: {len(gathered)}",
-                    f"Fecha: {now.strftime('%Y-%m-%d %H:%M')}",
-                    "=" * 60,
-                    ""
-                ]
-
-                for i, src in enumerate(gathered, 1):
-                    report_lines.append(f"--- FUENTE {i}: {src['titulo']} ---")
-                    report_lines.append(f"URL: {src['url']}")
-                    report_lines.append(f"Paso de captura: {src['paso']}")
-                    report_lines.append("")
-                    report_lines.append(src['contenido'])
-                    report_lines.append("")
-
-                full_report = "\n".join(report_lines)
-
-                # Guardar también en Obsidian como nota de investigación
-                try:
-                    vault_dir = os.path.expanduser("~/Documentos/Obsidian Vault/Clippings")
-                    os.makedirs(vault_dir, exist_ok=True)
-                    date_str = now.strftime("%Y-%m-%d")
-                    slug = _re.sub(r'[^\w\s-]', '', query.lower())
-                    slug = _re.sub(r'[\s_-]+', '-', slug).strip('-')[:50]
-                    filename = f"{date_str} - investigacion - {slug}.md"
-                    filepath = os.path.join(vault_dir, filename)
-
-                    md_lines = [
-                        f"---",
-                        f"título: \"Investigación: {query}\"",
-                        f"tipo: investigacion",
-                        f"fecha_captura: {date_str} {now.strftime('%H:%M')}",
-                        f"fuentes: {len(gathered)}",
-                        f"pasos: {step}",
-                        f"etiquetas: [investigacion, por-revisar]",
-                        f"---",
-                        f"",
-                        f"# Investigación: {query}",
-                        f"",
-                        f"**Pasos ejecutados:** {step} | **Fuentes:** {len(gathered)} | **Fecha:** {now.strftime('%Y-%m-%d %H:%M')}",
-                        f"",
-                        f"---",
-                        f"",
-                    ]
-                    for i, src in enumerate(gathered, 1):
-                        md_lines.append(f"## Fuente {i}: {src['titulo']}")
-                        md_lines.append(f"> [{src['url']}]({src['url']})")
-                        md_lines.append(f"")
-                        md_lines.append(src['contenido'])
-                        md_lines.append(f"")
-                        md_lines.append(f"---")
-                        md_lines.append(f"")
-
-                    with open(filepath, 'w', encoding='utf-8') as f:
-                        f.write("\n".join(md_lines))
-                    logger.info(f"[Research] Informe guardado en Obsidian: {filename}")
-                    obsidian_note = filename
-                except Exception as e:
-                    logger.warning(f"[Research] No se pudo guardar en Obsidian: {e}")
-                    obsidian_note = "(no guardado)"
-
-                # Devolver RESUMEN COMPACTO al modelo (máx ~1200 chars)
-                # El informe completo ya está en Obsidian. El modelo solo necesita
-                # los titulares y un extracto de cada fuente para hablar con el usuario.
-                compact_lines = [
-                    f"INVESTIGACIÓN COMPLETADA: '{query}'",
-                    f"Pasos: {step} | Fuentes: {len(gathered)} | Nota Obsidian: {obsidian_note}",
-                    ""
-                ]
-                chars_budget = 900  # dejar margen para el resto del contexto
-                for i, src in enumerate(gathered, 1):
-                    entry = f"[{i}] {src['titulo']} ({src['url']})\n{src['contenido'][:120]}..."
-                    if sum(len(l) for l in compact_lines) + len(entry) > chars_budget:
-                        compact_lines.append(f"... y {len(gathered)-i+1} fuentes más en Obsidian.")
-                        break
-                    compact_lines.append(entry)
-                    compact_lines.append("")
-
-                return "\n".join(compact_lines)
-
+                return await browser_research(page, target, value)
             elif action == "translate":
-                if not target:
-                    return "Error: Especifica la URL de la página a traducir en el argumento 'target'."
-
-                url = target if target.startswith("http") else "https://" + target
-                lang = value if value else "es"
-                logger.info(f"Traduciendo página a '{lang}': {url}")
-
-                # 1. Navegar a la página
-                try:
-                    await page.goto(url, wait_until="domcontentloaded", timeout=15000)
-                    await asyncio.sleep(1.5)
-                except Exception as e:
-                    return f"Error navegando a {url}: {e}"
-
-                page_title = await page.title()
-                logger.info(f"Página cargada: {page_title}")
-
-                # 2. Extraer texto estructurado de la página
-                _JS_EXTRACT = """() => {
-                    const skipTags = new Set(['SCRIPT','STYLE','NOSCRIPT','NAV','FOOTER','HEADER','ASIDE','IFRAME']);
-                    const sel = 'h1,h2,h3,h4,h5,h6,p,li,td,th,figcaption,blockquote,dd,dt,article,section';
-                    const blocks = [];
-                    document.querySelectorAll(sel).forEach(el => {
-                        if (skipTags.has(el.tagName)) return;
-                        const t = el.innerText.trim();
-                        if (t.length > 2) {
-                            const tag = el.tagName.toLowerCase();
-                            if (tag.length === 2 && tag.charAt(0) === 'h' && '123456'.indexOf(tag.charAt(1)) !== -1) {
-                                blocks.push('\\n## ' + t + '\\n');
-                            } else if (tag === 'li') {
-                                blocks.push('- ' + t);
-                            } else {
-                                blocks.push(t);
-                            }
-                        }
-                    });
-                    return blocks.join('\\n\\n');
-                }"""
-                raw_text = await page.evaluate(_JS_EXTRACT)
-
-                if not raw_text or len(raw_text.strip()) < 10:
-                    raw_text = await page.evaluate("document.body.innerText")
-                    if not raw_text or len(raw_text.strip()) < 10:
-                        return f"No se pudo extraer texto traducible de {url}."
-
-                MAX_CHARS = 12000
-                truncated = False
-                if len(raw_text) > MAX_CHARS:
-                    raw_text = raw_text[:MAX_CHARS]
-                    truncated = True
-                    logger.info(f"Texto truncado a {MAX_CHARS} caracteres para traducción")
-
-                # 3. Traducir con Google Translate (deep-translator)
-                try:
-                    from deep_translator import GoogleTranslator
-                except ImportError:
-                    try:
-                        import subprocess as _sp
-                        _sp.run(
-                            ["pip3", "install", "deep-translator", "--break-system-packages", "-q"],
-                            check=True, timeout=60
-                        )
-                        from deep_translator import GoogleTranslator
-                    except Exception:
-                        return "Error: Instala deep-translator con: pip install deep-translator"
-
-                def _translate_chunks(text: str, target_lang: str) -> str:
-                    translator = GoogleTranslator(source='auto', target=target_lang)
-                    CHUNK_SIZE = 4500
-                    parts = []
-                    start = 0
-                    while start < len(text):
-                        end = min(start + CHUNK_SIZE, len(text))
-                        chunk = text[start:end]
-                        if end < len(text):
-                            nl = chunk.rfind('\n')
-                            if nl > CHUNK_SIZE // 2:
-                                chunk = chunk[:nl]
-                                start += len(chunk) + 1
-                            else:
-                                start = end
-                        else:
-                            start = end
-                        try:
-                            t = translator.translate(chunk)
-                            parts.append(t if t else chunk)
-                        except Exception:
-                            parts.append(chunk)
-                    return '\n\n'.join(parts)
-
-                translated = await asyncio.to_thread(_translate_chunks, raw_text, lang)
-
-                if not translated or not translated.strip():
-                    return "Error: La traducción devolvió un resultado vacío."
-
-                # 4. Inyectar panel de traducción en la página (overlay visual)
-                _JS_OVERLAY = """(data) => {
-            const overlay = document.createElement('div');
-            overlay.id = '_asistenteia_tr';
-            overlay.style.cssText = 'position:fixed;top:0;right:0;width:50%;height:100vh;background:rgba(255,255,255,0.97);overflow-y:auto;z-index:2147483647;font-family:system-ui,sans-serif;font-size:15px;line-height:1.75;color:#1a1a1a;padding:28px 32px;border-left:4px solid #1a73e8;box-shadow:-6px 0 30px rgba(0,0,0,0.18)';
-            const existing = document.getElementById('_asistenteia_tr');
-            if (existing) existing.remove();
-            if (!document.getElementById('_trStyle')) {
-                const style = document.createElement('style');
-                style.id = '_trStyle';
-                style.textContent = '@keyframes _trSlideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}';
-                document.head.appendChild(style);
-                overlay.style.animation = '_trSlideIn 0.35s ease-out';
-            } else {
-                overlay.style.animation = '_trSlideIn 0.35s ease-out';
-            }
-            const closeBtn = document.createElement('button');
-            closeBtn.textContent = '\\u2715';
-            closeBtn.style.cssText = 'position:sticky;top:0;float:right;background:#1a73e8;color:white;border:none;border-radius:50%;width:36px;height:36px;font-size:20px;cursor:pointer;box-shadow:0 2px 10px rgba(26,115,232,0.4);z-index:2;display:flex;align-items:center;justify-content:center';
-            closeBtn.onmouseover = function() { closeBtn.style.background = '#1557b0'; };
-            closeBtn.onmouseout = function() { closeBtn.style.background = '#1a73e8'; };
-            closeBtn.onclick = function() { overlay.remove(); };
-            overlay.appendChild(closeBtn);
-            const header = document.createElement('div');
-            header.style.cssText = 'clear:both;margin-bottom:20px';
-            header.innerHTML = '<div style="display:flex;align-items:center;gap:10px;margin-bottom:4px"><span style="font-size:28px">\\uD83C\\uDF10</span><h2 style="color:#1a73e8;margin:0;font-size:22px">Traduccion al ' + data.lang.toUpperCase() + '</h2></div><p style="color:#666;margin:0;font-size:13px"><strong>' + data.title + '</strong><br><a href="' + data.url + '" style="color:#1a73e8">' + data.url + '</a></p><hr style="border:none;border-top:1px solid #e0e0e0;margin:14px 0">';
-            overlay.appendChild(header);
-            const contentEl = document.createElement('div');
-            contentEl.style.cssText = 'max-width:100%;word-wrap:break-word';
-            const safe = data.translated.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            const lines = safe.split('\\n');
-            let html = '';
-            for (let i = 0; i < lines.length; i++) {
-                const line = lines[i];
-                if (line.startsWith('## ')) {
-                    html += '<h3 style="color:#1a73e8;margin:18px 0 8px;font-size:18px">' + line.substring(3) + '</h3>';
-                } else if (line.startsWith('- ')) {
-                    html += '<li style="margin-left:20px;margin-bottom:4px">' + line.substring(2) + '</li>';
-                } else if (line.trim() === '') {
-                    html += '<br>';
-                } else {
-                    html += line;
-                }
-            }
-            contentEl.innerHTML = '<p style="margin:0 0 12px">' + html + '</p>';
-            if (data.truncated) {
-                contentEl.innerHTML += '<p style="color:#999;font-style:italic;margin-top:16px">[Contenido truncado]</p>';
-            }
-            overlay.appendChild(contentEl);
-            document.body.appendChild(overlay);
-            return 'ok';
-        }"""
-                overlay_result = await page.evaluate(
-                    _JS_OVERLAY,
-                    {"translated": translated, "title": page_title, "url": url, "lang": lang, "truncated": truncated}
-                )
-
-                word_count = len(translated.split())
-                logger.info(f"Traducción completada: {word_count} palabras, idioma: {lang}")
-
-                return (
-                    f"TRADUCCIÓN COMPLETADA\n"
-                    f"Página: {page_title}\n"
-                    f"URL: {url}\n"
-                    f"Palabras traducidas: {word_count}\n"
-                    f"Idioma destino: {lang}\n\n"
-                    f"Se ha inyectado un panel de traducción en el lado derecho del navegador.\n"
-                    f"El usuario puede ver la traducción directamente en la página.\n"
-                    f"Pulsa el botón ✕ del panel para cerrarlo."
-                )
-
+                return await browser_translate(page, target, value)
             else:
                 return f"Error: Acción '{action}' no es una acción soportada en control_local_browser."
     except Exception as e:

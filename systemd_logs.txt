@@ -1,0 +1,250 @@
+may 22 21:35:37 AsusDesktop python[338596]: WARNING: [auto_registration.cc:78] NPU accelerator could not be loaded and registered: kLiteRtStatusErrorInvalidArgument.
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [gpu_registry.cc:162] Loading GPU accelerator(libLiteRtGpuAccelerator.so).
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [gpu_registry.cc:162] Loading GPU accelerator(libLiteRtWebGpuAccelerator.so).
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [accelerator_registry.cc:54] RegisterAccelerator: ptr=0x5602444a1360, name=GPU WebGPU
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [gpu_registry.cc:170] Dynamically loaded GPU accelerator(libLiteRtWebGpuAccelerator.so) registered.
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [accelerator_registry.cc:54] RegisterAccelerator: ptr=0x5602445031b0, name=CpuAccelerator
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [cpu_registry.cc:40] CPU accelerator registered.
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.249181  338596 model_resources_litert_lm.cc:67] model_type: TF_LITE_END_OF_AUDIO
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.249213  338596 model_resources_litert_lm.cc:68] litert model size: 10868
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.249247  338596 model_resources_litert_lm.cc:67] model_type: TF_LITE_END_OF_VISION
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.249249  338596 model_resources_litert_lm.cc:68] litert model size: 10868
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.249282  338596 model_resources_litert_lm.cc:67] model_type: TF_LITE_EMBEDDER
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.249284  338596 model_resources_litert_lm.cc:68] litert model size: 170920584
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [magic_number_utils.cc:97] Loaded: num_subgraphs=1, num_signatures=1
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [magic_number_utils.cc:105]   signature=embedder, subgraph_index=0, num_tensors=16, num_inputs=1, num_outputs=1, num_ops=8
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [magic_number_utils.cc:109] Magic number configs: num_configs=1
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [magic_number_utils.cc:116]   config[0]: magic_number=32003, target_number=4096, signature_prefix=null
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [compiled_model.cc:719] Flatbuffer model initialized directly from incoming litert model.
+may 22 21:35:37 AsusDesktop python[338596]: INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.249953  338596 embedding_lookup_text.cc:303] EmbeddingLookupText::Initialize Creating input buffers
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.249987  338596 embedding_lookup_text.cc:342] EmbeddingLookupText initialized: signature=embedder, rank=3, floats_per_token=2560
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [magic_number_utils.cc:97] Loaded: num_subgraphs=1, num_signatures=1
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [magic_number_utils.cc:105]   signature=eoi, subgraph_index=0, num_tensors=1, num_inputs=0, num_outputs=1, num_ops=0
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [magic_number_utils.cc:109] Magic number configs: num_configs=1
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [magic_number_utils.cc:116]   config[0]: magic_number=32003, target_number=4096, signature_prefix=null
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [compiled_model.cc:719] Flatbuffer model initialized directly from incoming litert model.
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [compiled_model.cc:1485] Tracked constant output tensor eoi_embedding with locked address
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [magic_number_utils.cc:97] Loaded: num_subgraphs=1, num_signatures=1
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [magic_number_utils.cc:105]   signature=eoa, subgraph_index=0, num_tensors=1, num_inputs=0, num_outputs=1, num_ops=0
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [magic_number_utils.cc:109] Magic number configs: num_configs=1
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [magic_number_utils.cc:116]   config[0]: magic_number=32003, target_number=4096, signature_prefix=null
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [compiled_model.cc:719] Flatbuffer model initialized directly from incoming litert model.
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [compiled_model.cc:1485] Tracked constant output tensor eoa_embedding with locked address
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.250201  338596 model_resources_litert_lm.cc:67] model_type: TF_LITE_PER_LAYER_EMBEDDER
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.250205  338596 model_resources_litert_lm.cc:68] litert model size: 836778512
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [magic_number_utils.cc:97] Loaded: num_subgraphs=1, num_signatures=1
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [magic_number_utils.cc:105]   signature=per_layer_embedder, subgraph_index=0, num_tensors=97, num_inputs=1, num_outputs=1, num_ops=49
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [magic_number_utils.cc:109] Magic number configs: num_configs=1
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [magic_number_utils.cc:116]   config[0]: magic_number=32003, target_number=4096, signature_prefix=null
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [compiled_model.cc:719] Flatbuffer model initialized directly from incoming litert model.
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.285907  338596 embedding_lookup_text.cc:303] EmbeddingLookupText::Initialize Creating input buffers
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.285990  338596 embedding_lookup_text.cc:342] EmbeddingLookupText initialized: signature=per_layer_embedder, rank=4, floats_per_token=10752
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286043  338596 audio_litert_compiled_model_executor.cc:641] Max sequence length is not used for AudioLiteRtCompiledModelExecutor, which can handle variable length input.
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286070  338596 litert_lm_loader.cc:175] LitertLmLoader::Initialize
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286084  338596 litert_lm_loader.cc:198] mmap_status is ok
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286089  338596 litert_lm_loader.cc:203] status: OK
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286091  338596 litert_lm_loader.cc:204] major_version: 1
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286093  338596 litert_lm_loader.cc:205] minor_version: 5
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286094  338596 litert_lm_loader.cc:206] patch_version: 0
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286097  338596 litert_lm_loader.cc:233] section_index: 0
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286098  338596 litert_lm_loader.cc:234] section_data_type: LlmMetadataProto
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286100  338596 litert_lm_loader.cc:236] section_begin_offset: 16384
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286101  338596 litert_lm_loader.cc:237] section_end_offset: 28576
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286102  338596 litert_lm_loader.cc:233] section_index: 1
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286104  338596 litert_lm_loader.cc:234] section_data_type: SP_Tokenizer
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286105  338596 litert_lm_loader.cc:236] section_begin_offset: 32768
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286106  338596 litert_lm_loader.cc:237] section_end_offset: 4721781
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286108  338596 litert_lm_loader.cc:92] model_type: tf_lite_embedder
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286109  338596 litert_lm_loader.cc:233] section_index: 2
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286111  338596 litert_lm_loader.cc:234] section_data_type: TFLiteModel
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286112  338596 litert_lm_loader.cc:236] section_begin_offset: 4734976
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286114  338596 litert_lm_loader.cc:237] section_end_offset: 175655560
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286115  338596 litert_lm_loader.cc:92] model_type: tf_lite_per_layer_embedder
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286116  338596 litert_lm_loader.cc:233] section_index: 3
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286118  338596 litert_lm_loader.cc:234] section_data_type: TFLiteModel
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286119  338596 litert_lm_loader.cc:236] section_begin_offset: 175669248
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286120  338596 litert_lm_loader.cc:237] section_end_offset: 1012447760
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286122  338596 litert_lm_loader.cc:92] model_type: tf_lite_audio_encoder_hw
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286123  338596 litert_lm_loader.cc:221] section_backend_constraint: cpu
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286124  338596 litert_lm_loader.cc:233] section_index: 4
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286125  338596 litert_lm_loader.cc:234] section_data_type: TFLiteModel
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286126  338596 litert_lm_loader.cc:236] section_begin_offset: 1012449280
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286127  338596 litert_lm_loader.cc:237] section_end_offset: 1106501560
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286129  338596 litert_lm_loader.cc:92] model_type: tf_lite_audio_adapter
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286130  338596 litert_lm_loader.cc:221] section_backend_constraint: cpu
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286131  338596 litert_lm_loader.cc:233] section_index: 5
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286132  338596 litert_lm_loader.cc:234] section_data_type: TFLiteModel
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286133  338596 litert_lm_loader.cc:236] section_begin_offset: 1106509824
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286134  338596 litert_lm_loader.cc:237] section_end_offset: 1122242524
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286135  338596 litert_lm_loader.cc:92] model_type: tf_lite_end_of_audio
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286137  338596 litert_lm_loader.cc:233] section_index: 6
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286137  338596 litert_lm_loader.cc:234] section_data_type: TFLiteModel
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286139  338596 litert_lm_loader.cc:236] section_begin_offset: 1122254848
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286140  338596 litert_lm_loader.cc:237] section_end_offset: 1122265716
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286141  338596 litert_lm_loader.cc:92] model_type: tf_lite_vision_encoder
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286142  338596 litert_lm_loader.cc:233] section_index: 7
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286143  338596 litert_lm_loader.cc:234] section_data_type: TFLiteModel
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286144  338596 litert_lm_loader.cc:236] section_begin_offset: 1122271232
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286145  338596 litert_lm_loader.cc:237] section_end_offset: 1346409168
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286147  338596 litert_lm_loader.cc:92] model_type: tf_lite_vision_adapter
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286148  338596 litert_lm_loader.cc:221] section_backend_constraint: cpu
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286149  338596 litert_lm_loader.cc:233] section_index: 8
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286150  338596 litert_lm_loader.cc:234] section_data_type: TFLiteModel
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286151  338596 litert_lm_loader.cc:236] section_begin_offset: 1346420736
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286153  338596 litert_lm_loader.cc:237] section_end_offset: 1354309392
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286154  338596 litert_lm_loader.cc:92] model_type: tf_lite_end_of_vision
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286155  338596 litert_lm_loader.cc:233] section_index: 9
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286156  338596 litert_lm_loader.cc:234] section_data_type: TFLiteModel
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286157  338596 litert_lm_loader.cc:236] section_begin_offset: 1354317824
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286158  338596 litert_lm_loader.cc:237] section_end_offset: 1354328692
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286159  338596 litert_lm_loader.cc:92] model_type: tf_lite_prefill_decode
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286160  338596 litert_lm_loader.cc:233] section_index: 10
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286161  338596 litert_lm_loader.cc:234] section_data_type: TFLiteModel
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286163  338596 litert_lm_loader.cc:236] section_begin_offset: 1354334208
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286163  338596 litert_lm_loader.cc:237] section_end_offset: 3614377584
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286165  338596 litert_lm_loader.cc:92] model_type: tf_lite_mtp_drafter
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286166  338596 litert_lm_loader.cc:233] section_index: 11
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286167  338596 litert_lm_loader.cc:234] section_data_type: TFLiteModel
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286168  338596 litert_lm_loader.cc:236] section_begin_offset: 3614392320
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286169  338596 litert_lm_loader.cc:237] section_end_offset: 3659518480
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286192  338596 model_resources_litert_lm.cc:67] model_type: TF_LITE_AUDIO_ENCODER_HW
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.286194  338596 model_resources_litert_lm.cc:68] litert model size: 94052280
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.313815  338596 model_resources_litert_lm.cc:67] model_type: TF_LITE_AUDIO_ADAPTER
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.313828  338596 model_resources_litert_lm.cc:68] litert model size: 15732700
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.313864  338596 audio_litert_compiled_model_executor.cc:79] audio_encoder use cache path: /home/victor/develop/asistenteia/models/gemma-4-E4B-it.litertlm.static_audio_encoder.xnnpack_cache
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [magic_number_utils.cc:97] Loaded: num_subgraphs=1, num_signatures=1
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [magic_number_utils.cc:105]   signature=serving_default, subgraph_index=0, num_tensors=2530, num_inputs=2, num_outputs=2, num_ops=2182
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [magic_number_utils.cc:109] Magic number configs: num_configs=1
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [magic_number_utils.cc:116]   config[0]: magic_number=32003, target_number=4096, signature_prefix=null
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [compiled_model.cc:719] Flatbuffer model initialized directly from incoming litert model.
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.328351  338596 audio_litert_compiled_model_executor.cc:79] audio_adapter use cache path: /home/victor/develop/asistenteia/models/gemma-4-E4B-it.litertlm.audio_adapter.xnnpack_cache
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [magic_number_utils.cc:97] Loaded: num_subgraphs=1, num_signatures=1
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [magic_number_utils.cc:105]   signature=audio_adapter, subgraph_index=0, num_tensors=18, num_inputs=2, num_outputs=1, num_ops=11
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [magic_number_utils.cc:109] Magic number configs: num_configs=1
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [magic_number_utils.cc:116]   config[0]: magic_number=32003, target_number=4096, signature_prefix=null
+may 22 21:35:37 AsusDesktop python[338596]: INFO: [compiled_model.cc:719] Flatbuffer model initialized directly from incoming litert model.
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.329795  338596 audio_litert_compiled_model_executor.cc:707] AudioLiteRtCompiledModelExecutor created with encoder_shrinking_factor: 4
+may 22 21:35:37 AsusDesktop python[338596]: W0000 00:00:1779478537.329813  338596 litert_lm_loader.h:148] TFLite model type: TF_LITE_PREFILL_DECODE not found for backend constraints. Skipping.
+may 22 21:35:37 AsusDesktop python[338596]: W0000 00:00:1779478537.329815  338596 litert_lm_loader.h:148] TFLite model type: TF_LITE_VISION_ENCODER not found for backend constraints. Skipping.
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.329827  338596 engine_settings.cc:97] The Main backend constraint is not set.
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.329831  338596 engine_settings.cc:94] The Audio backend constraint is matched: CPU
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.329833  338596 engine_settings.cc:334] The validated engine settings: EngineSettings:
+may 22 21:35:37 AsusDesktop python[338596]:   MainExecutorSettings: backend: GPU
+may 22 21:35:37 AsusDesktop python[338596]: backend_config:
+may 22 21:35:37 AsusDesktop python[338596]: max_top_k: 1
+may 22 21:35:37 AsusDesktop python[338596]: max_tokens: 4096
+may 22 21:35:37 AsusDesktop python[338596]: activation_data_type: Not set
+may 22 21:35:37 AsusDesktop python[338596]: max_num_images: 0
+may 22 21:35:37 AsusDesktop python[338596]: lora_rank: 0
+may 22 21:35:37 AsusDesktop python[338596]: cache_dir:
+may 22 21:35:37 AsusDesktop python[338596]: cache_file: Not set
+may 22 21:35:37 AsusDesktop python[338596]: litert_dispatch_lib_dir: Not set
+may 22 21:35:37 AsusDesktop python[338596]: model_assets: model_path: /home/victor/develop/asistenteia/models/gemma-4-E4B-it.litertlm
+may 22 21:35:37 AsusDesktop python[338596]: fake_weights_mode: FAKE_WEIGHTS_NONE
+may 22 21:35:37 AsusDesktop python[338596]: advanced_settings: prefill_batch_sizes: []
+may 22 21:35:37 AsusDesktop python[338596]: num_output_candidates: 1
+may 22 21:35:37 AsusDesktop python[338596]: configure_magic_numbers: true
+may 22 21:35:37 AsusDesktop python[338596]: verify_magic_numbers: false
+may 22 21:35:37 AsusDesktop python[338596]: clear_kv_cache_before_prefill: true
+may 22 21:35:37 AsusDesktop python[338596]: num_logits_to_print_after_decode: 0
+may 22 21:35:37 AsusDesktop python[338596]: gpu_madvise_original_shared_tensors: true
+may 22 21:35:37 AsusDesktop python[338596]: is_benchmark: false
+may 22 21:35:37 AsusDesktop python[338596]: preferred_device_substr:
+may 22 21:35:37 AsusDesktop python[338596]: num_threads_to_upload: -1
+may 22 21:35:37 AsusDesktop python[338596]: num_threads_to_compile: -1
+may 22 21:35:37 AsusDesktop python[338596]: convert_weights_on_gpu: true
+may 22 21:35:37 AsusDesktop python[338596]: wait_for_weights_conversion_complete_in_benchmark: true
+may 22 21:35:37 AsusDesktop python[338596]: optimize_shader_compilation: true
+may 22 21:35:37 AsusDesktop python[338596]: cache_compiled_shaders_only: false
+may 22 21:35:37 AsusDesktop python[338596]: share_constant_tensors: true
+may 22 21:35:37 AsusDesktop python[338596]: sampler_handles_input: true
+may 22 21:35:37 AsusDesktop python[338596]: allow_src_quantized_fc_conv_ops: true
+may 22 21:35:37 AsusDesktop python[338596]: hint_waiting_for_completion: false
+may 22 21:35:37 AsusDesktop python[338596]: gpu_context_low_priority: Not set
+may 22 21:35:37 AsusDesktop python[338596]: enable_speculative_decoding: false
+may 22 21:35:37 AsusDesktop python[338596]: disable_delegate_clustering: true
+may 22 21:35:37 AsusDesktop python[338596]: hint_kernel_batch_size: Not set
+may 22 21:35:37 AsusDesktop python[338596]:   LlmMetadata: goo.gle/debugproto
+may 22 21:35:37 AsusDesktop python[338596]: start_token {
+may 22 21:35:37 AsusDesktop python[338596]:   token_ids {
+may 22 21:35:37 AsusDesktop python[338596]:     ids: 2
+may 22 21:35:37 AsusDesktop python[338596]:   }
+may 22 21:35:37 AsusDesktop python[338596]: }
+may 22 21:35:37 AsusDesktop python[338596]: stop_tokens {
+may 22 21:35:37 AsusDesktop python[338596]:   token_ids {
+may 22 21:35:37 AsusDesktop python[338596]:     ids: 1
+may 22 21:35:37 AsusDesktop python[338596]:   }
+may 22 21:35:37 AsusDesktop python[338596]: }
+may 22 21:35:37 AsusDesktop python[338596]: stop_tokens {
+may 22 21:35:37 AsusDesktop python[338596]:   token_ids {
+may 22 21:35:37 AsusDesktop python[338596]:     ids: 50
+may 22 21:35:37 AsusDesktop python[338596]:   }
+may 22 21:35:37 AsusDesktop python[338596]: }
+may 22 21:35:37 AsusDesktop python[338596]: stop_tokens {
+may 22 21:35:37 AsusDesktop python[338596]:   token_ids {
+may 22 21:35:37 AsusDesktop python[338596]:     ids: 106
+may 22 21:35:37 AsusDesktop python[338596]:   }
+may 22 21:35:37 AsusDesktop python[338596]: }
+may 22 21:35:37 AsusDesktop python[338596]: sampler_params {
+may 22 21:35:37 AsusDesktop python[338596]:   type: TOP_P
+may 22 21:35:37 AsusDesktop python[338596]:   k: 1
+may 22 21:35:37 AsusDesktop python[338596]:   p: 0.95
+may 22 21:35:37 AsusDesktop python[338596]:   temperature: 1
+may 22 21:35:37 AsusDesktop python[338596]:   seed: 0
+may 22 21:35:37 AsusDesktop python[338596]: }
+may 22 21:35:37 AsusDesktop python[338596]: llm_model_type {
+may 22 21:35:37 AsusDesktop python[338596]:   gemma4 {
+may 22 21:35:37 AsusDesktop python[338596]:     start_of_image_token {
+may 22 21:35:37 AsusDesktop python[338596]:       token_str: "<|image>"
+may 22 21:35:37 AsusDesktop python[338596]:     }
+may 22 21:35:37 AsusDesktop python[338596]:     end_of_image_token {
+may 22 21:35:37 AsusDesktop python[338596]:       token_str: "<image|>"
+may 22 21:35:37 AsusDesktop python[338596]:     }
+may 22 21:35:37 AsusDesktop python[338596]:     start_of_audio_token {
+may 22 21:35:37 AsusDesktop python[338596]:       token_str: "<|audio>"
+may 22 21:35:37 AsusDesktop python[338596]:     }
+may 22 21:35:37 AsusDesktop python[338596]:     end_of_audio_token {
+may 22 21:35:37 AsusDesktop python[338596]:       token_str: "<audio|>"
+may 22 21:35:37 AsusDesktop python[338596]:     }
+may 22 21:35:37 AsusDesktop python[338596]:     code_fence_start: "<|tool_call>"
+may 22 21:35:37 AsusDesktop python[338596]:     code_fence_end: "<tool_call|>"
+may 22 21:35:37 AsusDesktop python[338596]:     open_quote: "<|\"|>"
+may 22 21:35:37 AsusDesktop python[338596]:     close_quote: "<|\"|>"
+may 22 21:35:37 AsusDesktop python[338596]:     function_response_start: "<|tool_response>"
+may 22 21:35:37 AsusDesktop python[338596]:     use_template_for_fc_format: true
+may 22 21:35:37 AsusDesktop python[338596]:     patch_width: 16
+may 22 21:35:37 AsusDesktop python[338596]:     patch_height: 16
+may 22 21:35:37 AsusDesktop python[338596]:     max_num_patches: 2520
+may 22 21:35:37 AsusDesktop python[338596]:   }
+may 22 21:35:37 AsusDesktop python[338596]: }
+may 22 21:35:37 AsusDesktop python[338596]: jinja_prompt_template: "{%- macro format_parameters(properties, required) -%}\n    {%- set standard_keys = [\'description\', \'type\', \'properties\', \'required\', \'nullable\'] -%}\n    {%- set ns = namespace(found_first=false) -%}\n    {%- for key, value in properties | dictsort -%}\n        {%- set add_comma = false -%}\n        {%- if key not in standard_keys -%}\n            {%- if ns.found_first %},{% endif -%}\n            {%- set ns.found_first = true -%}\n            {{ key }}:{\n            {%- if value[\'description\'] -%}\n                description:<|\"|>{{ value[\'description\'] }}<|\"|>\n                {%- set add_comma = true -%}\n            {%- endif -%}\n            {%- if value[\'nullable\'] %}\n                {%- if add_comma %},{%- else -%} {%- set add_comma = true -%} {% endif -%}\n                nullable:true\n            {%- endif -%}\n            {%- if value[\'type\'] | upper == \'STRING\' -%}\n                {%- if value[\'enum\'] -%}\n                    {%- if add_comma %},{%- else -%} {%- set add_comma = true -%} {% endif -%}\n                    enum:{{ format_argument(value[\'enum\']) }}\n                {%- endif -%}\n            {%- elif value[\'type\'] | upper == \'OBJECT\' -%}\n                ,properties:{\n                {%- if value[\'properties\'] is defined and value[\'properties\'] is mapping -%}\n                    {{- format_parameters(value[\'properties\'], value[\'required\'] | default([])) -}}\n                {%- elif value is mapping -%}\n                    {{- format_parameters(value, value[\'required\'] | default([])) -}}\n                {%- endif -%}\n                }\n                {%- if value[\'required\'] -%}\n                    ,required:[\n                    {%- for item in value[\'required\'] | default([]) -%}\n                        <|\"|>{{- item -}}<|\"|>\n                        {%- if not loop.last %},{% endif -%}\n                    {%- endfor -%}\n                    ]\n                {%- endif -%}\n            {%- elif value[\'type\'] | upper == \'ARRAY\' -%}\n                {%- if value[\'items\'] is mapping and value[\'items\'] -%}\n                    ,items:{\n                    {%- set ns_items = namespace(found_first=false) -%}\n                    {%- for item_key, item_value in value[\'items\'] | dictsort -%}\n                        {%- if item_value is not none -%}\n                            {%- if ns_items.found_first %},{% endif -%}\n                            {%- set ns_items.found_first = true -%}\n                            {%- if item_key == \'properties\' -%}\n                                properties:{\n                                {%- if item_value is mapping -%}\n                                    {{- format_parameters(item_value, value[\'items\'][\'required\'] | default([])) -}}\n                                {%- endif -%}\n                                }\n                            {%- elif item_key == \'required\' -%}\n                                required:[\n                                {%- for req_item in item_value -%}\n                                    <|\"|>{{- req_item -}}<|\"|>\n                                    {%- if not loop.last %},{% endif -%}\n                                {%- endfor -%}\n                                ]\n                            {%- elif item_key == \'type\' -%}\n                                {%- if item_value is string -%}\n                                    type:{{ format_argument(item_value | upper) }}\n                                {%- else -%}\n                                    type:{{ format_argument(item_value | map(\'upper\') | list) }}\n                                {%- endif -%}\n                            {%- else -%}\n                                {{ item_key }}:{{ format_argument(item_value) }}\n                            {%- endif -%}\n                        {%- endif -%}\n                    {%- endfor -%}\n                    }\n                {%- endif -%}\n            {%- endif -%}\n            {%- if add_comma %},{%- else -%} {%- set add_comma = true -%} {% endif -%}\n            type:<|\"|>{{ value[\'type\'] | upper }}<|\"|>}\n        {%- endif -%}\n    {%- endfor -%}\n{%- endmacro -%}\n{%- macro format_function_declaration(tool_data) -%}\n    declaration:{{- tool_data[\'function\'][\'name\'] -}}{description:<|\"|>{{- tool_data[\'function\'][\'description\'] -}}<|\"|>\n    {%- set params = tool_data[\'function\'][\'parameters\'] -%}\n    {%- if params -%}\n        ,parameters:{\n        {%- if params[\'properties\'] -%}\n            properties:{ {{- format_parameters(params[\'properties\'], params[\'required\']) -}} },\n        {%- endif -%}\n        {%- if params[\'required\'] -%}\n            required:[\n            {%- for item in params[\'required\'] -%}\n                <|\"|>{{- item -}}<|\"|>\n                {{- \',\' if not loop.last -}}\n            {%- endfor -%}\n            ],\n        {%- endif -%}\n        {%- if params[\'type\'] -%}\n            type:<|\"|>{{- params[\'type\'] | upper -}}<|\"|>}\n        {%- endif -%}\n    {%- endif -%}\n    {%- if \'response\' in tool_data[\'function\'] -%}\n        {%- set response_declaration = tool_data[\'function\'][\'response\'] -%}\n        ,response:{\n        {%- if response_declaration[\'description\'] -%}\n            description:<|\"|>{{- response_declaration[\'description\'] -}}<|\"|>,\n        {%- endif -%}\n        {%- if response_declaration[\'type\'] | upper == \'OBJECT\' -%}\n            type:<|\"|>{{- response_declaration[\'type\'] | upper -}}<|\"|>}\n        {%- endif -%}\n    {%- endif -%}\n    }\n{%- endmacro -%}\n{%- macro format_argument(argument, escape_keys=True) -%}\n    {%- if argument is string -%}\n        {{- \'<|\"|>\' + argument + \'<|\"|>\' -}}\n    {%- elif argument is boolean -%}\n        {{- \'true\' if argument else \'false\' -}}\n    {%- elif argument is mapping -%}\n        {{- \'{\' -}}\n        {%- set ns = namespace(found_first=false) -%}\n        {%- for key, value in argument | dictsort -%}\n            {%- if ns.found_first %},{% endif -%}\n            {%- set ns.found_first = true -%}\n            {%- if escape_keys -%}\n                {{- \'<|\"|>\' + key + \'<|\"|>\' -}}\n            {%- else -%}\n                {{- key -}}\n            {%- endif -%}\n            :{{- format_argument(value, escape_keys=escape_keys) -}}\n        {%- endfor -%}\n        {{- \'}\' -}}\n    {%- elif argument is sequence -%}\n        {{- \'[\' -}}\n        {%- for item in argument -%}\n            {{- format_argument(item, escape_keys=escape_keys) -}}\n            {%- if not loop.last %},{% endif -%}\n        {%- endfor -%}\n        {{- \']\' -}}\n    {%- else -%}\n        {{- argument -}}\n    {%- endif -%}\n{%- endmacro -%}\n{%- macro strip_thinking(text) -%}\n    {%- set ns = namespace(result=\'\') -%}\n    {%- for part in text.split(\'<channel|>\') -%}\n        {%- if \'<|channel>\' in part -%}\n            {%- set ns.result = ns.result + part.split(\'<|channel>\')[0] -%}\n        {%- else -%}\n            {%- set ns.result = ns.result + part -%}\n        {%- endif -%}\n    {%- endfor -%}\n    {{- ns.result | trim -}}\n{%- endmacro -%}\n\n{%- set ns = namespace(prev_message_type=None) -%}\n{%- set loop_messages = messages -%}\n{{ bos_token }}\n{#- Handle System/Tool Definitions Block -#}\n{%- if (enable_thinking is defined and enable_thinking) or tools or messages[0][\'role\'] in [\'system\', \'developer\'] -%}\n    {{- \'<|turn>system\\n\' -}}\n\n    {#- Inject Thinking token at the very top of the FIRST system turn -#}\n    {%- if enable_thinking is defined and enable_thinking -%}\n        {{- \'<|think|>\' -}}\n    {%- endif -%}\n\n    {%- if messages[0][\'role\'] in [\'system\', \'developer\'] -%}\n        {%- if messages[0][\'content\'] is string -%}\n            {{- messages[0][\'content\'] | trim -}}\n        {%- elif messages[0][\'content\'] is sequence -%}\n            {%- for item in messages[0][\'content\'] -%}\n                {%- if item[\'type\'] == \'text\' -%}\n                    {{- item[\'text\'] | trim -}}\n                {%- endif -%}\n            {%- endfor -%}\n        {%- endif -%}\n        {%- set loop_messages = messages[1:] -%}\n    {%- endif -%}\n\n    {%- if tools -%}\n        {{- \'\\n\\n\' -}}\n        {%- for tool in tools %}\n            {{- \'<|tool>\' -}}\n            {{- format_function_declaration(tool) | trim -}}\n            {{- \'<tool|>\' -}}\n        {%- endfor %}\n    {%- endif -%}\n\n    {{- \'<turn|>\\n\' -}}\n{%- endif %}\n\n{#- Loop through messages -#}\n{%- for message in loop_messages -%}\n    {%- set role = \'model\' if message[\'role\'] == \'assistant\' else message[\'role\'] -%}\n        {%- if role != \'tool\' -%}\n            {{- \'<|turn>\' + role + \'\\n\' }}\n        {%- endif -%}\n\n            {%- if message[\'tool_calls\'] -%}\n                {%- for tool_call in message[\'tool_calls\'] -%}\n                    {%- set function = tool_call[\'function\'] -%}\n                    {{- \'<|tool_call>call:\' + function[\'name\'] + \'{\' -}}\n                    {%- if function[\'arguments\'] is mapping -%}\n                        {%- set ns_args = namespace(found_first=false) -%}\n                        {%- for key, value in function[\'arguments\'] | dictsort -%}\n                            {%- if ns_args.found_first %},{% endif -%}\n                            {%- set ns_args.found_first = true -%}\n                            {{- key -}}:{{- format_argument(value, escape_keys=False) -}}\n                        {%- endfor -%}\n                    {%- elif function[\'arguments\'] is string -%}\n                        {{- function[\'arguments\'] -}}\n                    {%- endif -%}\n                    {{- \'}<tool_call|>\' -}}\n                {%- endfor -%}\n                {%- set ns.prev_message_type = \'tool_call\' -%}\n            {%- endif -%}\n\n            {%- if role == \'tool\' and message[\'content\'] is sequence -%}\n                {#- Tool Response handling -#}\n                {%- for item in message[\'content\'] -%}\n                    {{- \'<|tool_response>\' -}}\n                    {%- if item[\'response\'] is mapping -%}\n                        {{- \'response:\' + item[\'name\'] | default(\'unknown\') + \'{\' -}}\n                        {%- for key, value in item[\'response\'] | dictsort -%}\n                            {{- key -}}:{{- format_argument(value, escape_keys=False) -}}\n                            {%- if not loop.last %},{% endif -%}\n                        {%- endfor -%}\n                        {{- \'}\' -}}\n                    {%- else -%}\n                        {{- \'response:\' + item[\'name\'] | default(\'unknown\') + \'{value:\' + format_argument(item[\'response\'], escape_keys=False) + \'}\' -}}\n                    {%- endif -%}\n                    {{- \'<tool_response|>\' -}}\n                {%- endfor -%}\n                {%- set ns.prev_message_type = \'tool_response\' -%}\n            {%- else -%}\n                {%- if message[\'content\'] is string -%}\n                    {%- if role == \'model\' -%}\n                        {{- strip_thinking(message[\'content\']) -}}\n                    {%- else -%}\n                        {{- message[\'content\'] | trim -}}\n                    {%- endif -%}\n                {%- elif message[\'content\'] is sequence -%}\n                    {%- for item in message[\'content\'] -%}\n                        {%- if item[\'type\'] == \'text\' -%}\n                            {%- if role == \'model\' -%}\n                                {{- strip_thinking(item[\'text\']) -}}\n                            {%- else -%}\n                                {{- item[\'text\'] | trim -}}\n                            {%- endif -%}\n                        {%- elif item[\'type\'] == \'image\' -%}\n                            {{- \'\\n\\n<|image|>\\n\\n\' -}}\n                        {%- elif item[\'type\'] == \'audio\' -%}\n                            {{- \'<|audio|>\' -}}\n                        {%- endif -%}\n                    {%- endfor -%}\n                {%- endif -%}\n                {%- set ns.prev_message_type = None -%} \n            {%- endif -%}\n        {%- if ns.prev_message_type == None -%}\n            {{- \'<turn|>\\n\' -}}\n        {%- endif -%}\n{%- endfor -%}\n\n{%- if add_generation_prompt -%}\n    {%- if ns.prev_message_type != \'tool_response\' -%}\n        {{- \'<|turn>model\\n\' -}}\n    {%- endif -%}\n{%- endif -%}"
+may 22 21:35:37 AsusDesktop python[338596]: channels {
+may 22 21:35:37 AsusDesktop python[338596]:   channel_name: "thought"
+may 22 21:35:37 AsusDesktop python[338596]:   start: "<|channel>thought\n"
+may 22 21:35:37 AsusDesktop python[338596]:   end: "<channel|>"
+may 22 21:35:37 AsusDesktop python[338596]: }
+may 22 21:35:37 AsusDesktop python[338596]:   BenchmarkParams: Not set
+may 22 21:35:37 AsusDesktop python[338596]:   VisionExecutorSettings: Not set
+may 22 21:35:37 AsusDesktop python[338596]:   AudioExecutorSettings: AudioExecutorSettings:
+may 22 21:35:37 AsusDesktop python[338596]: ModelAssets: model_path: /home/victor/develop/asistenteia/models/gemma-4-E4B-it.litertlm
+may 22 21:35:37 AsusDesktop python[338596]: fake_weights_mode: FAKE_WEIGHTS_NONE
+may 22 21:35:37 AsusDesktop python[338596]: Max
+may 22 21:35:37 AsusDesktop python[338596]: I0000 00:00:1779478537.329884  338596 threadpool.cc:41] ThreadPool 'engine': Running up to 1 threads.
+may 22 21:35:37 AsusDesktop python[338596]: 2026-05-22 21:35:37,329 [INFO] src.litert_client: Motor LiteRT cargado exitosamente (Backend GPU).
+may 22 21:35:40 AsusDesktop python[338596]: WARNING: Defaulting repo_id to hexgrad/Kokoro-82M. Pass repo_id='hexgrad/Kokoro-82M' to suppress this warning.
+may 22 21:35:40 AsusDesktop python[338596]: 2026-05-22 21:35:40,256 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+may 22 21:35:40 AsusDesktop python[338596]: 2026-05-22 21:35:40,276 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/hexgrad/Kokoro-82M/f3ff3571791e39611d31c381e3a41a3af07b4987/config.json "HTTP/1.1 200 OK"
+may 22 21:35:40 AsusDesktop python[338596]: /home/victor/develop/asistenteia/venv/lib/python3.11/site-packages/torch/nn/modules/rnn.py:1009: UserWarning: dropout option adds dropout after all but last recurrent layer, so non-zero dropout expects num_layers greater than 1, but got dropout=0.2 and num_layers=1
+may 22 21:35:40 AsusDesktop python[338596]:   super().__init__("LSTM", *args, **kwargs)
+may 22 21:35:40 AsusDesktop python[338596]: /home/victor/develop/asistenteia/venv/lib/python3.11/site-packages/torch/nn/utils/weight_norm.py:144: FutureWarning: `torch.nn.utils.weight_norm` is deprecated in favor of `torch.nn.utils.parametrizations.weight_norm`.
+may 22 21:35:40 AsusDesktop python[338596]:   WeightNorm.apply(module, name, dim)
+may 22 21:35:40 AsusDesktop python[338596]: 2026-05-22 21:35:40,847 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/kokoro-v1_0.pth "HTTP/1.1 302 Found"
+may 22 21:35:41 AsusDesktop python[338596]: 2026-05-22 21:35:41,019 [INFO] src.tts_engine: Kokoro TTS inicializado correctamente en CPU (Optimizado para liberar GPU)
+may 22 21:35:41 AsusDesktop python[338596]: 2026-05-22 21:35:41,038 [INFO] src.audio_manager: Fuente por defecto establecida: 70
+may 22 21:35:41 AsusDesktop python[338596]: 2026-05-22 21:35:41,038 [INFO] src.audio_manager: Fuente BT configurada: bluez_input.84:D3:52:8E:96:31 [Audio/Source]
+may 22 21:35:41 AsusDesktop python[338596]: 2026-05-22 21:35:41,044 [INFO] src.audio_manager: Salida por defecto establecida: 88
+may 22 21:35:41 AsusDesktop python[338596]: 2026-05-22 21:35:41,044 [INFO] src.audio_manager: Sink BT configurado: JBL Tune 670NC [vol: 0.62]
+may 22 21:35:41 AsusDesktop python[338596]: 2026-05-22 21:35:41,044 [INFO] src.main: AsistenteIA listo
+may 22 21:35:41 AsusDesktop python[338596]: INFO:     Application startup complete.
+may 22 21:35:41 AsusDesktop python[338596]: INFO:     Uvicorn running on http://127.0.0.1:8765 (Press CTRL+C to quit)

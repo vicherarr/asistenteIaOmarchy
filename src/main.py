@@ -54,6 +54,7 @@ class AppState:
         self.current_task: Optional[asyncio.Task] = None
         self.processing: bool = False
         self.is_recording: bool = False
+        self.pending_image_path: Optional[str] = None  # Para loop multimodal (analyze_screen)
 
 
 def get_app_state(request: Request) -> AppState:
@@ -82,6 +83,15 @@ class StatusResponse(BaseModel):
     litert_backend: str = "Desconectado"
 
 
+class HealthResponse(BaseModel):
+    litert: bool = False
+    whisper: bool = False
+    kokoro: bool = False
+    tmux: bool = False
+    cdp: bool = False
+    version: str = "1.0.0"
+
+
 
 
 @asynccontextmanager
@@ -101,9 +111,47 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    if hasattr(app.state, "app_state") and app.state.app_state.litert_client:
-        app.state.app_state.litert_client.close()
-    logger.info("AsistenteIA detenido")
+    # Graceful shutdown: esperar tasks pendientes y cerrar recursos
+    logger.info("Iniciando cierre seguro del asistente...")
+
+    if hasattr(app.state, "app_state"):
+        state = app.state.app_state
+
+        # 1. Cancelar tarea en curso si existe
+        if state.current_task and not state.current_task.done():
+            logger.info("Cancelando tarea en curso...")
+            state.current_task.cancel()
+            try:
+                await asyncio.wait_for(state.current_task, timeout=3.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+
+        # 2. Cancelar tarea TTS en segundo plano
+        if state.assistant_service._current_tts_task and not state.assistant_service._current_tts_task.done():
+            logger.info("Cancelando tarea TTS en segundo plano...")
+            state.assistant_service._current_tts_task.cancel()
+            try:
+                await asyncio.wait_for(state.assistant_service._current_tts_task, timeout=2.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+
+        # 3. Detener grabación si está activa
+        if state.is_recording and state.audio_recorder.is_recording:
+            logger.info("Deteniendo grabación de micrófono...")
+            state.audio_recorder.stop_recording()
+
+        # 4. Detener TTS y cerrar stream persistente
+        if state.tts_engine:
+            logger.info("Deteniendo motor TTS...")
+            state.tts_engine.stop()
+            state.tts_engine.close_persistent_stream()
+
+        # 5. Cerrar LiteRT client
+        if state.litert_client:
+            logger.info("Cerrando cliente LiteRT...")
+            state.litert_client.close()
+
+    logger.info("AsistenteIA detenido correctamente")
 
 
 app = FastAPI(title="AsistenteIA", lifespan=lifespan)
@@ -325,6 +373,63 @@ async def get_status(state: AppState = Depends(get_app_state)):
         speaking=is_speaking,
         gpu_active=gpu_active,
         litert_backend=litert_backend,
+    )
+
+
+@app.get("/health", response_model=HealthResponse)
+async def health_check(state: AppState = Depends(get_app_state)):
+    """Verificación rápida de todos los componentes del sistema."""
+    # LiteRT
+    litert_ok = state.litert_client.engine is not None
+
+    # Whisper (verificar que whisper-cli está en PATH)
+    whisper_ok = False
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "whisper-cli", "--help",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL
+        )
+        await proc.wait()
+        whisper_ok = proc.returncode == 0 or proc.returncode is not None  # --help puede devolver != 0 pero existe
+    except FileNotFoundError:
+        pass
+
+    # Kokoro
+    kokoro_ok = state.tts_engine._kokoro_pipeline is not None
+
+    # TMUX (verificar sesión asistenteia)
+    tmux_ok = False
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "tmux", "has-session", "-t", "asistenteia",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL
+        )
+        await proc.wait()
+        tmux_ok = proc.returncode == 0
+    except FileNotFoundError:
+        pass
+
+    # CDP (verificar puerto 9222 accesible)
+    cdp_ok = False
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection("127.0.0.1", 9222),
+            timeout=2.0
+        )
+        writer.close()
+        await writer.wait_closed()
+        cdp_ok = True
+    except (OSError, asyncio.TimeoutError):
+        pass
+
+    return HealthResponse(
+        litert=litert_ok,
+        whisper=whisper_ok,
+        kokoro=kokoro_ok,
+        tmux=tmux_ok,
+        cdp=cdp_ok,
     )
 
 

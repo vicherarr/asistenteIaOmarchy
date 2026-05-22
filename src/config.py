@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     # Paths
     PROJECT_ROOT: Path = Path(__file__).parent.parent
     TEMP_DIR: Path = Path(os.getenv("TMPDIR", "/tmp")) / "asistenteia"
+    OBSIDIAN_VAULT: Path = Path(os.path.expanduser("~/Documentos/Obsidian Vault"))
+    OBSIDIAN_CLIPPINGS: Path = Path(os.path.expanduser("~/Documentos/Obsidian Vault/Clippings"))
 
     model_config = SettingsConfigDict(
         env_file=".env",

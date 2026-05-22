@@ -133,3 +133,57 @@ def test_cancel_processing(client, mock_app_state):
     assert response.json()["was_processing"] is True
     mock_task.cancel.assert_called_once()
     mock_app_state.tts_engine.stop.assert_called_once()
+
+
+def test_health_endpoint(client, mock_app_state):
+    with patch("src.main.asyncio.create_subprocess_exec") as mock_exec, \
+         patch("src.main.asyncio.open_connection") as mock_connect:
+        
+        # Mock para whisper-cli
+        mock_whisper = AsyncMock()
+        mock_whisper.returncode = 0
+        mock_whisper.wait = AsyncMock()
+        
+        # Mock para tmux
+        mock_tmux = AsyncMock()
+        mock_tmux.returncode = 0
+        mock_tmux.wait = AsyncMock()
+        
+        mock_exec.side_effect = lambda *args, **kwargs: mock_whisper if args[0] == "whisper-cli" else mock_tmux
+        
+        # Mock para conexión CDP con wait_closed awaitable
+        mock_writer = AsyncMock()
+        mock_writer.close = MagicMock()
+        mock_writer.wait_closed = AsyncMock()
+        mock_connect.return_value = (MagicMock(), mock_writer)
+        
+        mock_app_state.tts_engine._kokoro_pipeline = MagicMock()
+        
+        response = client.get("/health")
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["litert"] is True
+        assert data["whisper"] is True
+        assert data["kokoro"] is True
+        assert data["tmux"] is True
+        assert data["cdp"] is True
+        assert data["version"] == "1.0.0"
+
+
+def test_health_endpoint_components_down(client, mock_app_state):
+    with patch("src.main.asyncio.create_subprocess_exec", side_effect=FileNotFoundError), \
+         patch("src.main.asyncio.open_connection", side_effect=ConnectionRefusedError):
+        
+        mock_app_state.litert_client.engine = None
+        mock_app_state.tts_engine._kokoro_pipeline = None
+        
+        response = client.get("/health")
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["litert"] is False
+        assert data["whisper"] is False
+        assert data["kokoro"] is False
+        assert data["tmux"] is False
+        assert data["cdp"] is False

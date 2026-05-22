@@ -10,7 +10,9 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Optional, Any
+from typing import Optional
+
+import numpy as np
 
 from src.config import settings
 
@@ -32,6 +34,7 @@ class TTSEngine:
         self._playback_process: Optional[asyncio.subprocess.Process] = None
         self._is_playing = False
         self._active_stream = None
+        self._persistent_stream = None  # OutputStream reutilizado para pipeline
         self._init_kokoro()
 
     def _init_kokoro(self) -> None:
@@ -46,6 +49,99 @@ class TTSEngine:
             logger.warning("Kokoro no instalado. Se usará gTTS como fallback.")
         except Exception as e:
             logger.warning(f"Error inicializando Kokoro: {e}. Se usará gTTS como fallback.")
+
+    def _resolve_voice(self) -> str:
+        """Resuelve la ruta de la voz local si existe."""
+        voice_val = settings.KOKORO_VOICE
+        if not voice_val.endswith('.pt'):
+            local_path = settings.PROJECT_ROOT / "models" / f"{voice_val}.pt"
+            if local_path.exists():
+                return str(local_path)
+        return voice_val
+
+    def _tensor_to_numpy(self, audio) -> np.ndarray:
+        """Convierte un tensor de audio a numpy array."""
+        if hasattr(audio, "cpu"):
+            return audio.cpu().numpy()
+        elif hasattr(audio, "numpy"):
+            return audio.numpy()
+        else:
+            return np.array(audio)
+
+    async def synthesize_only(self, text: str) -> Optional[np.ndarray]:
+        """
+        Genera audio como np.ndarray sin reproducir ni guardar.
+        Diseñado para el pipeline de doble cola (síntesis || reproducción).
+        """
+        if not text.strip() or self._kokoro_pipeline is None:
+            return None
+
+        def _synthesize():
+            voice = self._resolve_voice()
+            audio_chunks = []
+            generator = self._kokoro_pipeline(text, voice=voice, speed=1.0)
+            for _, _, audio in generator:
+                if not self._is_playing:
+                    break
+                if audio is not None and len(audio) > 0:
+                    audio_chunks.append(self._tensor_to_numpy(audio))
+            return np.concatenate(audio_chunks) if audio_chunks else None
+
+        try:
+            return await asyncio.to_thread(_synthesize)
+        except Exception as e:
+            logger.warning(f"Error en synthesize_only: {e}")
+            return None
+
+    async def play_audio_array(self, audio_np: np.ndarray) -> None:
+        """
+        Reproduce un array numpy usando un OutputStream persistente reutilizado.
+        Elimina la latencia de abrir/cerrar stream por cada frase.
+        """
+        if audio_np is None or len(audio_np) == 0:
+            return
+
+        def _play():
+            # Abrir stream persistente si no existe
+            if self._persistent_stream is None:
+                try:
+                    import sounddevice as sd
+                    self._persistent_stream = sd.OutputStream(
+                        samplerate=KOKORO_SAMPLE_RATE,
+                        channels=1,
+                        dtype='float32'
+                    )
+                    self._persistent_stream.start()
+                except Exception as e:
+                    logger.error(f"No se pudo abrir OutputStream persistente: {e}")
+                    return
+
+            if self._persistent_stream and not self._persistent_stream.closed:
+                try:
+                    self._persistent_stream.write(audio_np.astype('float32'))
+                except Exception as e:
+                    logger.warning(f"Error escribiendo al stream persistente: {e}")
+                    # Intentar recrear el stream
+                    try:
+                        self._persistent_stream.close()
+                    except Exception:
+                        pass
+                    self._persistent_stream = None
+
+        try:
+            await asyncio.to_thread(_play)
+        except Exception as e:
+            logger.warning(f"Error en play_audio_array: {e}")
+
+    def close_persistent_stream(self) -> None:
+        """Cierra el OutputStream persistente al finalizar."""
+        if self._persistent_stream:
+            try:
+                self._persistent_stream.stop()
+                self._persistent_stream.close()
+            except Exception:
+                pass
+            self._persistent_stream = None
 
     async def speak(self, text: str, sink_id: Optional[str] = None) -> Optional[str]:
         """Sintetiza texto a voz y lo reproduce de forma asíncrona."""
@@ -65,18 +161,11 @@ class TTSEngine:
         """Sintetiza usando Kokoro TTS con reproducción en streaming de latencia ultra baja."""
         def _stream_and_save():
             import sounddevice as sd
-            import numpy as np
             import soundfile as sf
 
-            # Resolver voz local si existe para evitar latencia de HuggingFace HEAD request
-            voice_val = settings.KOKORO_VOICE
-            if not voice_val.endswith('.pt'):
-                local_path = settings.PROJECT_ROOT / "models" / f"{voice_val}.pt"
-                if local_path.exists():
-                    voice_val = str(local_path)
-
+            voice = self._resolve_voice()
             audio_chunks = []
-            generator = self._kokoro_pipeline(text, voice=voice_val, speed=1.0)
+            generator = self._kokoro_pipeline(text, voice=voice, speed=1.0)
             
             # Usamos el dispositivo predeterminado de PipeWire (None), el cual cambia automáticamente
             # al dispositivo de salida activo (incluyendo auriculares bluetooth seleccionados)
@@ -87,14 +176,7 @@ class TTSEngine:
                         logger.info("Generación de audio Kokoro cancelada por interrupción")
                         break
                     if audio is not None and len(audio) > 0:
-                        # Convertir PyTorch Tensor (u otro tipo de objeto tensor) a NumPy array en CPU
-                        if hasattr(audio, "cpu"):
-                            audio_np = audio.cpu().numpy()
-                        elif hasattr(audio, "numpy"):
-                            audio_np = audio.numpy()
-                        else:
-                            audio_np = np.array(audio)
-                            
+                        audio_np = self._tensor_to_numpy(audio)
                         audio_chunks.append(audio_np)
                         # Reproducir chunk de audio en tiempo real
                         stream.write(audio_np.astype('float32'))
@@ -225,6 +307,15 @@ class TTSEngine:
             except Exception:
                 pass
             self._active_stream = None
+        
+        # Parar stream persistente del pipeline
+        if self._persistent_stream:
+            try:
+                self._persistent_stream.stop()
+                self._persistent_stream.close()
+            except Exception:
+                pass
+            self._persistent_stream = None
         
         try:
             import sounddevice as sd

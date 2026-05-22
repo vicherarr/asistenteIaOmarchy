@@ -226,56 +226,51 @@ def test_parsed_response_dataclass():
 @pytest.mark.asyncio
 async def test_read_terminal_screen_success_status():
     from src.command_executor import read_terminal_screen
-    with patch('subprocess.run') as mock_run:
-        # Mock tmux has-session (success)
-        mock_has_session = MagicMock()
-        mock_has_session.returncode = 0
-        
-        # Mock tmux capture-pane (success with a successful exit code marker)
-        mock_capture = MagicMock()
-        mock_capture.returncode = 0
-        mock_capture.stdout = "ls -la\n[AsistenteIA: Proceso finalizado con código 0]\n"
-        
-        mock_run.side_effect = [mock_has_session, mock_capture]
+    with patch('src.command_executor._run_tmux_cmd') as mock_tmux:
+        # First call: has-session (success)
+        # Second call: capture-pane (success with exit code marker)
+        mock_tmux.side_effect = [
+            (True, ""),  # has-session
+            (True, "ls -la\n[AsistenteIA: 'ls' finalizado correctamente]\n"),  # capture-pane
+        ]
         
         result = await read_terminal_screen()
-        assert "COMANDO COMPLETADO EXITOSAMENTE" in result
-        assert "Código de salida: 0" in result
+        assert "completado exitosamente" in result
+        assert "'ls'" in result
 
 
 @pytest.mark.asyncio
 async def test_read_terminal_screen_error_status():
     from src.command_executor import read_terminal_screen
-    with patch('subprocess.run') as mock_run:
-        # Mock tmux has-session (success)
-        mock_has_session = MagicMock()
-        mock_has_session.returncode = 0
-        
-        # Mock tmux capture-pane (success with an error exit code marker)
-        mock_capture = MagicMock()
-        mock_capture.returncode = 0
-        mock_capture.stdout = "cat non_existent\n[AsistenteIA: Proceso finalizado con código de error 127]\n"
-        
-        mock_run.side_effect = [mock_has_session, mock_capture]
+    with patch('src.command_executor._run_tmux_cmd') as mock_tmux:
+        mock_tmux.side_effect = [
+            (True, ""),  # has-session
+            (True, "cat non_existent\n[AsistenteIA: 'cat' falló con código de error 127]\n"),
+        ]
         
         result = await read_terminal_screen()
         assert "ERROR EN TERMINAL" in result
-        assert "Código de salida: 127" in result
+        assert "127" in result
+
+
+@pytest.mark.asyncio
+async def test_read_terminal_screen_no_session():
+    from src.command_executor import read_terminal_screen
+    with patch('src.command_executor._run_tmux_cmd') as mock_tmux:
+        mock_tmux.return_value = (False, "no session")
+        
+        result = await read_terminal_screen()
+        assert "no está iniciada" in result
 
 
 @pytest.mark.asyncio
 async def test_send_input_to_terminal():
     from src.command_executor import send_input_to_terminal
-    with patch('subprocess.run') as mock_run:
-        # Mock tmux has-session (success)
-        mock_has_session = MagicMock()
-        mock_has_session.returncode = 0
-        
-        # Mock tmux send-keys
-        mock_send_keys = MagicMock()
-        mock_send_keys.returncode = 0
-        
-        mock_run.side_effect = [mock_has_session, mock_send_keys]
+    with patch('src.command_executor._run_tmux_cmd') as mock_tmux:
+        mock_tmux.side_effect = [
+            (True, ""),  # has-session
+            (True, ""),  # send-keys
+        ]
         
         result = await send_input_to_terminal("yes")
         assert "Éxito" in result
@@ -283,19 +278,116 @@ async def test_send_input_to_terminal():
 
 
 @pytest.mark.asyncio
+async def test_send_input_to_terminal_no_session():
+    from src.command_executor import send_input_to_terminal
+    with patch('src.command_executor._run_tmux_cmd') as mock_tmux:
+        mock_tmux.return_value = (False, "no session")
+        
+        result = await send_input_to_terminal("yes")
+        assert "no está iniciada" in result
+
+
+@pytest.mark.asyncio
 async def test_interrupt_terminal_command():
     from src.command_executor import interrupt_terminal_command
-    with patch('subprocess.run') as mock_run:
-        # Mock tmux has-session (success)
-        mock_has_session = MagicMock()
-        mock_has_session.returncode = 0
-        
-        # Mock tmux send-keys Ctrl+C
-        mock_send_keys = MagicMock()
-        mock_send_keys.returncode = 0
-        
-        mock_run.side_effect = [mock_has_session, mock_send_keys]
+    with patch('src.command_executor._run_tmux_cmd') as mock_tmux:
+        mock_tmux.side_effect = [
+            (True, ""),  # has-session
+            (True, ""),  # send-keys C-c
+        ]
         
         result = await interrupt_terminal_command()
         assert "Éxito" in result
         assert "Ctrl+C" in result
+
+
+@pytest.mark.asyncio
+async def test_interrupt_terminal_command_no_session():
+    from src.command_executor import interrupt_terminal_command
+    with patch('src.command_executor._run_tmux_cmd') as mock_tmux:
+        mock_tmux.return_value = (False, "no session")
+        
+        result = await interrupt_terminal_command()
+        assert "no está activa" in result
+
+
+@pytest.mark.asyncio
+async def test_run_tmux_cmd_success():
+    from src.command_executor import _run_tmux_cmd
+    with patch('asyncio.create_subprocess_exec') as mock_exec:
+        mock_proc = AsyncMock()
+        mock_proc.returncode = 0
+        mock_proc.communicate.return_value = (b"output", b"")
+        mock_exec.return_value = mock_proc
+
+        ok, output = await _run_tmux_cmd(["has-session", "-t", "test"])
+        assert ok is True
+        assert output == "output"
+
+
+@pytest.mark.asyncio
+async def test_run_tmux_cmd_failure():
+    from src.command_executor import _run_tmux_cmd
+    with patch('asyncio.create_subprocess_exec') as mock_exec:
+        mock_proc = AsyncMock()
+        mock_proc.returncode = 1
+        mock_proc.communicate.return_value = (b"", b"error message")
+        mock_exec.return_value = mock_proc
+
+        ok, output = await _run_tmux_cmd(["invalid-cmd"])
+        assert ok is False
+        assert "error message" in output
+
+
+@pytest.mark.asyncio
+async def test_read_log_file_success():
+    from src.command_executor import read_log_file
+    with patch('asyncio.create_subprocess_exec') as mock_exec:
+        mock_proc = AsyncMock()
+        mock_proc.returncode = 0
+        mock_proc.communicate.return_value = (b"May 22 10:00:00 asistenteia: Info log\n", b"")
+        mock_exec.return_value = mock_proc
+
+        result = await read_log_file("asistenteia")
+
+        assert "Logs de asistenteia" in result
+        assert "Info log" in result
+        mock_exec.assert_called_once_with(
+            "journalctl", "--user", "-u", "asistenteia", "-n", "10", "--no-pager",
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+
+
+@pytest.mark.asyncio
+async def test_read_log_file_failure():
+    from src.command_executor import read_log_file
+    with patch('asyncio.create_subprocess_exec') as mock_exec:
+        mock_proc = AsyncMock()
+        mock_proc.returncode = 1
+        mock_proc.communicate.return_value = (b"", b"Unit not found")
+        mock_exec.return_value = mock_proc
+
+        result = await read_log_file("nonexistent-service")
+
+        assert "Error leyendo logs" in result
+
+
+@pytest.mark.asyncio
+async def test_read_log_file_shell_injection_blocked():
+    """Verifica que create_subprocess_exec se usa (no shell), evitando inyección."""
+    from src.command_executor import read_log_file
+    with patch('asyncio.create_subprocess_exec') as mock_exec:
+        mock_proc = AsyncMock()
+        mock_proc.returncode = 0
+        mock_proc.communicate.return_value = (b"log line\n", b"")
+        mock_exec.return_value = mock_proc
+
+        # Intento de inyección: el service name contiene caracteres peligrosos
+        malicious_service = "asistenteia; rm -rf /"
+        await read_log_file(malicious_service)
+
+        # Verificar que se llamó con argumentos separados, NO como string shell
+        call_args = mock_exec.call_args[0]
+        assert call_args[0] == "journalctl"
+        assert call_args[3] == malicious_service  # El argumento se pasa literal, no se interpreta
+        # Si fuera shell=True, "rm -rf /" se ejecutaría. Con exec, es solo un string literal.

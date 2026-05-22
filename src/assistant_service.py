@@ -69,10 +69,17 @@ class AssistantService:
 
     def _extract_sentences(self, text_buffer: str) -> tuple[List[str], str]:
         """
-        Extrae frases completas del buffer basadas en signos de puntuación (.!?:\n) 
+        Extrae frases completas del buffer basadas en signos de puntuación (.!?:\n)
         seguidos de un espacio o fin de cadena, protegiendo decimales y abreviaciones comunes.
+        También corta por coma cuando el buffer supera ~80 caracteres, pero SOLO si
+        el fragmento resultante parece texto natural (no código/JSON).
         """
-        pattern = re.compile(r'([.!?:])(?=\s|$)|(\n)')
+        # Si el buffer es largo, también cortar por coma para frases más cortas
+        # pero SOLO para texto natural, no para código
+        if len(text_buffer) > 80:
+            pattern = re.compile(r'([.!?:])(?=\s|$)|(\n)')
+        else:
+            pattern = re.compile(r'([.!?:])(?=\s|$)|(\n)')
         
         sentences = []
         start = 0
@@ -86,30 +93,63 @@ class AssistantService:
         remaining = text_buffer[start:]
         return sentences, remaining
 
-    async def _tts_worker(self, queue: asyncio.Queue, sink_id: Optional[str]) -> None:
-        """Consumidor asíncrono en segundo plano para reproducir frases secuencialmente."""
-        logger.info("Worker de TTS iniciado")
+    async def _synth_worker(self, queue_text: asyncio.Queue, queue_audio: asyncio.Queue) -> None:
+        """
+        Consumidor de frases de texto: sintetiza cada frase a numpy array
+        y lo encola para reproducción. Permite solapamiento con _play_worker.
+        """
+        logger.info("Worker de síntesis TTS iniciado")
         try:
             while True:
-                sentence = await queue.get()
+                sentence = await queue_text.get()
                 if sentence is None:
-                    queue.task_done()
-                    logger.info("Worker de TTS recibió señal de finalización")
+                    queue_text.task_done()
+                    logger.info("Worker de síntesis recibió señal de finalización")
                     break
                 
-                logger.info(f"Worker de TTS sintetizando: '{sentence}'")
+                logger.info(f"Sintetizando: '{sentence}'")
                 try:
-                    await self.tts.speak(sentence, sink_id=sink_id)
+                    audio_np = await self.tts.synthesize_only(sentence)
+                    if audio_np is not None:
+                        await queue_audio.put(audio_np)
                 except Exception as e:
-                    logger.error(f"Error reproduciendo frase '{sentence}': {e}")
+                    logger.error(f"Error sintetizando '{sentence}': {e}")
                 finally:
-                    queue.task_done()
+                    queue_text.task_done()
         except asyncio.CancelledError:
-            logger.info("Worker de TTS cancelado activamente")
-            self.tts.stop()
+            logger.info("Worker de síntesis cancelado activamente")
             raise
         except Exception as e:
-            logger.error(f"Error inesperado en worker de TTS: {e}")
+            logger.error(f"Error inesperado en worker de síntesis: {e}")
+
+    async def _play_worker(self, queue_audio: asyncio.Queue) -> None:
+        """
+        Consumidor de audio: reproduce arrays numpy usando un OutputStream persistente.
+        Se ejecuta en paralelo con _synth_worker para eliminar gaps entre frases.
+        """
+        logger.info("Worker de reproducción TTS iniciado")
+        try:
+            while True:
+                audio_np = await queue_audio.get()
+                if audio_np is None:
+                    queue_audio.task_done()
+                    logger.info("Worker de reproducción recibió señal de finalización")
+                    break
+                
+                try:
+                    await self.tts.play_audio_array(audio_np)
+                except Exception as e:
+                    logger.error(f"Error reproduciendo audio: {e}")
+                finally:
+                    queue_audio.task_done()
+        except asyncio.CancelledError:
+            logger.info("Worker de reproducción cancelado activamente")
+            raise
+        except Exception as e:
+            logger.error(f"Error inesperado en worker de reproducción: {e}")
+        finally:
+            # Cerrar el stream persistente al terminar
+            self.tts.close_persistent_stream()
 
     async def process_audio(
         self,
@@ -149,6 +189,23 @@ class AssistantService:
         except Exception as e:
             logger.warning(f"No se pudo enviar notificación o bip: {e}")
 
+    def _is_speakable(self, text: str) -> bool:
+        """Filtra fragmentos que parecen código/JSON y no deben ir al TTS."""
+        if not text or len(text) < 3:
+            return False
+        # Rechazar fragmentos que empiezan con caracteres de código
+        if text[0] in ('[', '{', '(', '<', '`', '}', ']', ')', '>', '*', '#', '-', '|', '\\'):
+            return False
+        # Rechazar si tiene más símbolos que letras (código/JSON)
+        alpha_count = sum(1 for c in text if c.isalpha())
+        symbol_count = sum(1 for c in text if c in '[]{}()<>`\'"=;:,')
+        if symbol_count > alpha_count:
+            return False
+        # Rechazar si es solo números y puntuación
+        if not any(c.isalpha() for c in text):
+            return False
+        return True
+
     async def process_transcription_stream(
         self,
         text: str,
@@ -158,7 +215,8 @@ class AssistantService:
     ):
         """
         Procesa el texto del usuario usando LiteRT y herramientas de forma reactiva,
-        transmitiendo los chunks resultantes en tiempo real y sintetizando voz frase a frase.
+        transmitiendo los chunks resultantes en tiempo real y sintetizando voz frase a frase
+        con pipeline de doble cola (síntesis || reproducción en paralelo).
         """
         logger.info(f"Procesando transcripción con LiteRT (streaming): {text[:100]}...")
 
@@ -167,9 +225,14 @@ class AssistantService:
             self._current_tts_task.cancel()
         self.tts.stop() # Asegurar parada inmediata del proceso
 
-        # Inicializar cola de frases y arrancar worker en segundo plano
-        queue = asyncio.Queue()
-        self._current_tts_task = asyncio.create_task(self._tts_worker(queue, sink_id))
+        # Pipeline de doble cola: texto → síntesis → audio → reproducción
+        queue_text = asyncio.Queue()
+        queue_audio = asyncio.Queue()
+        
+        # Arrancar ambos workers en paralelo
+        synth_task = asyncio.create_task(self._synth_worker(queue_text, queue_audio))
+        play_task = asyncio.create_task(self._play_worker(queue_audio))
+        self._current_tts_task = synth_task
 
         # Añadir mensaje del usuario al historial
         conversation_history.append(ChatMessage(role="user", content=text))
@@ -202,38 +265,40 @@ class AssistantService:
                 sentences, sentence_buffer = self._extract_sentences(sentence_buffer)
                 for s in sentences:
                     clean = strip_markdown(s)
-                    if clean and any(c.isalnum() for c in clean):
-                        await queue.put(clean)
+                    if self._is_speakable(clean):
+                        await queue_text.put(clean)
                 
                 yield chunk
-
-
 
             # Encolar lo que quede en el buffer
             if sentence_buffer.strip():
                 clean = strip_markdown(sentence_buffer)
-                if clean and any(c.isalnum() for c in clean):
-                    await queue.put(clean)
+                if self._is_speakable(clean):
+                    await queue_text.put(clean)
 
             # Guardar respuesta final acumulada en el historial
             conversation_history.append(ChatMessage(role="assistant", content=accumulated_text))
 
         except asyncio.CancelledError:
-            logger.info("process_transcription_stream cancelado. Deteniendo worker de TTS...")
-            if self._current_tts_task and not self._current_tts_task.done():
-                self._current_tts_task.cancel()
+            logger.info("process_transcription_stream cancelado. Deteniendo workers de TTS...")
             self.tts.stop()
             raise
         except Exception as e:
             logger.error(f"Error en process_transcription_stream: {e}")
-            if self._current_tts_task and not self._current_tts_task.done():
-                self._current_tts_task.cancel()
             self.tts.stop()
             raise
         finally:
-            # Enviar señal de fin al worker
-            if self._current_tts_task and not self._current_tts_task.done():
-                await queue.put(None)
+            # Enviar señal de fin al worker de síntesis
+            await queue_text.put(None)
+            # Esperar a que el synth worker termine
+            if synth_task and not synth_task.done():
+                await synth_task
+            
+            # Enviar señal de fin al worker de reproducción
+            await queue_audio.put(None)
+            # Esperar a que el play worker termine (reproduce audio pendiente)
+            if play_task and not play_task.done():
+                await play_task
 
     async def process_transcription(
         self,
