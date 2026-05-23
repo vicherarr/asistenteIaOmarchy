@@ -464,6 +464,11 @@ async def handle_transcription(
 @app.post("/listen/toggle")
 async def toggle_listen(state: AppState = Depends(get_app_state)):
     """Alterna el estado de grabación del micrófono."""
+    logger.info(
+        f"toggle_listen invocado. Estado: is_recording={state.is_recording}, "
+        f"processing={state.processing}, current_task_done={state.current_task.done() if state.current_task else True}, "
+        f"history_len={len(state.conversation_history)}"
+    )
     if state.is_recording:
         # Detener grabación y procesar
         state.is_recording = False
@@ -528,6 +533,7 @@ async def toggle_listen(state: AppState = Depends(get_app_state)):
                 # En entornos de pruebas unitarias sin event loop activo, usamos asyncio.run
                 asyncio.run(toggle_listen(state))
             
+        logger.info("toggle_listen: Iniciando grabación de micrófono.")
         state.audio_recorder.start_recording(
             source_id=source_id, 
             on_silence_callback=on_silence_detected

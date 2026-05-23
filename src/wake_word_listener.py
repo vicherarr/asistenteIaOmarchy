@@ -165,15 +165,22 @@ class SherpaWakeWordListener:
                             try:
                                 if inspect.iscoroutinefunction(self._on_wake_word_detected):
                                     if self._loop:
-                                        asyncio.run_coroutine_threadsafe(
+                                        future = asyncio.run_coroutine_threadsafe(
                                             self._on_wake_word_detected(), self._loop
                                         )
+                                        # Callback para loguear si hay excepción
+                                        def _log_future(fut):
+                                            try:
+                                                fut.result()
+                                            except Exception as ex:
+                                                logger.error(f"Excepción en callback wake word: {ex}", exc_info=True)
+                                        future.add_done_callback(_log_future)
                                     else:
                                         logger.error("No hay event loop para ejecutar callback async")
                                 else:
                                     self._on_wake_word_detected()
                             except Exception as e:
-                                logger.error(f"Error en callback wake word: {e}")
+                                logger.error(f"Error en callback wake word: {e}", exc_info=True)
                             # Resetear stream para detectar la próxima
                             self._spotter.reset_stream(stream)
         except Exception as e:
