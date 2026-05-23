@@ -90,6 +90,10 @@ async def get_hardware_context() -> str:
     """
     Recopila toda la información de hardware del sistema de forma asíncrona y paralela.
     Devuelve un string formateado para ser usado por herramientas LiteRT.
+    
+    Truncamiento inteligente para modelo Gemma 4:E4B (ventana 4096 tokens):
+    - Cada sección: 500 chars máx (~170 tokens)
+    - Total: 3000 chars máx (~1000 tokens)
     """
     # Ejecutar todas las consultas en paralelo para minimizar latencia
     results = await asyncio.gather(
@@ -116,7 +120,14 @@ async def get_hardware_context() -> str:
 
     context = "## CONTEXTO DE HARDWARE DEL SISTEMA\n\n"
     for name, info in sections:
-        context += f"### {name}\n{info}\n\n"
+        # Truncar cada sección a 500 chars (~170 tokens)
+        truncated_info = info[:500] + ("..." if len(info) > 500 else "")
+        context += f"### {name}\n{truncated_info}\n\n"
+
+    # Truncamiento global a 3000 chars (~1000 tokens)
+    max_chars = 3000
+    if len(context) > max_chars:
+        context = context[:max_chars] + "\n...[contexto truncado]"
 
     return context
 

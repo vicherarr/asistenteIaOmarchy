@@ -275,6 +275,12 @@ async def web_search(query: str) -> str:
             summary += f"[{i}] TÍTULO: {r.get('title')}\n"
             summary += f"    URL: {url}\n"
             summary += f"    RESUMEN: {r.get('body')}\n\n"
+        
+        # Límite inteligente: 3500 chars (~1200 tokens) para búsquedas web
+        max_chars = 3500
+        if len(summary) > max_chars:
+            summary = summary[:max_chars] + "\n...[resultados truncados]"
+        
         return summary
     except Exception as e:
         logger.error(f"Error en web_search: {e}")
@@ -469,9 +475,20 @@ async def system_diagnostics(component: str = "all") -> str:
 
 
 async def get_system_status() -> str:
-    """Resumen de hardware: CPU, RAM, GPU, Disco, Audio, Red."""
+    """Resumen de hardware: CPU, RAM, GPU, Disco, Audio, Red.
+    
+    Truncamiento inteligente para modelo Gemma 4:E4B (ventana 4096 tokens).
+    ~3000 chars = ~1000 tokens, deja espacio para historial + respuesta.
+    """
     from src.context_injector import get_system_context
-    return f"Contexto:\n{await get_system_context()}"
+    context = await get_system_context()
+    
+    # Límite: 3000 chars (~1000 tokens) para herramientas de contexto
+    max_chars = 3000
+    if len(context) > max_chars:
+        context = context[:max_chars] + "\n...[contexto truncado]"
+    
+    return f"Contexto:\n{context}"
 
 
 async def read_log_file(service: str = "asistenteia") -> str:
@@ -683,10 +700,16 @@ rm -f "{script_path}"
             await asyncio.sleep(1.0)
             ok_capture, screen_output = await _run_tmux_cmd(["capture-pane", "-p", "-t", session_name])
             if ok_capture and screen_output:
-                # Devolver últimas 40 líneas
+                # Devolver últimas 60 líneas (más contexto para comandos largos)
                 lines = screen_output.splitlines()
-                last_lines = lines[-40:]
+                last_lines = lines[-60:]
                 screen_content = "\n".join(last_lines)
+                
+                # Límite inteligente: 4000 chars (~1300 tokens) para salidas de terminal
+                # Esto deja ~2700 tokens para historial + prompt + respuesta del modelo
+                max_chars = 4000
+                if len(screen_content) > max_chars:
+                    screen_content = screen_content[:max_chars] + "\n...[salida truncada]"
                 
                 return f"Éxito: Comando ejecutado: {command}\n\nSALIDA DE LA TERMINAL:\n{screen_content}"
             return f"Éxito: Se ha enviado el comando a la terminal abierta: {command}"
@@ -730,8 +753,14 @@ rm -f "{script_path}"
         ok_capture, screen_output = await _run_tmux_cmd(["capture-pane", "-p", "-t", session_name])
         if ok_capture and screen_output:
             lines = screen_output.splitlines()
-            last_lines = lines[-40:]
+            last_lines = lines[-60:]
             screen_content = "\n".join(last_lines)
+            
+            # Límite inteligente: 4000 chars (~1300 tokens) para salidas de terminal
+            max_chars = 4000
+            if len(screen_content) > max_chars:
+                screen_content = screen_content[:max_chars] + "\n...[salida truncada]"
+            
             return f"Éxito: Terminal {chosen_terminal.capitalize()} abierta y comando ejecutado: {command}\n\nSALIDA DE LA TERMINAL:\n{screen_content}"
         
         return f"Éxito: Se ha abierto una ventana de {chosen_terminal.capitalize()} y ejecutado: {command}"
@@ -768,10 +797,15 @@ async def read_terminal_screen() -> str:
             success_match = re.search(r"\[AsistenteIA: '([^']+)'\s+finalizado correctamente\]", output)
             exit_code_match = re.search(r"\[AsistenteIA: '([^']+)'\s+falló con código de error (\d+)\]", output)
             
-            # Devolver las últimas 40 líneas para que el contexto no se sature pero tenga suficiente detalle
+            # Devolver últimas 60 líneas para contexto suficiente
             lines = output.splitlines()
-            last_lines = lines[-40:]
+            last_lines = lines[-60:]
             screen_content = "\n".join(last_lines)
+            
+            # Límite inteligente: 4000 chars (~1300 tokens) para lectura de pantalla
+            max_chars = 4000
+            if len(screen_content) > max_chars:
+                screen_content = screen_content[:max_chars] + "\n...[pantalla truncada]"
             
             if exit_code_match:
                 cmd_name = exit_code_match.group(1)
