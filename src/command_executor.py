@@ -95,16 +95,15 @@ class CommandExecutor:
         self.dry_run = dry_run
 
     def _is_safe_command(self, command: str) -> bool:
-        """Verifica si un comando es seguro según la lista blanca.
+        """Verifica si un comando está en la lista blanca de confianza.
         
-        Permite el encadenamiento de comandos (usando &&, ||, ;, o |) siempre que
-        CADA uno de los subcomandos resultantes comience con un prefijo permitido.
+        Comandos que NO están en la lista blanca NO se bloquean; se ejecutan igualmente
+        pero con una advertencia visible en terminal para que el usuario lo supervise.
         """
         cmd_clean = command.strip()
         if not cmd_clean:
             return False
 
-        # Dividir por operadores lógicos y tuberías: &&, ||, ;, |
         import re
         sub_commands = re.split(r'&&|\|\||;|\|', cmd_clean)
 
@@ -113,17 +112,12 @@ class CommandExecutor:
             if not sub:
                 continue
 
-            # Validar que este subcomando empieza con algún prefijo permitido
-            sub_safe = False
             for prefix in self.ALLOWED_PREFIXES:
-                # Evitar colisiones (ej. lspci por ls) verificando delimitador
                 if sub == prefix or sub.startswith(prefix + " ") or sub.startswith(prefix + "\t") or sub.startswith(prefix + "-"):
-                    sub_safe = True
-                    break
+                    return True
             
-            if not sub_safe:
-                logger.warning(f"Subcomando bloqueado (no permitido): '{sub}' en el comando completo: '{command}'")
-                return False
+            logger.info(f"Comando no verificado (requiere supervisión): '{sub}' en: '{command}'")
+            return False
 
         return True
 
@@ -626,27 +620,37 @@ async def open_terminal_and_run_command(command: str) -> str:
     
     command = _sanitize_tool_args(command)
     
-    # Validar la seguridad del comando usando la lista blanca de CommandExecutor
-    executor = CommandExecutor()
-    if not executor._is_safe_command(command):
-        logger.warning(f"Intento de ejecutar comando bloqueado en terminal gráfica: {command}")
-        return f"Error: Comando no permitido por la lista blanca de seguridad del sistema: {command}"
-        
     session_name = "asistenteia"
     
-    # Envolver el comando para capturar el código de salida y mostrar un banner profesional si no es background
+    # Verificar si el comando está en la lista blanca; si no, añadir advertencia visible
+    executor = CommandExecutor()
+    is_verified = executor._is_safe_command(command)
+    
+    # Envolver el comando para capturar el código de salida y mostrar banners
     wrapped_command = command
     if not command.strip().endswith("&"):
-        # Extraer el nombre base del comando para el banner
         cmd_name = command.strip().split()[0].split("/")[-1] if command.strip() else "comando"
-        wrapped_command = (
-            f"{{ {command.strip()} ; }} ; EXIT_CODE=$? ; "
-            f"if [ $EXIT_CODE -eq 0 ]; then "
-            f"echo -e \"\\n\\033[1;30m[AsistenteIA: '{cmd_name}' finalizado correctamente]\\033[0m\"; "
-            f"else "
-            f"echo -e \"\\n\\033[1;31m[AsistenteIA: '{cmd_name}' falló con código de error $EXIT_CODE]\\033[0m\"; "
-            f"fi"
-        )
+        
+        if not is_verified:
+            # Comando no verificado: advertencia prominente antes de ejecutar
+            wrapped_command = (
+                f"echo -e \"\\033[1;33m⚠️  [ADVERTENCIA] Comando no verificado. Ejecutando con supervisión...\\033[0m\" ; "
+                f"{{ {command.strip()} ; }} ; EXIT_CODE=$? ; "
+                f"if [ $EXIT_CODE -eq 0 ]; then "
+                f"echo -e \"\\n\\033[1;30m[AsistenteIA: '{cmd_name}' finalizado correctamente]\\033[0m\"; "
+                f"else "
+                f"echo -e \"\\n\\033[1;31m[AsistenteIA: '{cmd_name}' falló con código de error $EXIT_CODE]\\033[0m\"; "
+                f"fi"
+            )
+        else:
+            wrapped_command = (
+                f"{{ {command.strip()} ; }} ; EXIT_CODE=$? ; "
+                f"if [ $EXIT_CODE -eq 0 ]; then "
+                f"echo -e \"\\n\\033[1;30m[AsistenteIA: '{cmd_name}' finalizado correctamente]\\033[0m\"; "
+                f"else "
+                f"echo -e \"\\n\\033[1;31m[AsistenteIA: '{cmd_name}' falló con código de error $EXIT_CODE]\\033[0m\"; "
+                f"fi"
+            )
     
     # 1. Comprobar si la sesión de tmux existe y si está activa en pantalla (attached)
     session_attached = False

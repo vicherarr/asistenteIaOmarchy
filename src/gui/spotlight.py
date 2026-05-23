@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QWidget, QTextBrowser, QFrame, QPushButton
 )
 from PySide6.QtCore import Qt, QTimer, Property, QPropertyAnimation, QEasingCurve, QPointF
-from PySide6.QtGui import QFont, QPalette, QColor, QKeyEvent, QIcon, QPainter, QPen, QBrush, QLinearGradient, QRadialGradient, QPainterPath
+from PySide6.QtGui import QFont, QPalette, QColor, QKeyEvent, QIcon, QPainter, QPen, QBrush, QLinearGradient, QRadialGradient, QPainterPath, QTextCursor
 from qasync import QEventLoop, asyncSlot
 
 class StateVisualizer(QWidget):
@@ -948,10 +948,22 @@ class SpotlightWindow(QMainWindow):
                                 first_chunk = False
                                 self.chat_area.setMarkdown(f"**Tú:** {text}\n\n---\n\n**AsistenteIA:** ")
                             accumulated_response += chunk
-                            full_chat = f"**Tú:** {text}\n\n---\n\n**AsistenteIA:** {accumulated_response}"
-                            self.chat_area.setMarkdown(full_chat)
+                            
+                            # Append chunk incrementally using QTextCursor (much faster than setMarkdown)
+                            cursor = self.chat_area.textCursor()
+                            cursor.movePosition(QTextCursor.End)
+                            cursor.insertPlainText(chunk)
+                            self.chat_area.setTextCursor(cursor)
                             
                             # Auto-scroll al final
+                            self.chat_area.verticalScrollBar().setValue(
+                                self.chat_area.verticalScrollBar().maximum()
+                            )
+                        
+                        # Final render with markdown formatting once the stream is done
+                        if accumulated_response:
+                            full_chat = f"**Tú:** {text}\n\n---\n\n**AsistenteIA:** {accumulated_response}"
+                            self.chat_area.setMarkdown(full_chat)
                             self.chat_area.verticalScrollBar().setValue(
                                 self.chat_area.verticalScrollBar().maximum()
                             )
