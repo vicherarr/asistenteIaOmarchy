@@ -321,24 +321,29 @@ class AssistantService:
                 if clean_chunk:
                     yield clean_chunk
 
-            # Si no hubo chunks o el texto acumulado está vacío (tool calling silencioso), generar fallback
+            # Verificar si la respuesta es significativa. Si no, generar fallback.
             accumulated_clean = self._clean_tool_calls(accumulated_text)
-            if chunk_count == 0 or not accumulated_clean.strip():
-                logger.info("Tool calling silencioso o texto vacío. Generando fallback...")
+            has_meaningful_response = accumulated_clean.strip() and len(accumulated_clean.strip()) > 15
+            
+            if not has_meaningful_response:
+                logger.info("Respuesta insuficiente. Generando fallback automático...")
                 lower_text = text.lower()
                 
-                # Detectar si se ejecutó un comando de terminal y leer la salida
-                terminal_keywords = ["abre", "abrir", "lanza", "ejecuta", "terminal", "comando", "consola", "dime", "qué", "cuál", "característica", "info", "información", "versión", "version", "java", "node", "python", "dotnet", "ruby", "go", "rust"]
-                is_terminal = any(kw in lower_text for kw in terminal_keywords)
+                # Detectar si el prompt involucra terminal/comandos
+                terminal_indicators = [
+                    "abre", "abrir", "lanza", "ejecuta", "terminal", "comando", "consola",
+                    "dime", "qué", "cuál", "característica", "info", "información",
+                    "versión", "version", "instala", "instalada", "instalado",
+                    "java", "node", "python", "dotnet", "ruby", "go", "rust",
+                    "php", "docker", "git", "npm", "cargo", "pip"
+                ]
+                is_terminal = any(kw in lower_text for kw in terminal_indicators)
                 
                 if is_terminal:
-                    # Yield inicial para mantener la conexión viva
                     yield "⏳ Ejecutando comando en la terminal..."
                     await queue_text.put("Ejecutando comando en la terminal.")
-                    
                     await asyncio.sleep(3.0)
                     
-                    # Capturar directamente el panel de tmux
                     try:
                         from src.command_executor import _run_tmux_cmd
                         ok, screen_output = await _run_tmux_cmd(["capture-pane", "-p", "-t", "asistenteia", "-S", "-200"])
@@ -351,7 +356,6 @@ class AssistantService:
                             
                             logger.info(f"Salida de terminal tras tool calling (últimas 500 chars): {clean_output[-500:]}...")
                             
-                            # Analizar si hubo error
                             has_error = ("ERROR" in clean_output and "❌" in clean_output)
                             has_success = ("OK" in clean_output and "✅" in clean_output)
                             
@@ -366,7 +370,6 @@ class AssistantService:
                                     fallback = "El comando falló en la terminal."
                             elif has_success:
                                 success_match = re.search(r"✅\s+(\S+)\s+OK", clean_output)
-                                
                                 if success_match:
                                     cmd_name = success_match.group(1)
                                     lines = clean_output.splitlines()
