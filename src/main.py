@@ -29,6 +29,7 @@ from src.audio_recorder import AudioRecorder
 from src.stt_engine import STTEngine
 from src.schema import ChatMessage
 from src.utils import strip_markdown
+from src.wake_word_listener import WakeWordListener
 
 logging.basicConfig(
     level=logging.INFO,
@@ -135,6 +136,7 @@ class AppState:
         self.is_recording: bool = False
         self.pending_image_path: Optional[str] = None  # Para loop multimodal (analyze_screen)
         self.paused_players: list[str] = []
+        self.wake_word_listener: Optional[WakeWordListener] = None
 
 
 def get_app_state(request: Request) -> AppState:
@@ -187,6 +189,20 @@ async def lifespan(app: FastAPI):
     if not state.litert_client.engine:
         logger.warning(f"LiteRT no pudo cargar el modelo en {settings.LITERT_MODEL_PATH}")
 
+    # Configurar e iniciar el WakeWordListener si está habilitado
+    if settings.WAKE_WORD_ENABLED:
+        async def on_wake_detected():
+            logger.info("Wake word detectado! Iniciando toggle_listen asíncrono.")
+            await toggle_listen(state)
+
+        state.wake_word_listener = WakeWordListener(
+            on_wake_word_detected=on_wake_detected,
+            app_state=state,
+            model_name=settings.WAKE_WORD_MODEL,
+            threshold=settings.WAKE_WORD_THRESHOLD
+        )
+        state.wake_word_listener.start()
+
     logger.info("AsistenteIA listo")
 
     yield
@@ -196,6 +212,11 @@ async def lifespan(app: FastAPI):
 
     if hasattr(app.state, "app_state"):
         state = app.state.app_state
+
+        # Detener WakeWordListener si está activo
+        if state.wake_word_listener:
+            logger.info("Deteniendo WakeWordListener...")
+            state.wake_word_listener.stop()
 
         # 1. Cancelar tarea en curso si existe
         if state.current_task and not state.current_task.done():

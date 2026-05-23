@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     KOKORO_VOICE: str = "em_alex"
     KOKORO_LANG: str = "e"
     
+    # Wake Word
+    WAKE_WORD_ENABLED: bool = True
+    WAKE_WORD_MODEL: str = "hey_jarvis"
+    WAKE_WORD_THRESHOLD: float = 0.5
+    
     # Paths
     PROJECT_ROOT: Path = Path(__file__).parent.parent
     TEMP_DIR: Path = Path(os.getenv("TMPDIR", "/tmp")) / "asistenteia"
