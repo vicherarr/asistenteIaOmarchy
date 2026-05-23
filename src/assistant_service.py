@@ -293,6 +293,16 @@ class AssistantService:
                 history=conversation_history[:-1] # Pasamos el historial previo
             ):
                 chunk_count += 1
+                
+                # LiteRT a veces yielda tokens sin espacios; reconstruir espaciado
+                if accumulated_text and chunk:
+                    last_char = accumulated_text[-1]
+                    first_char = chunk[0]
+                    # Añadir espacio si ambos son alfanuméricos (palabras pegadas)
+                    if last_char.isalnum() and first_char.isalnum():
+                        accumulated_text += " "
+                        chunk = " " + chunk
+                
                 accumulated_text += chunk
                 
                 # Filtrar tool calls antes de procesar para TTS
@@ -380,9 +390,10 @@ class AssistantService:
         max_history: int = 10
     ) -> dict:
         """
-        Versión síncrona para compatibilidad: acumula el stream y devuelve el resultado completo.
-        Limpia tool calls del texto visible al usuario.
+        Versión síncrona para compatibilidad: usa chat_stream para TTS en tiempo real
+        pero obtiene la respuesta final formateada correctamente via chat().
         """
+        # Ejecutar streaming para TTS en tiempo real
         response_text = ""
         async for chunk in self.process_transcription_stream(
             text=text,
@@ -391,9 +402,28 @@ class AssistantService:
             max_history=max_history
         ):
             response_text += chunk
-
+        
         # Limpiar tool calls del texto visible
         visible_text = self._clean_tool_calls(response_text)
+        
+        # Si el texto no tiene espacios (bug de LiteRT), obtener respuesta limpia via chat()
+        if visible_text and " " not in visible_text and len(visible_text) > 10:
+            logger.info("Respuesta sin espacios, obteniendo versión limpia via chat()...")
+            try:
+                prompt_path = settings.PROJECT_ROOT / "config" / "system_prompt.txt"
+                system_prompt = prompt_path.read_text(encoding="utf-8")
+                clean_response = await self.litert.chat(
+                    prompt=text,
+                    tools=self.tools,
+                    system_prompt=system_prompt,
+                    history=conversation_history[:-1]
+                )
+                visible_text = self._clean_tool_calls(clean_response)
+                # Actualizar historial con texto limpio
+                if conversation_history and conversation_history[-1].role == "assistant":
+                    conversation_history[-1].content = visible_text
+            except Exception as e:
+                logger.error(f"Error obteniendo respuesta limpia: {e}")
 
         # Si el texto visible está vacío pero se ejecutaron tools, generar fallback
         if not visible_text and response_text:
