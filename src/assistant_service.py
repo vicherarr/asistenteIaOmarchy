@@ -335,12 +335,17 @@ class AssistantService:
                     try:
                         from src.command_executor import read_terminal_screen
                         screen_output = await read_terminal_screen()
-                        logger.info(f"Salida de terminal tras tool calling: {screen_output[:200]}...")
+                        
+                        # Limpiar códigos ANSI para poder hacer regex correctamente
+                        clean_output = re.sub(r'\x1b\[[0-9;]*m', '', screen_output)
+                        clean_output = re.sub(r'\033\[[0-9;]*m', '', clean_output)
+                        
+                        logger.info(f"Salida de terminal tras tool calling: {clean_output[:300]}...")
                         
                         # Analizar si hubo error
-                        if "falló con código de error" in screen_output:
+                        if "falló con código de error" in clean_output:
                             # Extraer nombre del comando y código de error
-                            error_match = re.search(r"\[AsistenteIA: '([^']+)'\s+falló con código de error (\d+)\]", screen_output)
+                            error_match = re.search(r"\[AsistenteIA: '([^']+)'\s+falló con código de error (\d+)\]", clean_output)
                             if error_match:
                                 cmd_name = error_match.group(1)
                                 exit_code = int(error_match.group(2))
@@ -360,14 +365,14 @@ class AssistantService:
                                     fallback += "Verifica que el comando y los argumentos sean correctos."
                             else:
                                 fallback = "El comando falló en la terminal. Revisa la salida para más detalles."
-                        elif "finalizado correctamente" in screen_output:
+                        elif "finalizado correctamente" in clean_output:
                             # Extraer nombre del comando exitoso
-                            success_match = re.search(r"\[AsistenteIA: '([^']+)'\s+finalizado correctamente\]", screen_output)
+                            success_match = re.search(r"\[AsistenteIA: '([^']+)'\s+finalizado correctamente\]", clean_output)
                             if success_match:
                                 cmd_name = success_match.group(1)
                                 fallback = f"El comando '{cmd_name}' se ejecutó correctamente. "
                                 # Añadir resumen de la salida si hay contenido relevante
-                                lines = screen_output.splitlines()
+                                lines = clean_output.splitlines()
                                 relevant = [l for l in lines if l.strip() and "AsistenteIA" not in l and l != "CONTENIDO VISIBLE EN LA TERMINAL:"]
                                 if relevant:
                                     fallback += "Resultado: " + " | ".join(relevant[:3])
