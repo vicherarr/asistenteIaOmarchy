@@ -649,30 +649,30 @@ async def open_terminal_and_run_command(command: str) -> str:
     is_verified = executor._is_safe_command(command)
     
     # Envolver el comando para capturar el código de salida y mostrar banners
+    # Se escribe en un script temporal para evitar problemas con fish shell y tmux send-keys
     wrapped_command = command
     if not command.strip().endswith("&"):
         cmd_name = command.strip().split()[0].split("/")[-1] if command.strip() else "comando"
         
-        if not is_verified:
-            # Comando no verificado: advertencia prominente antes de ejecutar
-            wrapped_command = (
-                f"echo -e \"\\033[1;33m⚠️  [ADVERTENCIA] Comando no verificado. Ejecutando con supervisión...\\033[0m\" ; "
-                f"{{ {command.strip()} ; }} ; EXIT_CODE=$? ; "
-                f"if [ $EXIT_CODE -eq 0 ]; then "
-                f"echo -e \"\\n\\033[1;30m[AsistenteIA: '{cmd_name}' finalizado correctamente]\\033[0m\"; "
-                f"else "
-                f"echo -e \"\\n\\033[1;31m[AsistenteIA: '{cmd_name}' falló con código de error $EXIT_CODE]\\033[0m\"; "
-                f"fi"
-            )
-        else:
-            wrapped_command = (
-                f"{{ {command.strip()} ; }} ; EXIT_CODE=$? ; "
-                f"if [ $EXIT_CODE -eq 0 ]; then "
-                f"echo -e \"\\n\\033[1;30m[AsistenteIA: '{cmd_name}' finalizado correctamente]\\033[0m\"; "
-                f"else "
-                f"echo -e \"\\n\\033[1;31m[AsistenteIA: '{cmd_name}' falló con código de error $EXIT_CODE]\\033[0m\"; "
-                f"fi"
-            )
+        # Crear script temporal con sintaxis bash
+        import uuid
+        script_filename = f"cmd_{uuid.uuid4().hex[:8]}.sh"
+        script_path = settings.TEMP_DIR / script_filename
+        script_content = f"""#!/usr/bin/env bash
+{command.strip()}
+EXIT_CODE=$?
+if [ $EXIT_CODE -eq 0 ]; then
+    echo -e "\\n\\033[1;30m[AsistenteIA: '{cmd_name}' finalizado correctamente]\\033[0m"
+else
+    echo -e "\\n\\033[1;31m[AsistenteIA: '{cmd_name}' falló con código de error $EXIT_CODE]\\033[0m"
+fi
+# Limpiar script temporal
+rm -f "{script_path}"
+"""
+        script_path.write_text(script_content, encoding="utf-8")
+        script_path.chmod(0o755)
+        
+        wrapped_command = f"bash {script_path}"
     
     # 1. Comprobar si la sesión de tmux existe y si está activa en pantalla (attached)
     session_attached = False
