@@ -1,6 +1,6 @@
 # AsistenteIA - Contexto del Proyecto para Sesiones IA
 
-> **Última actualización:** 22 de mayo de 2026 (Fase 5)
+> **Última actualización:** 23 de mayo de 2026 (Fase 7)
 > **Propósito:** Este documento sirve como referencia completa para cualquier sesión de IA que trabaje en este proyecto. Contiene toda la arquitectura, decisiones técnicas, estado actual y convenciones del código.
 
 ---
@@ -58,6 +58,8 @@ asistenteia/
 │   ├── vision_tool.py       # grim + slurp capturas de pantalla
 │   ├── config.py            # Pydantic Settings (.env)
 │   ├── schema.py            # ChatMessage (pydantic BaseModel)
+│   ├── bt_button_listener.py # Listener async de botones Bluetooth AVRCP (evdev)
+│   ├── mpris_dummy_player.py # Dummy MPRIS player para interceptar comandos AVRCP
 │   ├── utils.py             # strip_markdown, pending_image (deprecated)
 │   └── gui/
 │       └── spotlight.py     # UI PySide6 con animaciones
@@ -69,7 +71,9 @@ asistenteia/
 │   ├── start-assistant.sh   # Lanzador manual con validación venv
 │   ├── start-gui.sh         # Lanza Spotlight UI
 │   ├── stop-assistant.sh    # Detiene grabación
-│   └── test-mic.py          # Test micrófono
+│   ├── test-mic.py          # Test micrófono
+│   ├── test-bluetooth-buttons.py  # Test interactivo botones AVRCP HOME SPA-133
+│   └── test-bluetooth-dbus.py   # Monitoreo D-Bus BlueZ para HOME SPA-133
 ├── services/
 │   └── asistenteia.service  # systemd user service
 ├── models/
@@ -343,6 +347,10 @@ El archivo `config/system_prompt.txt` define:
 13. **Graceful shutdown:** `lifespan` espera tasks pendientes (3s timeout), cierra TTS stream, grabación y LiteRT
 14. **Paths unificados:** `settings.PROJECT_ROOT`, `settings.TEMP_DIR`, `settings.OBSIDIAN_VAULT`, `settings.OBSIDIAN_CLIPPINGS`
 15. **Rate limiting:** Middleware con 3 niveles: default (5 req/s), strict (1 req/2s para /listen/toggle, /reset), streaming (3 req/s)
+16. **Bluetooth AVRCP evdev (no funciona para trigger):** HOME SPA-133 expone evdev `/dev/input/event20`, pero BlueZ moderno NO genera eventos evdev para AVRCP cuando no hay reproductor activo. Hyprland consume el dispositivo y los eventos se traducen a MPRIS vía `mpris-proxy`.
+17. **Dummy MPRIS Player para trigger:** El módulo `src/mpris_dummy_player.py` se registra como reproductor `org.mpris.MediaPlayer2.asistenteia` en el bus de sesión. Cuando se pulsa Play/Pause en el HOME SPA-133, BlueZ → `mpris-proxy` → llama `Play()`/`Pause()` en nuestro dummy player, que invoca `toggle_listen()` / `cancel_processing()`. Requiere `dbus-next>=0.2.3`.
+18. **mpris-proxy:** `main.py` inicia automáticamente `mpris-proxy` si no está corriendo. El servicio systemd `--user` tiene acceso al bus de sesión, por lo que todo funciona dentro de la sesión del usuario.
+19. **HOME SPA-133: botón Play no envía AVRCP:** Investigación exhaustiva (evdev, BlueZ D-Bus, MPRIS, `dbus-monitor`) confirma que el HOME SPA-133 anuncia perfil AVRCP pero su botón físico de Play NO envía comandos por Bluetooth al host. Probablemente solo funciona en modos USB/Radio/AUX internos del dispositivo. El código está correcto y fue verificado manualmente (`dbus-send Play()` dispara `toggle_listen()` correctamente). Dispositivos que SÍ implementan AVRCP correctamente (ej: JBL Tune 670NC) deberían funcionar.
 
 ---
 
@@ -364,6 +372,8 @@ El archivo `config/system_prompt.txt` define:
 | **Mayo 2026** | **Fase 3: Browser refactor en 5 sub-módulos, pending_image movido a AppState** |
 | **Mayo 2026** | **Fase 4: Graceful shutdown, paths unificados bajo settings, health endpoint** |
 | **Mayo 2026** | **Fase 5: Rate limiting middleware (3 niveles: default, strict, streaming)** |
+| **Mayo 2026** | **Fase 6: Investigación botones Bluetooth AVRCP (HOME SPA-133), módulo `bt_button_listener.py`, scripts de test** |
+| **Mayo 2026** | **Fase 7: Dummy MPRIS Player para capturar AVRCP como trigger, integración en lifespan, mpris-proxy auto-start, dependencia `dbus-next`** |
 
 ---
 

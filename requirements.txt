@@ -19,4 +19,6 @@ PySide6>=6.7.2
 gtts>=2.5.0
 openwakeword>=0.6.0
 onnxruntime>=1.15.0
+evdev>=1.7.0
+dbus-next>=0.2.3
 

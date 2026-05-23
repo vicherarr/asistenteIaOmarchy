@@ -31,6 +31,22 @@ from src.schema import ChatMessage
 from src.utils import strip_markdown
 from src.wake_word_listener import WakeWordListener
 
+try:
+    from src.bt_button_listener import BtButtonListener, BtButtonListenerError
+    BT_LISTENER_AVAILABLE = True
+except ImportError:
+    BT_LISTENER_AVAILABLE = False
+    BtButtonListener = None  # type: ignore
+    BtButtonListenerError = Exception  # type: ignore
+
+try:
+    from src.mpris_dummy_player import MprisDummyPlayer, MprisPlayerError
+    MPRIS_AVAILABLE = True
+except ImportError:
+    MPRIS_AVAILABLE = False
+    MprisDummyPlayer = None  # type: ignore
+    MprisPlayerError = Exception  # type: ignore
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -38,6 +54,21 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 MAX_HISTORY = settings.MAX_HISTORY
+
+
+def _is_mpris_proxy_running() -> bool:
+    """Verifica si mpris-proxy ya está corriendo en el sistema."""
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["pgrep", "-x", "mpris-proxy"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=1,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
 
 
 class RateLimiter:
@@ -137,6 +168,10 @@ class AppState:
         self.pending_image_path: Optional[str] = None  # Para loop multimodal (analyze_screen)
         self.paused_players: list[str] = []
         self.wake_word_listener: Optional[WakeWordListener] = None
+        self.bt_button_listener: Optional["BtButtonListener"] = None  # type: ignore
+        self.mpris_dummy_player: Optional["MprisDummyPlayer"] = None  # type: ignore
+        self.mpris_proxy_process: Optional[asyncio.subprocess.Process] = None
+        self._last_avrcp_toggle_time: float = 0.0
 
 
 def get_app_state(request: Request) -> AppState:
@@ -203,6 +238,67 @@ async def lifespan(app: FastAPI):
         )
         state.wake_word_listener.start()
 
+    # Configurar e iniciar el listener de botones Bluetooth (AVRCP)
+    if BT_LISTENER_AVAILABLE:
+        try:
+            state.bt_button_listener = BtButtonListener()
+
+            async def on_bt_play():
+                logger.info("Botón PLAY del HOME SPA-133 detectado. Activando escucha...")
+                await toggle_listen(state)
+
+            async def on_bt_pause():
+                logger.info("Botón PAUSE del HOME SPA-133 detectado. Cancelando...")
+                await cancel_processing(state)
+
+            state.bt_button_listener.on_play = on_bt_play
+            state.bt_button_listener.on_pause = on_bt_pause
+            await state.bt_button_listener.start()
+            logger.info(f"Listener de botones BT iniciado: {state.bt_button_listener.device_name}")
+        except BtButtonListenerError as e:
+            logger.warning(f"No se pudo iniciar el listener de botones BT: {e}")
+    else:
+        logger.info("python-evdev no disponible. Listener de botones BT omitido.")
+
+    # Configurar Dummy MPRIS Player para interceptar comandos AVRCP
+    if MPRIS_AVAILABLE:
+        try:
+            state.mpris_dummy_player = MprisDummyPlayer()
+
+            MPRIS_DEBOUNCE_SECONDS = 1.0
+
+            async def _mpris_toggle():
+                """Toggle escucha con debounce para evitar press+release del mismo botón."""
+                now = asyncio.get_event_loop().time()
+                if now - state._last_avrcp_toggle_time < MPRIS_DEBOUNCE_SECONDS:
+                    logger.debug(f"AVRCP toggle ignorado (debounce {now - state._last_avrcp_toggle_time:.2f}s)")
+                    return
+                state._last_avrcp_toggle_time = now
+                logger.info("AVRCP: Toggle escucha (botón Bluetooth)")
+                await toggle_listen(state)
+
+            state.mpris_dummy_player.on_play = _mpris_toggle
+            state.mpris_dummy_player.on_pause = _mpris_toggle
+            await state.mpris_dummy_player.start()
+            logger.info("Dummy MPRIS Player registrado: org.mpris.MediaPlayer2.asistenteia")
+
+            # Iniciar mpris-proxy si no está corriendo
+            if not _is_mpris_proxy_running():
+                logger.info("Iniciando mpris-proxy...")
+                proc = await asyncio.create_subprocess_exec(
+                    "mpris-proxy",
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                state.mpris_proxy_process = proc
+                logger.info(f"mpris-proxy iniciado (PID {proc.pid})")
+            else:
+                logger.info("mpris-proxy ya estaba corriendo.")
+        except Exception as e:
+            logger.warning(f"No se pudo iniciar el dummy MPRIS player: {e}")
+    else:
+        logger.info("dbus-next no disponible. Dummy MPRIS Player omitido.")
+
     logger.info("AsistenteIA listo")
 
     yield
@@ -217,6 +313,25 @@ async def lifespan(app: FastAPI):
         if state.wake_word_listener:
             logger.info("Deteniendo WakeWordListener...")
             state.wake_word_listener.stop()
+
+        # Detener BtButtonListener si está activo
+        if state.bt_button_listener:
+            logger.info("Deteniendo BtButtonListener...")
+            await state.bt_button_listener.stop()
+
+        # Detener Dummy MPRIS Player y mpris-proxy
+        if state.mpris_dummy_player:
+            logger.info("Deteniendo Dummy MPRIS Player...")
+            await state.mpris_dummy_player.stop()
+        if state.mpris_proxy_process:
+            logger.info("Deteniendo mpris-proxy...")
+            try:
+                state.mpris_proxy_process.terminate()
+                await asyncio.wait_for(state.mpris_proxy_process.wait(), timeout=2.0)
+            except asyncio.TimeoutError:
+                state.mpris_proxy_process.kill()
+            except Exception:
+                pass
 
         # 1. Cancelar tarea en curso si existe
         if state.current_task and not state.current_task.done():
