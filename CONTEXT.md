@@ -1,6 +1,6 @@
 # AsistenteIA - Contexto del Proyecto para Sesiones IA
 
-> **Última actualización:** 23 de mayo de 2026 (Fase 7)
+> **Última actualización:** 23 de mayo de 2026 (Fase 8)
 > **Propósito:** Este documento sirve como referencia completa para cualquier sesión de IA que trabaje en este proyecto. Contiene toda la arquitectura, decisiones técnicas, estado actual y convenciones del código.
 
 ---
@@ -58,6 +58,7 @@ asistenteia/
 │   ├── vision_tool.py       # grim + slurp capturas de pantalla
 │   ├── config.py            # Pydantic Settings (.env)
 │   ├── schema.py            # ChatMessage (pydantic BaseModel)
+│   ├── wake_word_listener.py # Wake word detection con Sherpa-ONNX (Next-gen Kaldi)
 │   ├── bt_button_listener.py # Listener async de botones Bluetooth AVRCP (evdev)
 │   ├── mpris_dummy_player.py # Dummy MPRIS player para interceptar comandos AVRCP
 │   ├── utils.py             # strip_markdown, pending_image (deprecated)
@@ -77,7 +78,14 @@ asistenteia/
 ├── services/
 │   └── asistenteia.service  # systemd user service
 ├── models/
-│   └── gemma-4-E4B-it.litertlm  # Modelo LiteRT (descargado de HF)
+│   ├── gemma-4-E4B-it.litertlm   # Modelo LiteRT (descargado de HF)
+│   └── sherpa-kws/               # Modelo Sherpa-ONNX KWS (zipformer, ~5MB int8)
+│       ├── encoder.onnx
+│       ├── decoder.onnx
+│       ├── joiner.onnx
+│       ├── tokens.txt
+│       ├── bpe.model
+│       └── keywords.txt          # Wake word: "LUKA"
 ├── install.sh               # Instalación completa
 ├── installservice.sh        # Instala servicio systemd
 ├── startservice.sh          # systemctl --user start
@@ -351,6 +359,7 @@ El archivo `config/system_prompt.txt` define:
 17. **Dummy MPRIS Player para trigger:** El módulo `src/mpris_dummy_player.py` se registra como reproductor `org.mpris.MediaPlayer2.asistenteia` en el bus de sesión. Cuando se pulsa Play/Pause en el HOME SPA-133, BlueZ → `mpris-proxy` → llama `Play()`/`Pause()` en nuestro dummy player, que invoca `toggle_listen()` / `cancel_processing()`. Requiere `dbus-next>=0.2.3`.
 18. **mpris-proxy:** `main.py` inicia automáticamente `mpris-proxy` si no está corriendo. El servicio systemd `--user` tiene acceso al bus de sesión, por lo que todo funciona dentro de la sesión del usuario.
 19. **HOME SPA-133: botón Play no envía AVRCP:** Investigación exhaustiva (evdev, BlueZ D-Bus, MPRIS, `dbus-monitor`) confirma que el HOME SPA-133 anuncia perfil AVRCP pero su botón físico de Play NO envía comandos por Bluetooth al host. Probablemente solo funciona en modos USB/Radio/AUX internos del dispositivo. El código está correcto y fue verificado manualmente (`dbus-send Play()` dispara `toggle_listen()` correctamente). Dispositivos que SÍ implementan AVRCP correctamente (ej: JBL Tune 670NC) deberían funcionar.
+20. **Sherpa-ONNX Wake Word:** Reemplaza OpenWakeWord. Usa Keyword Spotting de Next-gen Kaldi con modelo Zipformer entrenado en GigaSpeech (10,000h). Wake word personalizable sin reentrenar: se define en `keywords.txt` (ej: "LUKA"). Modelo ~5MB int8 en `models/sherpa-kws/`. Requiere `sherpa-onnx>=1.13.0`, `sentencepiece`, `pypinyin`. El listener corre en un hilo de background leyendo chunks de 100ms del micrófono.
 
 ---
 
@@ -374,6 +383,7 @@ El archivo `config/system_prompt.txt` define:
 | **Mayo 2026** | **Fase 5: Rate limiting middleware (3 niveles: default, strict, streaming)** |
 | **Mayo 2026** | **Fase 6: Investigación botones Bluetooth AVRCP (HOME SPA-133), módulo `bt_button_listener.py`, scripts de test** |
 | **Mayo 2026** | **Fase 7: Dummy MPRIS Player para capturar AVRCP como trigger, integración en lifespan, mpris-proxy auto-start, dependencia `dbus-next`** |
+| **Mayo 2026** | **Fase 8: Sherpa-ONNX reemplaza OpenWakeWord. Wake word personalizable "LUKA" sin reentrenar. Modelo Zipformer KWS ~5MB int8** |
 
 ---
 

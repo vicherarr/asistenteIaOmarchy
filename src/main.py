@@ -29,7 +29,7 @@ from src.audio_recorder import AudioRecorder
 from src.stt_engine import STTEngine
 from src.schema import ChatMessage
 from src.utils import strip_markdown
-from src.wake_word_listener import WakeWordListener
+from src.wake_word_listener import SherpaWakeWordListener
 
 try:
     from src.bt_button_listener import BtButtonListener, BtButtonListenerError
@@ -167,7 +167,7 @@ class AppState:
         self.is_recording: bool = False
         self.pending_image_path: Optional[str] = None  # Para loop multimodal (analyze_screen)
         self.paused_players: list[str] = []
-        self.wake_word_listener: Optional[WakeWordListener] = None
+        self.wake_word_listener: Optional[SherpaWakeWordListener] = None
         self.bt_button_listener: Optional["BtButtonListener"] = None  # type: ignore
         self.mpris_dummy_player: Optional["MprisDummyPlayer"] = None  # type: ignore
         self.mpris_proxy_process: Optional[asyncio.subprocess.Process] = None
@@ -227,16 +227,21 @@ async def lifespan(app: FastAPI):
     # Configurar e iniciar el WakeWordListener si está habilitado
     if settings.WAKE_WORD_ENABLED:
         async def on_wake_detected():
-            logger.info("Wake word detectado! Iniciando toggle_listen asíncrono.")
+            logger.info("Wake word 'LUKA' detectada! Iniciando toggle_listen asíncrono.")
             await toggle_listen(state)
 
-        state.wake_word_listener = WakeWordListener(
-            on_wake_word_detected=on_wake_detected,
-            app_state=state,
-            model_name=settings.WAKE_WORD_MODEL,
-            threshold=settings.WAKE_WORD_THRESHOLD
-        )
-        state.wake_word_listener.start()
+        try:
+            state.wake_word_listener = SherpaWakeWordListener(
+                model_dir=str(settings.PROJECT_ROOT / settings.WAKE_WORD_MODEL_DIR),
+                keywords_file=str(settings.PROJECT_ROOT / settings.WAKE_WORD_KEYWORDS_FILE),
+                on_wake_word_detected=on_wake_detected,
+                keywords_threshold=settings.WAKE_WORD_THRESHOLD,
+                provider=settings.LITERT_BACKEND if settings.LITERT_BACKEND in ("cpu", "cuda") else "cpu",
+            )
+            state.wake_word_listener.start()
+            logger.info(f"SherpaWakeWordListener iniciado. Modelo: {settings.WAKE_WORD_MODEL_DIR}")
+        except Exception as e:
+            logger.warning(f"No se pudo iniciar SherpaWakeWordListener: {e}")
 
     # Configurar e iniciar el listener de botones Bluetooth (AVRCP)
     if BT_LISTENER_AVAILABLE:
@@ -316,7 +321,7 @@ async def lifespan(app: FastAPI):
 
         # Detener WakeWordListener si está activo
         if state.wake_word_listener:
-            logger.info("Deteniendo WakeWordListener...")
+            logger.info("Deteniendo SherpaWakeWordListener...")
             state.wake_word_listener.stop()
 
         # Detener BtButtonListener si está activo

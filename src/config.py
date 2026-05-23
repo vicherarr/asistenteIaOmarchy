@@ -26,10 +26,11 @@ class Settings(BaseSettings):
     KOKORO_VOICE: str = "em_alex"
     KOKORO_LANG: str = "e"
     
-    # Wake Word
+    # Wake Word (Sherpa-ONNX KWS)
     WAKE_WORD_ENABLED: bool = True
-    WAKE_WORD_MODEL: str = "hey_mycroft"
-    WAKE_WORD_THRESHOLD: float = 0.3
+    WAKE_WORD_KEYWORDS_FILE: str = "models/sherpa-kws/keywords.txt"
+    WAKE_WORD_MODEL_DIR: str = "models/sherpa-kws"
+    WAKE_WORD_THRESHOLD: float = 0.30
     
     # Paths
     PROJECT_ROOT: Path = Path(__file__).parent.parent

@@ -1,147 +1,186 @@
+"""
+Wake Word Listener basado en Sherpa-ONNX (Next-gen Kaldi).
+
+Reemplaza OpenWakeWord por un sistema de keyword spotting más preciso
+que permite wake words personalizadas sin reentrenar el modelo.
+
+Uso:
+    from src.wake_word_listener import SherpaWakeWordListener
+    
+    listener = SherpaWakeWordListener(
+        model_dir="models/sherpa-kws",
+        keywords_file="models/sherpa-kws/keywords.txt",
+        on_wake_word_detected=callback,
+    )
+    listener.start()
+    # ...
+    listener.stop()
+
+Requiere: sherpa-onnx
+"""
+
 import asyncio
+import inspect
 import logging
-import subprocess
-import time
-from typing import Optional, Callable
-import numpy as np
+import threading
+from typing import Callable, Optional
+
+try:
+    import sherpa_onnx
+    import sounddevice as sd
+    SHERPA_AVAILABLE = True
+except ImportError:
+    SHERPA_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
 
-class WakeWordListener:
-    """Escucha de forma continua el micrófono en segundo plano buscando la palabra de activación (Wake Word)."""
+class SherpaWakeWordListener:
+    """
+    Escucha en background el micrófono para detectar la wake word
+    usando Sherpa-ONNX KeywordSpotter.
+    
+    El modelo es un Zipformer entrenado en GigaSpeech (10,000h de inglés).
+    La wake word se define en un archivo de texto sin necesidad de reentrenar.
+    """
 
-    def __init__(self, on_wake_word_detected: Callable, app_state, model_name: str = "hey_jarvis", threshold: float = 0.5) -> None:
-        self.on_wake_word_detected = on_wake_word_detected
-        self.app_state = app_state
-        self.model_name = model_name
-        self.threshold = threshold
-        self.task: Optional[asyncio.Task] = None
-        self.is_running = False
-        self.oww_model = None
-        self._last_detection_time = 0.0  # Cooldown para evitar activaciones en ráfaga
+    def __init__(
+        self,
+        model_dir: str,
+        keywords_file: str,
+        on_wake_word_detected: Callable[[], None],
+        provider: str = "cpu",
+        num_threads: int = 1,
+        keywords_threshold: float = 0.25,
+        keywords_score: float = 1.0,
+        max_active_paths: int = 4,
+        num_trailing_blanks: int = 1,
+    ) -> None:
+        """
+        Args:
+            model_dir: Directorio con encoder.onnx, decoder.onnx, joiner.onnx, tokens.txt
+            keywords_file: Ruta al archivo de keywords generado con sherpa-onnx-cli text2token
+            on_wake_word_detected: Callback sin argumentos que se ejecuta al detectar la wake word
+            provider: "cpu" o "cuda"
+            num_threads: Hilos para ONNX Runtime (1 es suficiente para CPU)
+            keywords_threshold: Umbral de detección (0.0-1.0). Más alto = más estricto
+            keywords_score: Boost score para los tokens de la keyword
+            max_active_paths: Beam width durante decoding
+            num_trailing_blanks: Blanks necesarios después de la keyword para confirmar detección
+        """
+        if not SHERPA_AVAILABLE:
+            raise ImportError(
+                "sherpa-onnx no instalado. Ejecuta: pip install sherpa-onnx"
+            )
+
+        self._model_dir = model_dir
+        self._keywords_file = keywords_file
+        self._on_wake_word_detected = on_wake_word_detected
+        self._provider = provider
+        self._num_threads = num_threads
+        self._keywords_threshold = keywords_threshold
+        self._keywords_score = keywords_score
+        self._max_active_paths = max_active_paths
+        self._num_trailing_blanks = num_trailing_blanks
+
+        self._spotter: Optional[sherpa_onnx.KeywordSpotter] = None
+        self._thread: Optional[threading.Thread] = None
+        self._running = False
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+
+    def _create_spotter(self) -> sherpa_onnx.KeywordSpotter:
+        """Crea la instancia del KeywordSpotter de Sherpa-ONNX."""
+        from pathlib import Path
+        base = Path(self._model_dir)
+        
+        return sherpa_onnx.KeywordSpotter(
+            tokens=str(base / "tokens.txt"),
+            encoder=str(base / "encoder.onnx"),
+            decoder=str(base / "decoder.onnx"),
+            joiner=str(base / "joiner.onnx"),
+            num_threads=self._num_threads,
+            max_active_paths=self._max_active_paths,
+            keywords_file=self._keywords_file,
+            keywords_score=self._keywords_score,
+            keywords_threshold=self._keywords_threshold,
+            num_trailing_blanks=self._num_trailing_blanks,
+            provider=self._provider,
+        )
 
     def start(self) -> None:
-        """Inicia el bucle de escucha en segundo plano."""
-        if self.is_running:
+        """Inicia el hilo de escucha en background."""
+        if self._running:
+            logger.warning("WakeWordListener ya está en ejecución.")
             return
-        self.is_running = True
-        self.task = asyncio.create_task(self._listen_loop())
-        logger.info("WakeWordListener: Hilo de escucha en segundo plano registrado.")
+
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
+
+        self._spotter = self._create_spotter()
+        self._running = True
+        self._thread = threading.Thread(target=self._listen_loop, daemon=True)
+        self._thread.start()
+        logger.info("SherpaWakeWordListener iniciado. Escuchando 'LUKA'...")
 
     def stop(self) -> None:
-        """Detiene el bucle de escucha."""
-        self.is_running = False
-        if self.task:
-            self.task.cancel()
-            self.task = None
-        logger.info("WakeWordListener: Hilo de escucha detenido.")
+        """Detiene la escucha y libera recursos."""
+        self._running = False
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
+        self._spotter = None
+        logger.info("SherpaWakeWordListener detenido.")
 
-    async def _listen_loop(self) -> None:
-        """Bucle principal de captura y análisis de audio para Wake Word."""
-        try:
-            # Importación diferida para acelerar el inicio de la app
-            from openwakeword.model import Model
-            self.oww_model = Model(wakeword_models=[self.model_name])
-            logger.info(f"WakeWordListener: Modelo '{self.model_name}' cargado con éxito en memoria.")
-        except Exception as e:
-            logger.error(f"WakeWordListener: No se pudo inicializar openwakeword: {e}")
-            self.is_running = False
+    def _listen_loop(self) -> None:
+        """Loop principal: captura audio del micrófono y detecta la wake word."""
+        sample_rate = 16000
+        samples_per_read = int(0.1 * sample_rate)  # 100ms chunks
+
+        if self._spotter is None:
             return
 
-        # openwakeword procesa trozos de 1280 muestras (80ms a 16000Hz 16-bit)
-        chunk_samples = 1280
-        frame_bytes = chunk_samples * 2  # 2 bytes por muestra (s16le)
-        
-        while self.is_running:
-            # Si el asistente ya está grabando o procesando, suspendemos la captura
-            # Esto libera ciclos de CPU y evita la auto-activación con el TTS
-            if self.app_state.is_recording or self.app_state.processing:
-                await asyncio.sleep(0.5)
-                continue
+        stream = self._spotter.create_stream()
 
-            # Iniciar captura de micrófono a 16kHz PCM Mono
-            source_id = self.app_state.audio_manager.default_source
-            device = source_id if source_id else "@DEFAULT_SOURCE@"
-            pacat_cmd = ["pacat", "--record", "--rate=16000", "--channels=1", "--format=s16le", "--device", device]
+        try:
+            with sd.InputStream(
+                channels=1,
+                dtype="float32",
+                samplerate=sample_rate,
+                blocksize=samples_per_read,
+            ) as s:
+                while self._running:
+                    samples, overflowed = s.read(samples_per_read)
+                    if overflowed:
+                        logger.warning("Buffer overflow en micrófono wake word")
 
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    *pacat_cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.DEVNULL
-                )
-                logger.debug("WakeWordListener: Stream de captura pacat iniciado.")
-            except Exception as e:
-                logger.error(f"WakeWordListener: Error lanzando pacat: {e}")
-                await asyncio.sleep(5)  # Reintentar en 5s
-                continue
+                    samples = samples.reshape(-1)
+                    stream.accept_waveform(sample_rate, samples)
 
-            try:
-                while self.is_running:
-                    # Detener captura si el estado del asistente pasa a grabación/procesamiento activo
-                    if self.app_state.is_recording or self.app_state.processing:
-                        break
+                    while self._spotter.is_ready(stream):
+                        self._spotter.decode_stream(stream)
+                        result = self._spotter.get_result(stream)
+                        if result:
+                            logger.info(f"Wake word detectada: {result}")
+                            try:
+                                if inspect.iscoroutinefunction(self._on_wake_word_detected):
+                                    if self._loop:
+                                        asyncio.run_coroutine_threadsafe(
+                                            self._on_wake_word_detected(), self._loop
+                                        )
+                                    else:
+                                        logger.error("No hay event loop para ejecutar callback async")
+                                else:
+                                    self._on_wake_word_detected()
+                            except Exception as e:
+                                logger.error(f"Error en callback wake word: {e}")
+                            # Resetear stream para detectar la próxima
+                            self._spotter.reset_stream(stream)
+        except Exception as e:
+            logger.error(f"Error en loop de wake word: {e}")
+        finally:
+            logger.debug("Loop de wake word finalizado.")
 
-                    try:
-                        data = await proc.stdout.readexactly(frame_bytes)
-                    except asyncio.IncompleteReadError as e:
-                        if len(e.partial) > 0:
-                            data = e.partial
-                        else:
-                            break
-                    except Exception:
-                        break
-
-                    if len(data) < frame_bytes:
-                        break
-
-                    # Convertir bytes crudos a numpy array s16 y aplicar amplificación digital (4x)
-                    audio_float = np.frombuffer(data, dtype=np.int16).astype(np.float32)
-                    boosted = np.clip(audio_float * 4.0, -32768, 32767).astype(np.int16)
-
-                    # Realizar inferencia con openwakeword
-                    prediction = self.oww_model.predict(boosted)
-                    score = prediction.get(self.model_name, 0.0)
-
-                    if score >= self.threshold:
-                        # Cooldown: evitar activaciones en ráfaga
-                        elapsed = time.time() - self._last_detection_time
-                        if elapsed < 5.0:
-                            logger.debug(f"WakeWordListener: Score={score:.2f} pero en cooldown ({elapsed:.1f}s < 5s)")
-                            await asyncio.sleep(0.005)
-                            continue
-                        self._last_detection_time = time.time()
-
-                        logger.info(f"WakeWordListener: Palabra clave '{self.model_name}' detectada con probabilidad {score:.2f}!")
-                        
-                        # 1. Parar de inmediato el proceso pacat para liberar el hardware de audio
-                        if proc.returncode is None:
-                            proc.terminate()
-                            await proc.wait()
-                        
-                        # 2. Invocar callback para iniciar la conversación
-                        try:
-                            loop = asyncio.get_running_loop()
-                            loop.create_task(self.on_wake_word_detected())
-                        except Exception as e:
-                            logger.error(f"WakeWordListener: Error ejecutando callback: {e}")
-                        break
-
-                    # Pequeña tregua para el planificador
-                    await asyncio.sleep(0.005)
-
-            except asyncio.CancelledError:
-                pass
-            except Exception as e:
-                logger.error(f"WakeWordListener: Error en bucle de análisis: {e}")
-            finally:
-                # Asegurar cierre de pacat
-                if proc.returncode is None:
-                    try:
-                        proc.terminate()
-                        await proc.wait()
-                    except:
-                        pass
-                logger.debug("WakeWordListener: Captura pacat detenida.")
-                await asyncio.sleep(0.1)
+    @property
+    def is_running(self) -> bool:
+        return self._running
