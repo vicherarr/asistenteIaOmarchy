@@ -311,54 +311,6 @@ class AssistantService:
             # Guardar respuesta final acumulada en el historial
             conversation_history.append(ChatMessage(role="assistant", content=accumulated_text))
 
-            # --- Loop Multimodal (Segunda Pasada para analyze_screen) ---
-            from src.utils import get_pending_image
-            pending_image = get_pending_image()
-            if pending_image:
-                logger.info(f"Detectada captura de pantalla pendiente en: {pending_image}. Iniciando segunda pasada multimodal...")
-                
-                # Yield a separator/announcement chunk to the front-end stream
-                announcement = "\n[Analizando imagen de pantalla...]\n"
-                yield announcement
-                
-                # Prompt guía para la segunda pasada
-                vision_prompt = (
-                    "Aquí tienes la captura de pantalla que acabas de solicitar mediante la herramienta "
-                    "analyze_screen. Por favor, analízala detalladamente y responde la pregunta original "
-                    "del usuario en base a lo que puedes ver en la imagen."
-                )
-                
-                image_accumulated_text = ""
-                image_sentence_buffer = ""
-                
-                async for chunk in self.litert.chat_stream(
-                    prompt=vision_prompt,
-                    tools=self.tools,
-                    system_prompt=system_prompt,
-                    history=conversation_history,  # Incluye el historial con el mensaje de la primera pasada
-                    image_path=pending_image
-                ):
-                    image_accumulated_text += chunk
-                    image_sentence_buffer += chunk
-                    
-                    # Extraer y encolar frases de la segunda pasada
-                    sentences, image_sentence_buffer = self._extract_sentences(image_sentence_buffer)
-                    for s in sentences:
-                        clean = strip_markdown(s)
-                        if self._is_speakable(clean):
-                            await queue_text.put(clean)
-                            
-                    yield chunk
-                    
-                # Encolar cualquier remanente del buffer de imagen
-                if image_sentence_buffer.strip():
-                    clean = strip_markdown(image_sentence_buffer)
-                    if self._is_speakable(clean):
-                        await queue_text.put(clean)
-                        
-                # Concatenar la segunda respuesta en el historial de conversación para coherencia
-                conversation_history[-1].content += "\n\n" + image_accumulated_text
-
         except asyncio.CancelledError:
             logger.info("process_transcription_stream cancelado. Deteniendo workers de TTS...")
             if self._current_tts_task and not self._current_tts_task.done():

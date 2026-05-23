@@ -271,7 +271,7 @@ OBSIDIAN_CLIPPINGS=~/Documentos/Obsidian Vault/Clippings
 - [x] **Rate limiting:** Middleware de protección contra spam (5 req/s default, 1 req/2s estricto, 3 req/s streaming)
 
 ### 10.2. Restantes
-- [ ] **Loop multimodal:** `analyze_screen()` genera imagen pero no hay segunda pasada automática en `assistant_service.py` (pausado — esperando mejora en tool calling multimodal de LiteRT-LM)
+- [x] **Loop multimodal desactivado:** `analyze_screen()` no está registrada en `self.tools` y el bloque de segunda pasada ha sido eliminado. La herramienta permanece en `src/vision_tool.py` pero no se usa activamente.
 
 ---
 
@@ -360,6 +360,7 @@ El archivo `config/system_prompt.txt` define:
 18. **mpris-proxy:** `main.py` inicia automáticamente `mpris-proxy` si no está corriendo. El servicio systemd `--user` tiene acceso al bus de sesión, por lo que todo funciona dentro de la sesión del usuario.
 19. **HOME SPA-133: botón Play no envía AVRCP:** Investigación exhaustiva (evdev, BlueZ D-Bus, MPRIS, `dbus-monitor`) confirma que el HOME SPA-133 anuncia perfil AVRCP pero su botón físico de Play NO envía comandos por Bluetooth al host. Probablemente solo funciona en modos USB/Radio/AUX internos del dispositivo. El código está correcto y fue verificado manualmente (`dbus-send Play()` dispara `toggle_listen()` correctamente). Dispositivos que SÍ implementan AVRCP correctamente (ej: JBL Tune 670NC) deberían funcionar.
 20. **Sherpa-ONNX Wake Word:** Reemplaza OpenWakeWord. Usa Keyword Spotting de Next-gen Kaldi con modelo Zipformer entrenado en GigaSpeech (10,000h). Wake word personalizable sin reentrenar: se define en `keywords.txt` (ej: "LUKA"). Modelo ~5MB int8 en `models/sherpa-kws/`. Requiere `sherpa-onnx>=1.13.0`, `sentencepiece`, `pypinyin`. El listener corre en un hilo de background leyendo chunks de 100ms del micrófono.
+21. **Loop multimodal desactivado:** `analyze_screen()` genera imagen pero no hay segunda pasada automática funcional en `assistant_service.py`. La tool no está registrada en `self.tools` y el bloque de segunda pasada ha sido eliminado. El módulo `src/vision_tool.py` permanece en el repo pero no se usa activamente.
 
 ---
 
