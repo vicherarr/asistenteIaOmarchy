@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     
     # Wake Word
     WAKE_WORD_ENABLED: bool = True
-    WAKE_WORD_MODEL: str = "hey_jarvis"
+    WAKE_WORD_MODEL: str = "hey_mycroft"
     WAKE_WORD_THRESHOLD: float = 0.5
     
     # Paths
