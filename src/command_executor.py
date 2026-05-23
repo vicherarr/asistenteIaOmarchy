@@ -469,27 +469,9 @@ async def system_diagnostics(component: str = "all") -> str:
 
 
 async def get_system_status() -> str:
-    """Resumen de hardware: CPU, RAM, GPU, Disco, Audio, Red.
-    
-    Respuesta truncada a 1500 chars para evitar desbordamiento de contexto LiteRT.
-    """
-    try:
-        from src.context_injector import get_system_context
-        import asyncio
-        
-        # Timeout global de 8 segundos para evitar bloqueos
-        context = await asyncio.wait_for(get_system_context(), timeout=8.0)
-        
-        # Truncar respuesta a 1500 chars máximo
-        max_chars = 5000
-        if len(context) > max_chars:
-            context = context[:max_chars] + "\n...[respuesta truncada]"
-        
-        return f"Contexto:\n{context}"
-    except asyncio.TimeoutError:
-        return "Error: La consulta de hardware tardó demasiado. Tu sistema tiene Linux con Hyprland, PipeWire y Chromium."
-    except Exception as e:
-        return f"Error obteniendo estado del sistema: {e}"
+    """Resumen de hardware: CPU, RAM, GPU, Disco, Audio, Red."""
+    from src.context_injector import get_system_context
+    return f"Contexto:\n{await get_system_context()}"
 
 
 async def read_log_file(service: str = "asistenteia") -> str:
@@ -701,15 +683,10 @@ rm -f "{script_path}"
             await asyncio.sleep(1.0)
             ok_capture, screen_output = await _run_tmux_cmd(["capture-pane", "-p", "-t", session_name])
             if ok_capture and screen_output:
-                # Devolver últimas 40 líneas y truncar a 1500 chars para evitar desbordamiento de VRAM en LiteRT
+                # Devolver últimas 40 líneas
                 lines = screen_output.splitlines()
                 last_lines = lines[-40:]
                 screen_content = "\n".join(last_lines)
-                
-                # Truncamiento por caracteres
-                max_chars = 5000
-                if len(screen_content) > max_chars:
-                    screen_content = screen_content[:max_chars] + "\n...[salida truncada]"
                 
                 return f"Éxito: Comando ejecutado: {command}\n\nSALIDA DE LA TERMINAL:\n{screen_content}"
             return f"Éxito: Se ha enviado el comando a la terminal abierta: {command}"
@@ -755,12 +732,6 @@ rm -f "{script_path}"
             lines = screen_output.splitlines()
             last_lines = lines[-40:]
             screen_content = "\n".join(last_lines)
-            
-            # Truncamiento por caracteres para evitar desbordamiento de VRAM en LiteRT
-            max_chars = 5000
-            if len(screen_content) > max_chars:
-                screen_content = screen_content[:max_chars] + "\n...[salida truncada]"
-            
             return f"Éxito: Terminal {chosen_terminal.capitalize()} abierta y comando ejecutado: {command}\n\nSALIDA DE LA TERMINAL:\n{screen_content}"
         
         return f"Éxito: Se ha abierto una ventana de {chosen_terminal.capitalize()} y ejecutado: {command}"
@@ -801,11 +772,6 @@ async def read_terminal_screen() -> str:
             lines = output.splitlines()
             last_lines = lines[-40:]
             screen_content = "\n".join(last_lines)
-            
-            # Truncamiento por caracteres para evitar desbordamiento de VRAM en LiteRT
-            max_chars = 5000
-            if len(screen_content) > max_chars:
-                screen_content = screen_content[:max_chars] + "\n...[salida truncada]"
             
             if exit_code_match:
                 cmd_name = exit_code_match.group(1)

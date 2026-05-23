@@ -90,7 +90,6 @@ async def get_hardware_context() -> str:
     """
     Recopila toda la información de hardware del sistema de forma asíncrona y paralela.
     Devuelve un string formateado para ser usado por herramientas LiteRT.
-    Respuesta truncada a 1200 chars para evitar desbordamiento de contexto.
     """
     # Ejecutar todas las consultas en paralelo para minimizar latencia
     results = await asyncio.gather(
@@ -117,14 +116,7 @@ async def get_hardware_context() -> str:
 
     context = "## CONTEXTO DE HARDWARE DEL SISTEMA\n\n"
     for name, info in sections:
-        # Truncar cada sección individual a 800 chars
-        truncated_info = info[:800] + ("..." if len(info) > 800 else "")
-        context += f"### {name}\n{truncated_info}\n\n"
-
-    # Truncamiento global a 4000 chars
-    max_chars = 4000
-    if len(context) > max_chars:
-        context = context[:max_chars] + "\n...[truncado]"
+        context += f"### {name}\n{info}\n\n"
 
     return context
 
