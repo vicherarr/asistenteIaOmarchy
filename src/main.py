@@ -265,20 +265,25 @@ async def lifespan(app: FastAPI):
         try:
             state.mpris_dummy_player = MprisDummyPlayer()
 
-            MPRIS_DEBOUNCE_SECONDS = 1.0
+            MPRIS_DEBOUNCE_SECONDS = 5.0
 
-            async def _mpris_toggle():
-                """Toggle escucha con debounce para evitar press+release del mismo botón."""
+            async def _mpris_play():
+                """Inicia o detiene escucha con debounce."""
                 now = asyncio.get_event_loop().time()
                 if now - state._last_avrcp_toggle_time < MPRIS_DEBOUNCE_SECONDS:
-                    logger.debug(f"AVRCP toggle ignorado (debounce {now - state._last_avrcp_toggle_time:.2f}s)")
+                    logger.debug(f"AVRCP Play ignorado (debounce {now - state._last_avrcp_toggle_time:.2f}s)")
                     return
                 state._last_avrcp_toggle_time = now
-                logger.info("AVRCP: Toggle escucha (botón Bluetooth)")
+                logger.info("AVRCP: Play detectado. Toggle escucha...")
                 await toggle_listen(state)
 
-            state.mpris_dummy_player.on_play = _mpris_toggle
-            state.mpris_dummy_player.on_pause = _mpris_toggle
+            async def _mpris_pause():
+                """Pause ignorado: los JBL Tune 670NC envian Pause() fantasmas
+                autonomamente sin que se pulse el boton. Solo Play actua."""
+                logger.debug("AVRCP: Pause() ignorado (bug firmware JBL)")
+
+            state.mpris_dummy_player.on_play = _mpris_play
+            state.mpris_dummy_player.on_pause = _mpris_pause
             await state.mpris_dummy_player.start()
             logger.info("Dummy MPRIS Player registrado: org.mpris.MediaPlayer2.asistenteia")
 
