@@ -69,6 +69,11 @@ async def test_listener_detects_wakeword_correctly(app_state):
     callback = AsyncMock()
     listener = WakeWordListener(on_wake_word_detected=callback, app_state=app_state, threshold=0.5)
     
+    # Detener el bucle del listener cuando se detecta el wake word
+    async def mock_callback():
+        listener.is_running = False
+    callback.side_effect = mock_callback
+    
     # Mockear openwakeword Model
     mock_model_instance = MagicMock()
     # Simular una detección exitosa de 'hey_jarvis'
@@ -78,6 +83,15 @@ async def test_listener_detects_wakeword_correctly(app_state):
     mock_proc = AsyncMock()
     mock_proc.returncode = None
     mock_proc.stdout.readexactly.return_value = b"\x00" * 2560 # 1280 samples * 2 bytes
+    
+    # proc.terminate es un método síncrono en asyncio.subprocess.Process
+    mock_proc.terminate = MagicMock()
+    
+    # Simular que al esperar (wait), el proceso se marca como terminado (returncode = 0)
+    async def mock_wait():
+        mock_proc.returncode = 0
+        return 0
+    mock_proc.wait.side_effect = mock_wait
     
     with patch('openwakeword.model.Model', return_value=mock_model_instance), \
          patch('asyncio.create_subprocess_exec', return_value=mock_proc) as mock_exec:
@@ -96,3 +110,6 @@ async def test_listener_detects_wakeword_correctly(app_state):
         
         # 3. El callback debió ser invocado
         callback.assert_called_once()
+
+
+

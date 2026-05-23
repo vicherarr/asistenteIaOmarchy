@@ -52,7 +52,7 @@ class WakeWordListener:
         frame_bytes = chunk_samples * 2  # 2 bytes por muestra (s16le)
         
         while self.is_running:
-            # Si el asistente ya está grabando, procesando o reproduciendo TTS, suspendemos la captura
+            # Si el asistente ya está grabando o procesando, suspendemos la captura
             # Esto libera ciclos de CPU y evita la auto-activación con el TTS
             if self.app_state.is_recording or self.app_state.processing:
                 await asyncio.sleep(0.5)
