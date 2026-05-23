@@ -481,7 +481,7 @@ async def get_system_status() -> str:
         context = await asyncio.wait_for(get_system_context(), timeout=8.0)
         
         # Truncar respuesta a 1500 chars máximo
-        max_chars = 1500
+        max_chars = 5000
         if len(context) > max_chars:
             context = context[:max_chars] + "\n...[respuesta truncada]"
         
@@ -707,7 +707,7 @@ rm -f "{script_path}"
                 screen_content = "\n".join(last_lines)
                 
                 # Truncamiento por caracteres
-                max_chars = 1500
+                max_chars = 5000
                 if len(screen_content) > max_chars:
                     screen_content = screen_content[:max_chars] + "\n...[salida truncada]"
                 
@@ -757,7 +757,7 @@ rm -f "{script_path}"
             screen_content = "\n".join(last_lines)
             
             # Truncamiento por caracteres para evitar desbordamiento de VRAM en LiteRT
-            max_chars = 1500
+            max_chars = 5000
             if len(screen_content) > max_chars:
                 screen_content = screen_content[:max_chars] + "\n...[salida truncada]"
             
@@ -803,7 +803,7 @@ async def read_terminal_screen() -> str:
             screen_content = "\n".join(last_lines)
             
             # Truncamiento por caracteres para evitar desbordamiento de VRAM en LiteRT
-            max_chars = 1500
+            max_chars = 5000
             if len(screen_content) > max_chars:
                 screen_content = screen_content[:max_chars] + "\n...[salida truncada]"
             

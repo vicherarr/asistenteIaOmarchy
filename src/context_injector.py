@@ -117,12 +117,12 @@ async def get_hardware_context() -> str:
 
     context = "## CONTEXTO DE HARDWARE DEL SISTEMA\n\n"
     for name, info in sections:
-        # Truncar cada sección individual a 200 chars
-        truncated_info = info[:200] + ("..." if len(info) > 200 else "")
+        # Truncar cada sección individual a 800 chars
+        truncated_info = info[:800] + ("..." if len(info) > 800 else "")
         context += f"### {name}\n{truncated_info}\n\n"
 
-    # Truncamiento global a 1200 chars
-    max_chars = 1200
+    # Truncamiento global a 4000 chars
+    max_chars = 4000
     if len(context) > max_chars:
         context = context[:max_chars] + "\n...[truncado]"
 
