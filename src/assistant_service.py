@@ -370,12 +370,38 @@ class AssistantService:
                             success_match = re.search(r"\[AsistenteIA: '([^']+)'\s+finalizado correctamente\]", clean_output)
                             if success_match:
                                 cmd_name = success_match.group(1)
-                                fallback = f"El comando '{cmd_name}' se ejecutó correctamente. "
-                                # Añadir resumen de la salida si hay contenido relevante
+                                
+                                # Extraer líneas relevantes (sin banners ni prompts ni rutas de script)
                                 lines = clean_output.splitlines()
-                                relevant = [l for l in lines if l.strip() and "AsistenteIA" not in l and l != "CONTENIDO VISIBLE EN LA TERMINAL:"]
+                                relevant = []
+                                skip_patterns = [
+                                    "AsistenteIA:", "CONTENIDO VISIBLE", "❯", "bash /tmp/",
+                                    "~/", "SALIDA DE LA TERMINAL", "cmd_", "Éxito:",
+                                    "comando ejecutado", "Se ha enviado"
+                                ]
+                                for l in lines:
+                                    stripped = l.strip()
+                                    if stripped and len(stripped) > 1 and not any(p in l for p in skip_patterns):
+                                        relevant.append(stripped)
+                                
+                                # Si hay contenido relevante, presentarlo directamente
                                 if relevant:
-                                    fallback += "Resultado: " + " | ".join(relevant[:3])
+                                    # Tomar las primeras líneas significativas (máx 5)
+                                    output_lines = relevant[:5]
+                                    output_text = " ".join(output_lines)
+                                    
+                                    # Para consultas de información (versión, IP, etc.), dar respuesta directa
+                                    info_keywords = ["versión", "version", "ip", "dirección", "característica", 
+                                                     "cuánto", "cuánta", "qué", "cual", "lista", "listado",
+                                                     "espacio", "disco", "memoria", "cpu", "gpu", "kernel"]
+                                    is_info_query = any(kw in lower_text for kw in info_keywords)
+                                    
+                                    if is_info_query:
+                                        fallback = output_text
+                                    else:
+                                        fallback = f"El comando '{cmd_name}' se ejecutó correctamente. Resultado: {output_text}"
+                                else:
+                                    fallback = f"El comando '{cmd_name}' se ejecutó correctamente."
                             else:
                                 fallback = "Comando ejecutado correctamente en la terminal."
                         else:
