@@ -332,7 +332,11 @@ class AssistantService:
                 
                 if is_terminal:
                     # Esperar a que el comando se tipee y ejecute completamente
-                    await asyncio.sleep(5.0)
+                    # Yield inicial para mantener la conexión viva
+                    yield "⏳ Ejecutando comando en la terminal..."
+                    await queue_text.put("Ejecutando comando en la terminal.")
+                    
+                    await asyncio.sleep(3.0)
                     
                     # Capturar directamente el panel de tmux
                     try:
