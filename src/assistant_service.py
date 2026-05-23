@@ -331,105 +331,94 @@ class AssistantService:
                 is_terminal = any(kw in lower_text for kw in terminal_keywords)
                 
                 if is_terminal:
-                    # Leer la pantalla de la terminal para verificar resultado
+                    # Esperar a que el comando se tipee y ejecute completamente
+                    await asyncio.sleep(5.0)
+                    
+                    # Capturar directamente el panel de tmux
                     try:
-                        from src.command_executor import read_terminal_screen
-                        screen_output = await read_terminal_screen()
+                        from src.command_executor import _run_tmux_cmd
+                        ok, screen_output = await _run_tmux_cmd(["capture-pane", "-p", "-t", "asistenteia", "-S", "-200"])
                         
-                        # Limpiar códigos ANSI para poder hacer regex correctamente
-                        clean_output = re.sub(r'\x1b\[[0-9;]*m', '', screen_output)
-                        clean_output = re.sub(r'\033\[[0-9;]*m', '', clean_output)
-                        
-                        logger.info(f"Salida de terminal tras tool calling: {clean_output[:300]}...")
-                        
-                        # Analizar si hubo error (formato banner ANSI o formato read_terminal_screen)
-                        has_error = ("falló con código de error" in clean_output or 
-                                     "❌ ERROR EN TERMINAL" in clean_output or
-                                     "falló (código" in clean_output)
-                        has_success = ("finalizado correctamente" in clean_output or 
-                                       "✅ " in clean_output or
-                                       "completado exitosamente" in clean_output)
-                        
-                        if has_error:
-                            # Extraer nombre del comando y código de error
-                            error_match = re.search(r"\[AsistenteIA: '([^']+)'\s+falló con código de error (\d+)\]", clean_output)
-                            if error_match:
-                                cmd_name = error_match.group(1)
-                                exit_code = int(error_match.group(2))
-                                fallback = f"El comando '{cmd_name}' falló con código de error {exit_code}. "
-                                
-                                # Explicar códigos comunes
-                                explanations = {
-                                    1: "Error genérico. El comando no se ejecutó correctamente.",
-                                    2: "Error de sintaxis en el comando. Revisa los argumentos.",
-                                    127: "Comando no encontrado. Probablemente no está instalado.",
-                                    126: "El archivo existe pero no tiene permisos de ejecución.",
-                                    13: "Permiso denegado. Necesitas permisos de administrador.",
-                                }
-                                if exit_code in explanations:
-                                    fallback += explanations[exit_code]
-                                else:
-                                    fallback += "Verifica que el comando y los argumentos sean correctos."
-                            else:
-                                # Formato read_terminal_screen: extraer info del error
-                                error_info_match = re.search(r"❌ ERROR EN TERMINAL: '([^']+)'\s+falló \(código (\d+)\)", clean_output)
-                                if error_info_match:
-                                    cmd_name = error_info_match.group(1)
-                                    exit_code = int(error_info_match.group(2))
-                                    fallback = f"El comando '{cmd_name}' falló con código {exit_code}. "
-                                    explanations = {
-                                        127: "Comando no encontrado.",
-                                        13: "Permiso denegado.",
-                                        126: "Sin permisos de ejecución.",
-                                    }
-                                    fallback += explanations.get(exit_code, "Revisa el comando.")
-                                else:
-                                    fallback = "El comando falló en la terminal. Revisa la salida para más detalles."
-                        elif has_success:
-                            # Extraer nombre del comando exitoso
-                            success_match = re.search(r"\[AsistenteIA: '([^']+)'\s+finalizado correctamente\]", clean_output)
-                            if not success_match:
-                                success_match = re.search(r"✅ '([^']+)'\s+completado exitosamente", clean_output)
+                        if not ok or not screen_output:
+                            fallback = "No se pudo leer la salida de la terminal."
+                        else:
+                            clean_output = re.sub(r'\x1b\[[0-9;]*m', '', screen_output)
+                            clean_output = re.sub(r'\033\[[0-9;]*m', '', clean_output)
                             
-                            if success_match:
-                                cmd_name = success_match.group(1)
+                            logger.info(f"Salida de terminal tras tool calling (últimas 500 chars): {clean_output[-500:]}...")
+                            
+                            # Analizar si hubo error
+                            has_error = ("ERROR" in clean_output and "❌" in clean_output)
+                            has_success = ("OK" in clean_output and "✅" in clean_output)
+                            
+                            if has_error:
+                                error_match = re.search(r"❌\s+(\S+)\s+ERROR\s+(\d+)", clean_output)
+                                if error_match:
+                                    cmd_name = error_match.group(1)
+                                    exit_code = int(error_match.group(2))
+                                    fallback = f"El comando '{cmd_name}' falló con código {exit_code}. "
+                                    fallback += {127: "Comando no encontrado.", 13: "Permiso denegado.", 126: "Sin permisos."}.get(exit_code, "Revisa el comando.")
+                                else:
+                                    fallback = "El comando falló en la terminal."
+                            elif has_success:
+                                success_match = re.search(r"✅\s+(\S+)\s+OK", clean_output)
                                 
-                                # Extraer líneas relevantes (sin banners ni prompts ni rutas de script)
+                                if success_match:
+                                    cmd_name = success_match.group(1)
+                                    lines = clean_output.splitlines()
+                                    relevant = []
+                                    skip_patterns = [
+                                        "AsistenteIA:", "CONTENIDO VISIBLE", "❯", "bash /tmp/",
+                                        "~/", "SALIDA DE LA TERMINAL", "cmd_", "Éxito:",
+                                        "comando ejecutado", "Se ha enviado", "Qué significa:",
+                                        "✅", "❌", "│", "├", "└", "┌", "─",
+                                        "run.sh", "EXIT_CODE", "echo", "if [", "fi", "else",
+                                        "test $?", "finalizado correctamente", "completado exitosamente",
+                                        "OK]", "ERROR"
+                                    ]
+                                    for l in lines:
+                                        stripped = l.strip()
+                                        if stripped and len(stripped) > 1 and not any(p in l for p in skip_patterns):
+                                            relevant.append(stripped)
+                                    
+                                    if relevant:
+                                        output_lines = relevant[-5:]
+                                        output_text = " ".join(output_lines)
+                                        info_keywords = ["versión", "version", "ip", "dirección", "característica", 
+                                                         "cuánto", "cuánta", "qué", "cual", "lista", "listado",
+                                                         "espacio", "disco", "memoria", "cpu", "gpu", "kernel"]
+                                        is_info_query = any(kw in lower_text for kw in info_keywords)
+                                        fallback = output_text if is_info_query else f"El comando '{cmd_name}' se ejecutó correctamente. Resultado: {output_text}"
+                                    else:
+                                        fallback = f"El comando '{cmd_name}' se ejecutó correctamente."
+                                else:
+                                    fallback = "Comando ejecutado correctamente en la terminal."
+                            else:
                                 lines = clean_output.splitlines()
                                 relevant = []
                                 skip_patterns = [
                                     "AsistenteIA:", "CONTENIDO VISIBLE", "❯", "bash /tmp/",
                                     "~/", "SALIDA DE LA TERMINAL", "cmd_", "Éxito:",
                                     "comando ejecutado", "Se ha enviado", "Qué significa:",
-                                    "✅", "❌", "│", "├", "└", "┌", "─", "│"
+                                    "✅", "❌", "│", "├", "└", "┌", "─",
+                                    "run.sh", "EXIT_CODE", "echo", "if [", "fi", "else",
+                                    "test $?", "OK]", "ERROR"
                                 ]
                                 for l in lines:
                                     stripped = l.strip()
                                     if stripped and len(stripped) > 1 and not any(p in l for p in skip_patterns):
                                         relevant.append(stripped)
                                 
-                                # Si hay contenido relevante, presentarlo directamente
                                 if relevant:
-                                    # Tomar las primeras líneas significativas (máx 5)
-                                    output_lines = relevant[:5]
+                                    output_lines = relevant[-5:]
                                     output_text = " ".join(output_lines)
-                                    
-                                    # Para consultas de información (versión, IP, etc.), dar respuesta directa
                                     info_keywords = ["versión", "version", "ip", "dirección", "característica", 
                                                      "cuánto", "cuánta", "qué", "cual", "lista", "listado",
                                                      "espacio", "disco", "memoria", "cpu", "gpu", "kernel"]
                                     is_info_query = any(kw in lower_text for kw in info_keywords)
-                                    
-                                    if is_info_query:
-                                        fallback = output_text
-                                    else:
-                                        fallback = f"El comando '{cmd_name}' se ejecutó correctamente. Resultado: {output_text}"
+                                    fallback = output_text if is_info_query else f"Comando ejecutado. Resultado: {output_text}"
                                 else:
-                                    fallback = f"El comando '{cmd_name}' se ejecutó correctamente."
-                            else:
-                                fallback = "Comando ejecutado correctamente en la terminal."
-                        else:
-                            fallback = "Comando ejecutado en la terminal."
+                                    fallback = "Comando ejecutado en la terminal."
                     except Exception as e:
                         logger.error(f"Error leyendo terminal tras tool calling: {e}")
                         fallback = "Comando ejecutado en la terminal."

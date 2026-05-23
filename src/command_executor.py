@@ -647,18 +647,13 @@ async def open_terminal_and_run_command(command: str) -> str:
     executor = CommandExecutor()
     is_verified = executor._is_safe_command(command)
     
-    # Envolver el comando para capturar código de salida y mostrar banners
-    # La sesión tmux se crea con bash explícitamente, así que la sintaxis bash funciona
+    # Enviar el comando limpio (visible para el humano) y luego un banner corto
     wrapped_command = command
+    banner_line = None
     if not command.strip().endswith("&"):
         cmd_name = command.strip().split()[0].split("/")[-1] if command.strip() else "comando"
-        
-        # Wrapper bash inline
-        wrapped_command = (
-            f"{{ {command.strip()} ; }} && "
-            f"echo -e \"\\n\\033[1;30m[AsistenteIA: '{cmd_name}' finalizado correctamente]\\033[0m\" || "
-            f"echo -e \"\\n\\033[1;31m[AsistenteIA: '{cmd_name}' falló con código de error $?]\\033[0m\""
-        )
+        # Banner compacto: una línea corta y legible
+        banner_line = f'test $? = 0 && echo "✅ {cmd_name} OK" || echo "❌ {cmd_name} ERROR $?"'
     
     # 1. Comprobar si la sesión de tmux existe y si está activa en pantalla (attached)
     session_attached = False
@@ -677,22 +672,28 @@ async def open_terminal_and_run_command(command: str) -> str:
     except Exception as e:
         logger.error(f"Error comprobando estado de tmux: {e}")
 
-    # 2. Si la terminal ya está abierta y acoplada a la sesión, enviamos el comando via buffer (sin tipeo visible)
+    # 2. Si la terminal ya está abierta y acoplada a la sesión, enviamos el comando
     if session_attached:
         try:
             logger.info(f"Enviando comando a sesión de tmux existente: {command}")
-            # Escribir comando en buffer temporal y pegar (evita tipeo carácter a carácter)
-            import tempfile
+            # Paso 1: enviar el comando limpio (visible para el humano)
             buf_file = settings.TEMP_DIR / "tmux_buf"
-            buf_file.write_text(wrapped_command + "\n", encoding="utf-8")
-            
+            buf_file.write_text(command.strip() + "\n", encoding="utf-8")
             await _run_tmux_cmd(["load-buffer", "-b", "cmd", "-t", session_name, str(buf_file)])
             await _run_tmux_cmd(["paste-buffer", "-b", "cmd", "-t", session_name])
             await _run_tmux_cmd(["send-keys", "-t", session_name, "C-m"])
             buf_file.unlink(missing_ok=True)
             
-            # Esperar a que el comando termine y capturar output
-            await asyncio.sleep(2.0)
+            # Paso 2: esperar a que el comando termine y enviar el banner
+            await asyncio.sleep(1.5)
+            if banner_line:
+                buf_file.write_text(banner_line + "\n", encoding="utf-8")
+                await _run_tmux_cmd(["load-buffer", "-b", "cmd", "-t", session_name, str(buf_file)])
+                await _run_tmux_cmd(["paste-buffer", "-b", "cmd", "-t", session_name])
+                await _run_tmux_cmd(["send-keys", "-t", session_name, "C-m"])
+            
+            # Esperar a que el banner se ejecute y capturar output
+            await asyncio.sleep(1.0)
             ok_capture, screen_output = await _run_tmux_cmd(["capture-pane", "-p", "-t", session_name])
             if ok_capture and screen_output:
                 # Devolver últimas 60 líneas (más contexto para comandos largos)
@@ -740,13 +741,21 @@ async def open_terminal_and_run_command(command: str) -> str:
         # Esperar un momento a que la terminal y tmux se inicien/adjunten gráficamente
         await asyncio.sleep(0.8)
         
-        # Enviar el comando envuelto via buffer (sin tipeo visible)
+        # Paso 1: enviar el comando limpio (visible para el humano)
         buf_file = settings.TEMP_DIR / "tmux_buf"
-        buf_file.write_text(wrapped_command + "\n", encoding="utf-8")
+        buf_file.write_text(command.strip() + "\n", encoding="utf-8")
         await _run_tmux_cmd(["load-buffer", "-b", "cmd", "-t", session_name, str(buf_file)])
         await _run_tmux_cmd(["paste-buffer", "-b", "cmd", "-t", session_name])
         await _run_tmux_cmd(["send-keys", "-t", session_name, "C-m"])
         buf_file.unlink(missing_ok=True)
+        
+        # Paso 2: esperar y enviar el banner
+        await asyncio.sleep(1.5)
+        if banner_line:
+            buf_file.write_text(banner_line + "\n", encoding="utf-8")
+            await _run_tmux_cmd(["load-buffer", "-b", "cmd", "-t", session_name, str(buf_file)])
+            await _run_tmux_cmd(["paste-buffer", "-b", "cmd", "-t", session_name])
+            await _run_tmux_cmd(["send-keys", "-t", session_name, "C-m"])
         
         # Esperar a que el comando termine y capturar output
         await asyncio.sleep(2.0)
