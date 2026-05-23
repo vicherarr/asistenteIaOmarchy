@@ -167,10 +167,12 @@ class AssistantService:
         
         if not text or len(text.strip()) < 2:
             await self.send_notification_async("No se detectó voz o el mensaje es muy corto.")
-            return {"status": "error", "message": "No se detectó voz"}
+            return {"status": "error", "message": "No se detectó voz", "transcribed_text": None}
 
         await self.send_notification_async(f"Has dicho: {text}")
-        return await self.process_transcription(text, conversation_history, sink_id, max_history)
+        result = await self.process_transcription(text, conversation_history, sink_id, max_history)
+        result["transcribed_text"] = text
+        return result
 
     def send_notification(self, message: str, title: str = "AsistenteIA") -> None:
         """Envía una notificación de escritorio y emite un bip si es inicio de escucha."""

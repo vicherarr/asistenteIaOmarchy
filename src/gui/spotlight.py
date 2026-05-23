@@ -702,6 +702,22 @@ class SpotlightWindow(QMainWindow):
                     conversation_length = data.get("conversation_length", 0)
                     is_processing = data.get("processing", False)
                     
+                    # Detectar nueva transcripción de audio para mostrarla en el chat
+                    last_ts = data.get("last_transcription_timestamp", 0)
+                    last_text = data.get("last_user_transcription")
+                    prev_ts = getattr(self, '_last_seen_transcription_ts', 0)
+                    if last_text and last_ts > prev_ts:
+                        self._last_seen_transcription_ts = last_ts
+                        # Mostrar el texto del usuario en el chat de forma prominente
+                        self.animate_height(480)
+                        self.chat_area.show()
+                        self.chat_area.setMarkdown(
+                            f"> **🎤 Has dicho:** {last_text}\n\n"
+                            f"---\n\n"
+                            f"**AsistenteIA:** ..."
+                        )
+                        self.chat_area.verticalScrollBar().setValue(0)
+                    
                     # Actualizar visualizador animado y botón Stop dinámicamente
                     is_speaking = data.get("speaking", False)
                     if is_speaking:

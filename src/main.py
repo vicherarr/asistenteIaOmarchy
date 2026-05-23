@@ -172,6 +172,8 @@ class AppState:
         self.mpris_dummy_player: Optional["MprisDummyPlayer"] = None  # type: ignore
         self.mpris_proxy_process: Optional[asyncio.subprocess.Process] = None
         self._last_avrcp_toggle_time: float = 0.0
+        self.last_user_transcription: Optional[str] = None  # Último texto transcrito por STT
+        self.last_transcription_timestamp: float = 0.0
 
 
 def get_app_state(request: Request) -> AppState:
@@ -198,6 +200,8 @@ class StatusResponse(BaseModel):
     speaking: bool = False
     gpu_active: bool = False
     litert_backend: str = "Desconectado"
+    last_user_transcription: Optional[str] = None
+    last_transcription_timestamp: float = 0.0
 
 
 class HealthResponse(BaseModel):
@@ -481,12 +485,17 @@ async def toggle_listen(state: AppState = Depends(get_app_state)):
             async def process_task():
                 try:
                     sink_id = state.audio_manager.default_sink
-                    await state.assistant_service.process_audio(
+                    result = await state.assistant_service.process_audio(
                         audio_path, 
                         state.conversation_history,
                         sink_id=sink_id,
                         max_history=MAX_HISTORY
                     )
+                    # Guardar la transcripción para que la UI la muestre
+                    if result.get("transcribed_text"):
+                        state.last_user_transcription = result["transcribed_text"]
+                        state.last_transcription_timestamp = asyncio.get_event_loop().time()
+                        logger.info(f"Transcripción guardada para UI: {result['transcribed_text']}")
                     # Esperar a que el TTS termine de reproducir
                     await state.assistant_service.wait_for_tts_complete()
                 except Exception as e:
@@ -602,6 +611,8 @@ async def get_status(state: AppState = Depends(get_app_state)):
         speaking=is_speaking,
         gpu_active=gpu_active,
         litert_backend=litert_backend,
+        last_user_transcription=state.last_user_transcription,
+        last_transcription_timestamp=state.last_transcription_timestamp
     )
 
 
