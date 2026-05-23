@@ -325,10 +325,61 @@ class AssistantService:
             if chunk_count == 0:
                 logger.info("Tool calling silencioso (0 chunks). Generando fallback...")
                 lower_text = text.lower()
-                if any(kw in lower_text for kw in ["música", "canción", "play", "spotify", "pon"]):
+                
+                # Detectar si se ejecutó un comando de terminal y leer la salida
+                terminal_keywords = ["abre", "abrir", "lanza", "ejecuta", "terminal", "comando", "consola", "dime", "qué", "cuál", "característica", "info", "información"]
+                is_terminal = any(kw in lower_text for kw in terminal_keywords)
+                
+                if is_terminal:
+                    # Leer la pantalla de la terminal para verificar resultado
+                    try:
+                        from src.command_executor import read_terminal_screen
+                        screen_output = await read_terminal_screen()
+                        logger.info(f"Salida de terminal tras tool calling: {screen_output[:200]}...")
+                        
+                        # Analizar si hubo error
+                        if "falló con código de error" in screen_output:
+                            # Extraer nombre del comando y código de error
+                            error_match = re.search(r"\[AsistenteIA: '([^']+)'\s+falló con código de error (\d+)\]", screen_output)
+                            if error_match:
+                                cmd_name = error_match.group(1)
+                                exit_code = int(error_match.group(2))
+                                fallback = f"El comando '{cmd_name}' falló con código de error {exit_code}. "
+                                
+                                # Explicar códigos comunes
+                                explanations = {
+                                    1: "Error genérico. El comando no se ejecutó correctamente.",
+                                    2: "Error de sintaxis en el comando. Revisa los argumentos.",
+                                    127: "Comando no encontrado. Probablemente no está instalado.",
+                                    126: "El archivo existe pero no tiene permisos de ejecución.",
+                                    13: "Permiso denegado. Necesitas permisos de administrador.",
+                                }
+                                if exit_code in explanations:
+                                    fallback += explanations[exit_code]
+                                else:
+                                    fallback += "Verifica que el comando y los argumentos sean correctos."
+                            else:
+                                fallback = "El comando falló en la terminal. Revisa la salida para más detalles."
+                        elif "finalizado correctamente" in screen_output:
+                            # Extraer nombre del comando exitoso
+                            success_match = re.search(r"\[AsistenteIA: '([^']+)'\s+finalizado correctamente\]", screen_output)
+                            if success_match:
+                                cmd_name = success_match.group(1)
+                                fallback = f"El comando '{cmd_name}' se ejecutó correctamente. "
+                                # Añadir resumen de la salida si hay contenido relevante
+                                lines = screen_output.splitlines()
+                                relevant = [l for l in lines if l.strip() and "AsistenteIA" not in l and l != "CONTENIDO VISIBLE EN LA TERMINAL:"]
+                                if relevant:
+                                    fallback += "Resultado: " + " | ".join(relevant[:3])
+                            else:
+                                fallback = "Comando ejecutado correctamente en la terminal."
+                        else:
+                            fallback = "Comando ejecutado en la terminal."
+                    except Exception as e:
+                        logger.error(f"Error leyendo terminal tras tool calling: {e}")
+                        fallback = "Comando ejecutado en la terminal."
+                elif any(kw in lower_text for kw in ["música", "canción", "play", "spotify", "pon"]):
                     fallback = "Reproduciendo música."
-                elif any(kw in lower_text for kw in ["abre", "abrir", "lanza", "ejecuta", "terminal"]):
-                    fallback = "Comando ejecutado en la terminal."
                 elif any(kw in lower_text for kw in ["pantalla", "captura", "ver", "mira"]):
                     fallback = "Analizando la pantalla."
                 elif any(kw in lower_text for kw in ["busca", "buscar", "investiga", "web"]):
