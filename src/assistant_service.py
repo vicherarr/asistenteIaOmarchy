@@ -321,17 +321,17 @@ class AssistantService:
                 if clean_chunk:
                     yield clean_chunk
 
-            # Si no hubo chunks (tool calling silencioso de LiteRT), generar fallback
-            if chunk_count == 0:
-                logger.info("Tool calling silencioso (0 chunks). Generando fallback...")
+            # Si no hubo chunks o el texto acumulado está vacío (tool calling silencioso), generar fallback
+            accumulated_clean = self._clean_tool_calls(accumulated_text)
+            if chunk_count == 0 or not accumulated_clean.strip():
+                logger.info("Tool calling silencioso o texto vacío. Generando fallback...")
                 lower_text = text.lower()
                 
                 # Detectar si se ejecutó un comando de terminal y leer la salida
-                terminal_keywords = ["abre", "abrir", "lanza", "ejecuta", "terminal", "comando", "consola", "dime", "qué", "cuál", "característica", "info", "información"]
+                terminal_keywords = ["abre", "abrir", "lanza", "ejecuta", "terminal", "comando", "consola", "dime", "qué", "cuál", "característica", "info", "información", "versión", "version", "java", "node", "python", "dotnet", "ruby", "go", "rust"]
                 is_terminal = any(kw in lower_text for kw in terminal_keywords)
                 
                 if is_terminal:
-                    # Esperar a que el comando se tipee y ejecute completamente
                     # Yield inicial para mantener la conexión viva
                     yield "⏳ Ejecutando comando en la terminal..."
                     await queue_text.put("Ejecutando comando en la terminal.")
