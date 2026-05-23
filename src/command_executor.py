@@ -647,21 +647,26 @@ async def open_terminal_and_run_command(command: str) -> str:
     executor = CommandExecutor()
     is_verified = executor._is_safe_command(command)
     
-    # Envolver el comando para capturar el código de salida y mostrar banners
-    # La sesión tmux usa bash explícitamente, así que la sintaxis bash funciona correctamente
+    # Envolver el comando en un script temporal para evitar ruido visual en tmux
+    # Solo se tipea: bash /tmp/asistenteia/run.sh
     wrapped_command = command
     if not command.strip().endswith("&"):
         cmd_name = command.strip().split()[0].split("/")[-1] if command.strip() else "comando"
         
-        # Usar sintaxis bash inline (la sesión tmux corre bash, no fish)
-        wrapped_command = (
-            f"{{ {command.strip()} ; }} ; EXIT_CODE=$? ; "
-            f"if [ $EXIT_CODE -eq 0 ]; then "
-            f"echo -e \"\\n\\033[1;30m[AsistenteIA: '{cmd_name}' finalizado correctamente]\\033[0m\"; "
-            f"else "
-            f"echo -e \"\\n\\033[1;31m[AsistenteIA: '{cmd_name}' falló con código de error $EXIT_CODE]\\033[0m\"; "
-            f"fi"
-        )
+        script_path = settings.TEMP_DIR / "run.sh"
+        script_content = f"""#!/usr/bin/env bash
+{command.strip()}
+EXIT_CODE=$?
+if [ $EXIT_CODE -eq 0 ]; then
+    echo -e "\\n\\033[1;30m[AsistenteIA: '{cmd_name}' finalizado correctamente]\\033[0m"
+else
+    echo -e "\\n\\033[1;31m[AsistenteIA: '{cmd_name}' falló con código de error $EXIT_CODE]\\033[0m"
+fi
+"""
+        script_path.write_text(script_content, encoding="utf-8")
+        script_path.chmod(0o755)
+        
+        wrapped_command = f"bash {script_path}"
     
     
     # 1. Comprobar si la sesión de tmux existe y si está activa en pantalla (attached)
@@ -688,7 +693,7 @@ async def open_terminal_and_run_command(command: str) -> str:
             logger.info(f"Enviando comando a sesión de tmux existente: {command}")
             await _run_tmux_cmd(["send-keys", "-t", session_name, wrapped_command, "C-m"])
             # Esperar a que el comando termine y capturar output
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(2.0)
             ok_capture, screen_output = await _run_tmux_cmd(["capture-pane", "-p", "-t", session_name])
             if ok_capture and screen_output:
                 # Devolver últimas 60 líneas (más contexto para comandos largos)
@@ -740,7 +745,7 @@ async def open_terminal_and_run_command(command: str) -> str:
         await _run_tmux_cmd(["send-keys", "-t", session_name, wrapped_command, "C-m"])
         
         # Esperar a que el comando termine y capturar output
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(2.0)
         ok_capture, screen_output = await _run_tmux_cmd(["capture-pane", "-p", "-t", session_name])
         if ok_capture and screen_output:
             lines = screen_output.splitlines()

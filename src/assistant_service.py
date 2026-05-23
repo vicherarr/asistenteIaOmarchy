@@ -342,8 +342,15 @@ class AssistantService:
                         
                         logger.info(f"Salida de terminal tras tool calling: {clean_output[:300]}...")
                         
-                        # Analizar si hubo error
-                        if "falló con código de error" in clean_output:
+                        # Analizar si hubo error (formato banner ANSI o formato read_terminal_screen)
+                        has_error = ("falló con código de error" in clean_output or 
+                                     "❌ ERROR EN TERMINAL" in clean_output or
+                                     "falló (código" in clean_output)
+                        has_success = ("finalizado correctamente" in clean_output or 
+                                       "✅ " in clean_output or
+                                       "completado exitosamente" in clean_output)
+                        
+                        if has_error:
                             # Extraer nombre del comando y código de error
                             error_match = re.search(r"\[AsistenteIA: '([^']+)'\s+falló con código de error (\d+)\]", clean_output)
                             if error_match:
@@ -364,10 +371,26 @@ class AssistantService:
                                 else:
                                     fallback += "Verifica que el comando y los argumentos sean correctos."
                             else:
-                                fallback = "El comando falló en la terminal. Revisa la salida para más detalles."
-                        elif "finalizado correctamente" in clean_output:
+                                # Formato read_terminal_screen: extraer info del error
+                                error_info_match = re.search(r"❌ ERROR EN TERMINAL: '([^']+)'\s+falló \(código (\d+)\)", clean_output)
+                                if error_info_match:
+                                    cmd_name = error_info_match.group(1)
+                                    exit_code = int(error_info_match.group(2))
+                                    fallback = f"El comando '{cmd_name}' falló con código {exit_code}. "
+                                    explanations = {
+                                        127: "Comando no encontrado.",
+                                        13: "Permiso denegado.",
+                                        126: "Sin permisos de ejecución.",
+                                    }
+                                    fallback += explanations.get(exit_code, "Revisa el comando.")
+                                else:
+                                    fallback = "El comando falló en la terminal. Revisa la salida para más detalles."
+                        elif has_success:
                             # Extraer nombre del comando exitoso
                             success_match = re.search(r"\[AsistenteIA: '([^']+)'\s+finalizado correctamente\]", clean_output)
+                            if not success_match:
+                                success_match = re.search(r"✅ '([^']+)'\s+completado exitosamente", clean_output)
+                            
                             if success_match:
                                 cmd_name = success_match.group(1)
                                 
@@ -377,7 +400,8 @@ class AssistantService:
                                 skip_patterns = [
                                     "AsistenteIA:", "CONTENIDO VISIBLE", "❯", "bash /tmp/",
                                     "~/", "SALIDA DE LA TERMINAL", "cmd_", "Éxito:",
-                                    "comando ejecutado", "Se ha enviado"
+                                    "comando ejecutado", "Se ha enviado", "Qué significa:",
+                                    "✅", "❌", "│", "├", "└", "┌", "─", "│"
                                 ]
                                 for l in lines:
                                     stripped = l.strip()
