@@ -647,27 +647,18 @@ async def open_terminal_and_run_command(command: str) -> str:
     executor = CommandExecutor()
     is_verified = executor._is_safe_command(command)
     
-    # Envolver el comando en un script temporal para evitar ruido visual en tmux
-    # Solo se tipea: bash /tmp/asistenteia/run.sh
+    # Envolver el comando para capturar código de salida y mostrar banners
+    # La sesión tmux se crea con bash explícitamente, así que la sintaxis bash funciona
     wrapped_command = command
     if not command.strip().endswith("&"):
         cmd_name = command.strip().split()[0].split("/")[-1] if command.strip() else "comando"
         
-        script_path = settings.TEMP_DIR / "run.sh"
-        script_content = f"""#!/usr/bin/env bash
-{command.strip()}
-EXIT_CODE=$?
-if [ $EXIT_CODE -eq 0 ]; then
-    echo -e "\\n\\033[1;30m[AsistenteIA: '{cmd_name}' finalizado correctamente]\\033[0m"
-else
-    echo -e "\\n\\033[1;31m[AsistenteIA: '{cmd_name}' falló con código de error $EXIT_CODE]\\033[0m"
-fi
-"""
-        script_path.write_text(script_content, encoding="utf-8")
-        script_path.chmod(0o755)
-        
-        wrapped_command = f"bash {script_path}"
-    
+        # Wrapper bash inline
+        wrapped_command = (
+            f"{{ {command.strip()} ; }} && "
+            f"echo -e \"\\n\\033[1;30m[AsistenteIA: '{cmd_name}' finalizado correctamente]\\033[0m\" || "
+            f"echo -e \"\\n\\033[1;31m[AsistenteIA: '{cmd_name}' falló con código de error $?]\\033[0m\""
+        )
     
     # 1. Comprobar si la sesión de tmux existe y si está activa en pantalla (attached)
     session_attached = False
@@ -675,7 +666,6 @@ fi
     try:
         ok, _ = await _run_tmux_cmd(["has-session", "-t", session_name])
         if ok:
-            # Ver si hay clientes conectados/adjuntos a esa sesión
             ok_sessions, output = await _run_tmux_cmd(["list-sessions", "-F", "#{session_name} #{session_attached}"])
             if ok_sessions:
                 for line in output.splitlines():
@@ -687,11 +677,20 @@ fi
     except Exception as e:
         logger.error(f"Error comprobando estado de tmux: {e}")
 
-    # 2. Si la terminal ya está abierta y acoplada a la sesión, enviamos el comando directamente
+    # 2. Si la terminal ya está abierta y acoplada a la sesión, enviamos el comando via buffer (sin tipeo visible)
     if session_attached:
         try:
             logger.info(f"Enviando comando a sesión de tmux existente: {command}")
-            await _run_tmux_cmd(["send-keys", "-t", session_name, wrapped_command, "C-m"])
+            # Escribir comando en buffer temporal y pegar (evita tipeo carácter a carácter)
+            import tempfile
+            buf_file = settings.TEMP_DIR / "tmux_buf"
+            buf_file.write_text(wrapped_command + "\n", encoding="utf-8")
+            
+            await _run_tmux_cmd(["load-buffer", "-b", "cmd", "-t", session_name, str(buf_file)])
+            await _run_tmux_cmd(["paste-buffer", "-b", "cmd", "-t", session_name])
+            await _run_tmux_cmd(["send-keys", "-t", session_name, "C-m"])
+            buf_file.unlink(missing_ok=True)
+            
             # Esperar a que el comando termine y capturar output
             await asyncio.sleep(2.0)
             ok_capture, screen_output = await _run_tmux_cmd(["capture-pane", "-p", "-t", session_name])
@@ -738,11 +737,16 @@ fi
             start_new_session=True
         )
         
-        # Esperar un momento a que la terminal y tmux se inicien/adjunten gráficamente antes de mandar las teclas
+        # Esperar un momento a que la terminal y tmux se inicien/adjunten gráficamente
         await asyncio.sleep(0.8)
         
-        # Enviar el comando envuelto
-        await _run_tmux_cmd(["send-keys", "-t", session_name, wrapped_command, "C-m"])
+        # Enviar el comando envuelto via buffer (sin tipeo visible)
+        buf_file = settings.TEMP_DIR / "tmux_buf"
+        buf_file.write_text(wrapped_command + "\n", encoding="utf-8")
+        await _run_tmux_cmd(["load-buffer", "-b", "cmd", "-t", session_name, str(buf_file)])
+        await _run_tmux_cmd(["paste-buffer", "-b", "cmd", "-t", session_name])
+        await _run_tmux_cmd(["send-keys", "-t", session_name, "C-m"])
+        buf_file.unlink(missing_ok=True)
         
         # Esperar a que el comando termine y capturar output
         await asyncio.sleep(2.0)
