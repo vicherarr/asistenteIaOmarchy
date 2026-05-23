@@ -251,3 +251,58 @@ class AudioManager:
             return summary
         except AudioManagerError as e:
             return f"Error obteniendo estado de audio: {e}"
+
+    async def pause_active_players(self) -> list[str]:
+        """Detecta qué reproductores de música MPRIS están activos, los pausa y los devuelve."""
+        paused_players = []
+        try:
+            # Obtener la lista de todos los reproductores
+            proc = await asyncio.create_subprocess_exec(
+                "playerctl", "--list-all",
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            stdout, _ = await proc.communicate()
+            if proc.returncode != 0:
+                return []
+            
+            players = [p.strip() for p in stdout.decode().splitlines() if p.strip()]
+            for player in players:
+                # Consultar estado de cada reproductor
+                status_proc = await asyncio.create_subprocess_exec(
+                    "playerctl", "-p", player, "status",
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+                status_out, _ = await status_proc.communicate()
+                status = status_out.decode().strip()
+                
+                if status == "Playing":
+                    # Pausar y registrar
+                    pause_proc = await asyncio.create_subprocess_exec(
+                        "playerctl", "-p", player, "pause",
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
+                    await pause_proc.wait()
+                    paused_players.append(player)
+                    logger.info(f"Reproductor '{player}' pausado temporalmente.")
+        except Exception as e:
+            logger.error(f"Error pausando reproductores activos: {e}")
+        
+        return paused_players
+
+    async def resume_players(self, players: list[str]) -> None:
+        """Reanuda los reproductores especificados."""
+        for player in players:
+            try:
+                resume_proc = await asyncio.create_subprocess_exec(
+                    "playerctl", "-p", player, "play",
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                await resume_proc.wait()
+                logger.info(f"Reproductor '{player}' reanudado.")
+            except Exception as e:
+                logger.error(f"Error reanudando reproductor '{player}': {e}")
+

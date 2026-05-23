@@ -134,6 +134,7 @@ class AppState:
         self.processing: bool = False
         self.is_recording: bool = False
         self.pending_image_path: Optional[str] = None  # Para loop multimodal (analyze_screen)
+        self.paused_players: list[str] = []
 
 
 def get_app_state(request: Request) -> AppState:
@@ -335,10 +336,16 @@ async def toggle_listen(state: AppState = Depends(get_app_state)):
                         sink_id=sink_id,
                         max_history=MAX_HISTORY
                     )
+                    # Esperar a que el TTS termine de reproducir
+                    await state.assistant_service.wait_for_tts_complete()
                 except Exception as e:
                     logger.error(f"Error en tarea de audio: {e}")
                 finally:
                     state.processing = False
+                    # Reanudar música
+                    if not state.is_recording and not state.processing and state.paused_players:
+                        await state.audio_manager.resume_players(state.paused_players)
+                        state.paused_players = []
 
             state.processing = True
             state.current_task = asyncio.create_task(process_task())
@@ -353,6 +360,9 @@ async def toggle_listen(state: AppState = Depends(get_app_state)):
             state.tts_engine.stop()
             
         state.is_recording = True
+        
+        # Pausar reproductores de música activos antes de empezar
+        state.paused_players = await state.audio_manager.pause_active_players()
         
         # 1. Notificar y empezar a grabar
         state.assistant_service.send_notification("Escuchando...")
@@ -525,6 +535,11 @@ async def reset_conversation(state: AppState = Depends(get_app_state)):
 
     if state.tts_engine:
         state.tts_engine.stop()
+
+    # Reanudar cualquier reproductor que haya quedado pausado
+    if state.paused_players:
+        await state.audio_manager.resume_players(state.paused_players)
+        state.paused_players = []
 
     state.conversation_history.clear()
     logger.info("Conversación y estado del backend completamente reiniciados.")

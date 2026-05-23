@@ -399,6 +399,17 @@ class AssistantService:
             except Exception as e:
                 logger.warning(f"Error esperando cancelación de tareas de audio: {e}")
 
+    async def wait_for_tts_complete(self) -> None:
+        """Espera hasta que la reproducción de voz del TTS actual haya terminado por completo."""
+        if self._current_play_task and not self._current_play_task.done():
+            try:
+                await self._current_play_task
+                logger.info("Espera de reproducción de voz completada.")
+            except asyncio.CancelledError:
+                logger.info("La espera de TTS completo fue cancelada.")
+            except Exception as e:
+                logger.error(f"Error esperando a que termine el TTS: {e}")
+
     async def cleanup(self) -> None:
         """Cierra de forma segura todos los recursos del servicio de negocio."""
         logger.info("Iniciando cleanup de AssistantService...")
@@ -406,3 +417,4 @@ class AssistantService:
         if self.tts:
             self.tts.stop()
             self.tts.close_persistent_stream()
+

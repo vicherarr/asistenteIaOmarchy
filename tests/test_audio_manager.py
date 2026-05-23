@@ -171,3 +171,46 @@ def test_audio_device_repr():
     assert "[BT]" in repr_str
     assert "(default)" in repr_str
     assert "45" in repr_str
+
+
+@pytest.mark.asyncio
+async def test_pause_active_players(manager):
+    mock_proc_list = AsyncMock()
+    mock_proc_list.returncode = 0
+    mock_proc_list.communicate.return_value = (b"spotify\nmpv\n", b"")
+    
+    mock_proc_status_spotify = AsyncMock()
+    mock_proc_status_spotify.communicate.return_value = (b"Playing\n", b"")
+    
+    mock_proc_status_mpv = AsyncMock()
+    mock_proc_status_mpv.communicate.return_value = (b"Paused\n", b"")
+    
+    mock_proc_pause = AsyncMock()
+    
+    async def side_effect(cmd, *args, **kwargs):
+        if "--list-all" in args:
+            return mock_proc_list
+        if "spotify" in args and "status" in args:
+            return mock_proc_status_spotify
+        if "mpv" in args and "status" in args:
+            return mock_proc_status_mpv
+        if "pause" in args:
+            return mock_proc_pause
+        return AsyncMock()
+
+    with patch('asyncio.create_subprocess_exec', side_effect=side_effect) as mock_exec:
+        paused = await manager.pause_active_players()
+        
+    assert paused == ["spotify"]
+    mock_exec.assert_any_call("playerctl", "-p", "spotify", "pause", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+@pytest.mark.asyncio
+async def test_resume_players(manager):
+    mock_proc_resume = AsyncMock()
+    
+    with patch('asyncio.create_subprocess_exec', return_value=mock_proc_resume) as mock_exec:
+        await manager.resume_players(["spotify"])
+        
+    mock_exec.assert_called_once_with("playerctl", "-p", "spotify", "play", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+

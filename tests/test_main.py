@@ -21,8 +21,11 @@ def mock_app_state():
     state.audio_manager.get_status_summary = AsyncMock(return_value="Bluetooth OK")
     state.audio_manager.auto_configure_bluetooth = AsyncMock(return_value=("72", "70"))
     state.audio_manager.set_volume = AsyncMock(return_value=None)
+    state.audio_manager.pause_active_players = AsyncMock(return_value=["spotify"])
+    state.audio_manager.resume_players = AsyncMock()
     
     state.assistant_service = AsyncMock()
+    state.assistant_service.wait_for_tts_complete = AsyncMock()
     state.audio_recorder = MagicMock()
     state.stt_engine = MagicMock()
     
@@ -31,6 +34,7 @@ def mock_app_state():
     state.processing = False
     state.is_recording = False
     state.current_task = None
+    state.paused_players = []
     
     state.audio_recorder.is_recording = False
     
@@ -231,3 +235,26 @@ def test_vad_silence_callback_triggers_local_toggle(client, mock_app_state):
     
     # 5. Verificar que se detiene la grabación localmente de forma asíncrona
     mock_app_state.audio_recorder.stop_recording.assert_called_once()
+
+
+def test_toggle_listen_pauses_music_when_starting(client, mock_app_state):
+    """Verifica que al empezar a grabar se pausen los reproductores MPRIS activos."""
+    mock_app_state.is_recording = False
+    
+    response = client.post("/listen/toggle")
+    assert response.status_code == 200
+    
+    mock_app_state.audio_manager.pause_active_players.assert_called_once()
+    assert mock_app_state.paused_players == ["spotify"]
+
+
+def test_reset_resumes_paused_players(client, mock_app_state):
+    """Verifica que al resetear la conversación se reanuden los reproductores pausados."""
+    mock_app_state.paused_players = ["spotify"]
+    
+    response = client.post("/reset")
+    assert response.status_code == 200
+    
+    mock_app_state.audio_manager.resume_players.assert_called_once_with(["spotify"])
+    assert mock_app_state.paused_players == []
+
