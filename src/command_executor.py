@@ -701,10 +701,16 @@ rm -f "{script_path}"
             await asyncio.sleep(1.0)
             ok_capture, screen_output = await _run_tmux_cmd(["capture-pane", "-p", "-t", session_name])
             if ok_capture and screen_output:
-                # Devolver últimas 40 líneas
+                # Devolver últimas 40 líneas y truncar a 1500 chars para evitar desbordamiento de VRAM en LiteRT
                 lines = screen_output.splitlines()
                 last_lines = lines[-40:]
                 screen_content = "\n".join(last_lines)
+                
+                # Truncamiento por caracteres
+                max_chars = 1500
+                if len(screen_content) > max_chars:
+                    screen_content = screen_content[:max_chars] + "\n...[salida truncada]"
+                
                 return f"Éxito: Comando ejecutado: {command}\n\nSALIDA DE LA TERMINAL:\n{screen_content}"
             return f"Éxito: Se ha enviado el comando a la terminal abierta: {command}"
         except Exception as e:
@@ -749,6 +755,12 @@ rm -f "{script_path}"
             lines = screen_output.splitlines()
             last_lines = lines[-40:]
             screen_content = "\n".join(last_lines)
+            
+            # Truncamiento por caracteres para evitar desbordamiento de VRAM en LiteRT
+            max_chars = 1500
+            if len(screen_content) > max_chars:
+                screen_content = screen_content[:max_chars] + "\n...[salida truncada]"
+            
             return f"Éxito: Terminal {chosen_terminal.capitalize()} abierta y comando ejecutado: {command}\n\nSALIDA DE LA TERMINAL:\n{screen_content}"
         
         return f"Éxito: Se ha abierto una ventana de {chosen_terminal.capitalize()} y ejecutado: {command}"
@@ -789,6 +801,11 @@ async def read_terminal_screen() -> str:
             lines = output.splitlines()
             last_lines = lines[-40:]
             screen_content = "\n".join(last_lines)
+            
+            # Truncamiento por caracteres para evitar desbordamiento de VRAM en LiteRT
+            max_chars = 1500
+            if len(screen_content) > max_chars:
+                screen_content = screen_content[:max_chars] + "\n...[salida truncada]"
             
             if exit_code_match:
                 cmd_name = exit_code_match.group(1)
