@@ -469,9 +469,27 @@ async def system_diagnostics(component: str = "all") -> str:
 
 
 async def get_system_status() -> str:
-    """Resumen de hardware: CPU, RAM, Audio."""
-    from src.context_injector import get_system_context
-    return f"Contexto:\n{await get_system_context()}"
+    """Resumen de hardware: CPU, RAM, GPU, Disco, Audio, Red.
+    
+    Respuesta truncada a 1500 chars para evitar desbordamiento de contexto LiteRT.
+    """
+    try:
+        from src.context_injector import get_system_context
+        import asyncio
+        
+        # Timeout global de 8 segundos para evitar bloqueos
+        context = await asyncio.wait_for(get_system_context(), timeout=8.0)
+        
+        # Truncar respuesta a 1500 chars máximo
+        max_chars = 1500
+        if len(context) > max_chars:
+            context = context[:max_chars] + "\n...[respuesta truncada]"
+        
+        return f"Contexto:\n{context}"
+    except asyncio.TimeoutError:
+        return "Error: La consulta de hardware tardó demasiado. Tu sistema tiene Linux con Hyprland, PipeWire y Chromium."
+    except Exception as e:
+        return f"Error obteniendo estado del sistema: {e}"
 
 
 async def read_log_file(service: str = "asistenteia") -> str:
