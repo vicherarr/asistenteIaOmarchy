@@ -386,7 +386,7 @@ async def toggle_listen(state: AppState = Depends(get_app_state)):
         state.paused_players = await state.audio_manager.pause_active_players()
         
         # 1. Notificar y empezar a grabar
-        state.assistant_service.send_notification("Escuchando...")
+        await state.assistant_service.send_notification_async("Escuchando...")
         source_id = state.audio_manager.default_source
         if source_id:
             asyncio.create_task(state.audio_manager.set_volume(source_id, 0.9))

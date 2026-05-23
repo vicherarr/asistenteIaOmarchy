@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import subprocess
+import time
 from typing import Optional, Callable
 import numpy as np
 
@@ -18,6 +19,7 @@ class WakeWordListener:
         self.task: Optional[asyncio.Task] = None
         self.is_running = False
         self.oww_model = None
+        self._last_detection_time = 0.0  # Cooldown para evitar activaciones en ráfaga
 
     def start(self) -> None:
         """Inicia el bucle de escucha en segundo plano."""
@@ -94,16 +96,23 @@ class WakeWordListener:
                     if len(data) < frame_bytes:
                         break
 
-                    # Convertir bytes crudos a numpy array s16 y aplicar amplificación digital (8x)
-                    # Esto compensa los filtros silenciosos del sistema sin distorsionar el reconocimiento
+                    # Convertir bytes crudos a numpy array s16 y aplicar amplificación digital (4x)
                     audio_float = np.frombuffer(data, dtype=np.int16).astype(np.float32)
-                    boosted = np.clip(audio_float * 8.0, -32768, 32767).astype(np.int16)
+                    boosted = np.clip(audio_float * 4.0, -32768, 32767).astype(np.int16)
 
                     # Realizar inferencia con openwakeword
                     prediction = self.oww_model.predict(boosted)
                     score = prediction.get(self.model_name, 0.0)
 
                     if score >= self.threshold:
+                        # Cooldown: evitar activaciones en ráfaga
+                        elapsed = time.time() - self._last_detection_time
+                        if elapsed < 5.0:
+                            logger.debug(f"WakeWordListener: Score={score:.2f} pero en cooldown ({elapsed:.1f}s < 5s)")
+                            await asyncio.sleep(0.005)
+                            continue
+                        self._last_detection_time = time.time()
+
                         logger.info(f"WakeWordListener: Palabra clave '{self.model_name}' detectada con probabilidad {score:.2f}!")
                         
                         # 1. Parar de inmediato el proceso pacat para liberar el hardware de audio

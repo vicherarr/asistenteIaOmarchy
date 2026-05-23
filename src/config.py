@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     # Wake Word
     WAKE_WORD_ENABLED: bool = True
     WAKE_WORD_MODEL: str = "hey_mycroft"
-    WAKE_WORD_THRESHOLD: float = 0.5
+    WAKE_WORD_THRESHOLD: float = 0.3
     
     # Paths
     PROJECT_ROOT: Path = Path(__file__).parent.parent

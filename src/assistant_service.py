@@ -161,33 +161,59 @@ class AssistantService:
         max_history: int = 10
     ) -> dict:
         """Transcribe el audio y procesa el texto resultante."""
-        self.send_notification("Procesando audio...")
+        await self.send_notification_async("Procesando audio...")
         
         text = await self.stt.transcribe(audio_path)
         
         if not text or len(text.strip()) < 2:
-            self.send_notification("No se detectó voz o el mensaje es muy corto.")
+            await self.send_notification_async("No se detectó voz o el mensaje es muy corto.")
             return {"status": "error", "message": "No se detectó voz"}
 
-        self.send_notification(f"Has dicho: {text}")
+        await self.send_notification_async(f"Has dicho: {text}")
         return await self.process_transcription(text, conversation_history, sink_id, max_history)
 
     def send_notification(self, message: str, title: str = "AsistenteIA") -> None:
         """Envía una notificación de escritorio y emite un bip si es inicio de escucha."""
         try:
             subprocess.Popen(["notify-send", title, message])
-            
+
             # Si el mensaje es de inicio de escucha, emitir un bip sonoro
             if message == "Escuchando...":
                 # Intentar reproducir un sonido de sistema estándar
                 beep_sound = "/usr/share/sounds/freedesktop/stereo/message.oga"
                 if not Path(beep_sound).exists():
                     beep_sound = "/usr/share/sounds/freedesktop/stereo/complete.oga"
-                
+
                 if Path(beep_sound).exists():
-                    subprocess.Popen(["paplay", beep_sound], 
-                                   stdout=subprocess.DEVNULL, 
+                    subprocess.Popen(["paplay", beep_sound],
+                                   stdout=subprocess.DEVNULL,
                                    stderr=subprocess.DEVNULL)
+        except Exception as e:
+            logger.warning(f"No se pudo enviar notificación o bip: {e}")
+
+    async def send_notification_async(self, message: str, title: str = "AsistenteIA") -> None:
+        """Envía una notificación de escritorio de forma asíncrona (no bloquea el loop)."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "notify-send", title, message,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL
+            )
+            # No esperamos a que termine, solo lo lanzamos y seguimos
+            asyncio.create_task(proc.wait())
+
+            if message == "Escuchando...":
+                beep_sound = "/usr/share/sounds/freedesktop/stereo/message.oga"
+                if not Path(beep_sound).exists():
+                    beep_sound = "/usr/share/sounds/freedesktop/stereo/complete.oga"
+
+                if Path(beep_sound).exists():
+                    proc_sound = await asyncio.create_subprocess_exec(
+                        "paplay", beep_sound,
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL
+                    )
+                    asyncio.create_task(proc_sound.wait())
         except Exception as e:
             logger.warning(f"No se pudo enviar notificación o bip: {e}")
 

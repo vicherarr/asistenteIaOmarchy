@@ -7,7 +7,9 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PORT=$(grep '^PORT=' "$PROJECT_DIR/.env" 2>/dev/null | cut -d '=' -f2 | tr -d '[:space:]' || echo "8765")
 
 # 1. Asegurar que el servicio está activo
+SERVICE_WAS_RUNNING=true
 if ! systemctl --user is-active --quiet asistenteia.service; then
+    SERVICE_WAS_RUNNING=false
     notify-send "AsistenteIA" "Iniciando servicio..." -i info
     systemctl --user start asistenteia.service
     
@@ -46,5 +48,8 @@ fi
 # 3. Dar una pequeña tregua para que la GUI registre el cambio de estado
 sleep 0.2
 
-# 4. Enviar señal de toggle al servidor para empezar a grabar
-curl -s -X POST "http://localhost:$PORT/listen/toggle" > /dev/null 2>&1
+# 4. Solo enviar toggle si el servicio YA estaba corriendo.
+#    Si acabamos de iniciar el servicio, no grabamos — el wake word ya está escuchando.
+if [ "$SERVICE_WAS_RUNNING" = true ]; then
+    curl -s -X POST "http://localhost:$PORT/listen/toggle" > /dev/null 2>&1
+fi
