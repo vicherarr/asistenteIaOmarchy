@@ -76,9 +76,8 @@ class AssistantService:
         el fragmento resultante parece texto natural (no código/JSON).
         """
         # Si el buffer es largo, también cortar por coma para frases más cortas
-        # pero SOLO para texto natural, no para código
         if len(text_buffer) > 80:
-            pattern = re.compile(r'([.!?:])(?=\s|$)|(\n)')
+            pattern = re.compile(r'([.!?:])(?=\s|$)|(\n)|,(?=\s)')
         else:
             pattern = re.compile(r'([.!?:])(?=\s|$)|(\n)')
         
@@ -353,7 +352,7 @@ class AssistantService:
         return {
             "status": "success",
             "response_text": response_text,
-            "commands_executed": 1 if "Éxito" in response_text else 0,
+            "commands_executed": 1 if "Éxito" in response_text or "Exito" in response_text else 0,
             "audio_file": None,
         }
 

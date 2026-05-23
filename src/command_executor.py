@@ -190,8 +190,12 @@ def _sanitize_tool_args(arg: str) -> str:
     """Elimina tokens internos de LiteRT (<|"|>) que pueden aparecer en los argumentos."""
     if not isinstance(arg, str):
         return arg
+    # Eliminar tokens completos <|"texto"|>
     sanitized = re.sub(r'<\|".*?\|>', '', arg)
+    # Eliminar tokens parciales al inicio o final
     sanitized = sanitized.replace('<|"', '').replace('"|>', '')
+    # Eliminar cualquier token residual con patrón <|...|>
+    sanitized = re.sub(r'<\|.*?\|>', '', sanitized)
     return sanitized.strip()
 
 

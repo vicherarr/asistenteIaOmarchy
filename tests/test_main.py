@@ -35,6 +35,8 @@ def mock_app_state():
     state.is_recording = False
     state.current_task = None
     state.paused_players = []
+    state.last_user_transcription = None
+    state.last_transcription_timestamp = 0.0
     
     state.audio_recorder.is_recording = False
     
