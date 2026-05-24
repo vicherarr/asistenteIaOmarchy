@@ -293,16 +293,6 @@ class AssistantService:
                 history=conversation_history[:-1] # Pasamos el historial previo
             ):
                 chunk_count += 1
-                
-                # LiteRT a veces yielda tokens sin espacios; reconstruir espaciado
-                if accumulated_text and chunk:
-                    last_char = accumulated_text[-1]
-                    first_char = chunk[0]
-                    # Añadir espacio si ambos son alfanuméricos (palabras pegadas)
-                    if last_char.isalnum() and first_char.isalnum():
-                        accumulated_text += " "
-                        chunk = " " + chunk
-                
                 accumulated_text += chunk
                 
                 # Filtrar tool calls antes de procesar para TTS
