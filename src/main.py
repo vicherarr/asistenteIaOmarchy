@@ -121,7 +121,7 @@ async def rate_limit_middleware(request: Request, call_next):
         return await call_next(request)
 
     # Endpoints de solo lectura sin rate limit
-    if path in ("/health", "/status", "/history"):
+    if path in ("/health", "/status", "/history", "/status/events"):
         return await call_next(request)
 
     # Endpoints estrictos (1 req cada 2s)
@@ -614,6 +614,39 @@ async def get_status(state: AppState = Depends(get_app_state)):
         last_user_transcription=state.last_user_transcription,
         last_transcription_timestamp=state.last_transcription_timestamp
     )
+
+
+@app.get("/status/events")
+async def status_events(request: Request, state: AppState = Depends(get_app_state)):
+    """Canal de eventos en tiempo real (SSE) para el estado del asistente."""
+    import json
+    
+    async def event_generator():
+        last_hash = None
+        while True:
+            if await request.is_disconnected():
+                break
+            
+            try:
+                # Reutilizar el cálculo de get_status
+                status_resp = await get_status(state)
+                try:
+                    status_dict = status_resp.model_dump()
+                except AttributeError:
+                    status_dict = status_resp.dict()
+                
+                # Crear un hash simple para detectar cambios reales
+                current_hash = hash(frozenset((k, str(v)) for k, v in status_dict.items()))
+                
+                if current_hash != last_hash:
+                    yield f"data: {json.dumps(status_dict)}\n\n"
+                    last_hash = current_hash
+            except Exception as e:
+                logger.error(f"Error en event_generator de estado: {e}")
+                
+            await asyncio.sleep(0.3)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @app.get("/health", response_model=HealthResponse)

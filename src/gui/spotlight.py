@@ -587,7 +587,7 @@ class SpotlightWindow(QMainWindow):
         self.bottom_layout.addStretch()
         
         # Atajos Rápidos
-        self.shortcuts_label = QPushButton("ESC: Ocultar | Ctrl+R: Reset | Ctrl+H: Historial")
+        self.shortcuts_label = QPushButton("ESC: Ocultar | Ctrl+R: Reset | Ctrl+H: Historial | Ctrl+L: Logs")
         self.shortcuts_label.setEnabled(False)
         self.shortcuts_label.setStyleSheet("""
             QPushButton {
@@ -602,10 +602,8 @@ class SpotlightWindow(QMainWindow):
         
         self.main_layout.addWidget(self.bottom_bar)
 
-        # Status Polling
-        self.status_timer = QTimer()
-        self.status_timer.timeout.connect(self.check_backend_status)
-        self.status_timer.start(500)  # Comprobar cada 500ms
+        # Iniciar escucha de eventos asíncronos en tiempo real (SSE) cuando el loop esté activo
+        QTimer.singleShot(0, lambda: asyncio.create_task(self.start_event_listener()))
 
         # Animación de altura (Altura inicial 110px para acomodar barra inferior)
         self._height = 110
@@ -688,192 +686,212 @@ class SpotlightWindow(QMainWindow):
             print(f"Error reiniciando: {e}")
             self._resetting = False
 
-    @asyncSlot()
-    async def check_backend_status(self):
-        """Consulta el estado del backend para reflejarlo en la UI."""
+    async def start_event_listener(self):
+        """Escucha de forma persistente el canal de eventos en tiempo real (SSE) del backend."""
+        import json
+        
+        while True:
+            try:
+                async with httpx.AsyncClient(timeout=None) as client:
+                    async with client.stream("GET", "http://127.0.0.1:8765/status/events") as response:
+                        if response.status_code == 200:
+                            async for line in response.aiter_lines():
+                                if line.startswith("data:"):
+                                    try:
+                                        data = json.loads(line[5:].strip())
+                                        await self.update_ui_with_status(data)
+                                    except Exception as parse_err:
+                                        print(f"Error procesando JSON de estado: {parse_err}", file=sys.stderr, flush=True)
+                        else:
+                            self.set_offline_ui()
+            except Exception:
+                # Si el backend no está disponible, marcamos offline de inmediato
+                self.set_offline_ui()
+                
+            # Esperar 3 segundos antes de intentar reconectar si hay desconexión
+            await asyncio.sleep(3.0)
+
+    async def update_ui_with_status(self, data):
+        """Actualiza los elementos visuales de la UI con la información de estado recibida."""
         try:
-            async with httpx.AsyncClient(timeout=1.0) as client:
-                response = await client.get("http://127.0.0.1:8765/status")
-                if response.status_code == 200:
-                    data = response.json()
-                    
-                    litert_connected = data.get("litert_connected", False)
-                    bluetooth_audio = data.get("bluetooth_audio", "Desconectado")
-                    conversation_length = data.get("conversation_length", 0)
-                    is_processing = data.get("processing", False)
-                    
-                    # Detectar nueva transcripción de audio para mostrarla en el chat
-                    last_ts = data.get("last_transcription_timestamp", 0)
-                    last_text = data.get("last_user_transcription")
-                    prev_ts = getattr(self, '_last_seen_transcription_ts', 0)
-                    if last_text and last_ts > prev_ts:
-                        self._last_seen_transcription_ts = last_ts
-                        # Mostrar el texto del usuario en el chat de forma prominente
-                        self.animate_height(480)
-                        self.chat_area.show()
-                        self.chat_area.setMarkdown(
-                            f"> **🎤 Has dicho:** {last_text}\n\n"
-                            f"---\n\n"
-                            f"**AsistenteIA:** ..."
-                        )
-                        self.chat_area.verticalScrollBar().setValue(0)
-                    
-                    # Actualizar visualizador animado y botón Stop dinámicamente
-                    is_speaking = data.get("speaking", False)
-                    if is_speaking:
-                        self.visualizer.set_state("speaking")
-                        self.stop_button.set_state("active")
-                    elif is_processing:
-                        if "Escuchando" in self.input_field.placeholderText():
-                            self.visualizer.set_state("listening")
-                        else:
-                            self.visualizer.set_state("thinking")
-                        self.stop_button.set_state("active")
-                    else:
-                        self.visualizer.set_state("inactive")
-                        self.stop_button.set_state("inactive")
-                    
-                    # Actualizar píldoras (Status Pills)
-                    if litert_connected:
-                        litert_backend = data.get("litert_backend", "CPU")
-                        self.model_pill.setText(f"🧠 LiteRT: {litert_backend}")
-                        if litert_backend == "GPU":
-                            self.model_pill.setStyleSheet("""
-                                QPushButton {
-                                    background-color: rgba(203, 166, 247, 20);
-                                    border: 1px solid rgba(203, 166, 247, 100);
-                                    border-radius: 10px;
-                                    color: #cba6f7;
-                                    font-family: 'Inter';
-                                    font-size: 10px;
-                                    padding: 2px 8px;
-                                }
-                            """)
-                        else:
-                            self.model_pill.setStyleSheet("""
-                                QPushButton {
-                                    background-color: rgba(166, 227, 161, 20);
-                                    border: 1px solid rgba(166, 227, 161, 100);
-                                    border-radius: 10px;
-                                    color: #a6e3a1;
-                                    font-family: 'Inter';
-                                    font-size: 10px;
-                                    padding: 2px 8px;
-                                }
-                            """)
-                    else:
-                        self.model_pill.setText("🧠 LiteRT: Error")
-                        self.model_pill.setStyleSheet("""
-                            QPushButton {
-                                background-color: rgba(243, 139, 168, 20);
-                                border: 1px solid rgba(243, 139, 168, 100);
-                                border-radius: 10px;
-                                color: #f38ba8;
-                                font-family: 'Inter';
-                                font-size: 10px;
-                                padding: 2px 8px;
-                            }
-                        """)
-                    
-                    # Audio Pill acortado
-                    audio_text = bluetooth_audio.split(" (")[0]
-                    self.audio_pill.setText(f"󰓃 {audio_text}")
-                    
-                    # History Pill
-                    self.history_pill.setText(f"󰅪 {conversation_length} msgs")
-                    
-                    # Accel Pill (GPU/CPU verídico)
-                    gpu_active = data.get("gpu_active", False)
-                    if gpu_active:
-                        self.accel_pill.setText("⚡ GPU: Activa")
-                        self.accel_pill.setStyleSheet("""
-                            QPushButton {
-                                background-color: rgba(250, 179, 135, 20);
-                                border: 1px solid rgba(250, 179, 135, 100);
-                                border-radius: 10px;
-                                color: #fab387;
-                                font-family: 'Inter';
-                                font-size: 10px;
-                                padding: 2px 8px;
-                            }
-                        """)
-                    else:
-                        self.accel_pill.setText("⚙️ CPU: Activa")
-                        self.accel_pill.setStyleSheet("""
-                            QPushButton {
-                                background-color: rgba(137, 180, 250, 20);
-                                border: 1px solid rgba(137, 180, 250, 80);
-                                border-radius: 10px;
-                                color: #89b4fa;
-                                font-family: 'Inter';
-                                font-size: 10px;
-                                padding: 2px 8px;
-                            }
-                        """)
-
-                    
-                    # Cambios de estilo y placeholder en input principal
-                    if is_processing and not self.last_recording_state:
-                        if "Escuchando" in self.input_field.placeholderText():
-                            self.input_field.setPlaceholderText("Escuchando...")
-                        else:
-                            self.input_field.setPlaceholderText("Pensando...")
-                        self.input_field.setEnabled(False)
-                        self.central_widget.setStyleSheet("""
-                            QFrame {
-                                background-color: rgba(30, 30, 46, 240);
-                                border: 2px solid #f38ba8;
-                                border-radius: 15px;
-                            }
-                        """)
-                    
-                    elif not is_processing and self.last_recording_state:
-                        self.input_field.setPlaceholderText("Pregunta algo o habla...")
-                        self.input_field.setEnabled(True)
-                        self.central_widget.setStyleSheet("""
-                            QFrame {
-                                background-color: rgba(30, 30, 46, 240);
-                                border: 2px solid #89b4fa;
-                                border-radius: 15px;
-                            }
-                        """)
-                        
-                        # Actualizar automáticamente tras finalizar
-                        if not self.isHidden() and not self.pending_gui_request and not self._resetting:
-                            await self.update_last_response()
-                    
-                    self.last_recording_state = is_processing
-        except Exception as e:
-            # Backend fuera de servicio
-            self.model_pill.setText("🧠 Desconectado")
-            self.model_pill.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(108, 112, 134, 20);
-                    border: 1px solid rgba(108, 112, 134, 80);
-                    border-radius: 10px;
-                    color: #6c7086;
-                    font-family: 'Inter';
-                    font-size: 10px;
-                    padding: 2px 8px;
-                }
-            """)
-            self.accel_pill.setText("⚙️ Desconectado")
-            self.accel_pill.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(108, 112, 134, 20);
-                    border: 1px solid rgba(108, 112, 134, 80);
-                    border-radius: 10px;
-                    color: #6c7086;
-                    font-family: 'Inter';
-                    font-size: 10px;
-                    padding: 2px 8px;
-                }
-            """)
-            self.visualizer.set_state("inactive")
+            litert_connected = data.get("litert_connected", False)
+            bluetooth_audio = data.get("bluetooth_audio", "Desconocido")
+            conversation_length = data.get("conversation_length", 0)
+            is_processing = data.get("processing", False)
             
-            # Botón Stop Desconectado
-            self.stop_button.set_state("offline")
+            # Detectar nueva transcripción de audio para mostrarla en el chat
+            last_ts = data.get("last_transcription_timestamp", 0)
+            last_text = data.get("last_user_transcription")
+            prev_ts = getattr(self, '_last_seen_transcription_ts', 0)
+            if last_text and last_ts > prev_ts:
+                self._last_seen_transcription_ts = last_ts
+                # Mostrar el texto del usuario en el chat de forma prominente
+                self.animate_height(480)
+                self.chat_area.show()
+                self.chat_area.setMarkdown(
+                    f"> **🎤 Has dicho:** {last_text}\n\n"
+                    f"---\n\n"
+                    f"**AsistenteIA:** ..."
+                )
+                self.chat_area.verticalScrollBar().setValue(0)
+            
+            # Actualizar visualizador animado y botón Stop dinámicamente
+            is_speaking = data.get("speaking", False)
+            if is_speaking:
+                self.visualizer.set_state("speaking")
+                self.stop_button.set_state("active")
+            elif is_processing:
+                if "Escuchando" in self.input_field.placeholderText():
+                    self.visualizer.set_state("listening")
+                else:
+                    self.visualizer.set_state("thinking")
+                self.stop_button.set_state("active")
+            else:
+                self.visualizer.set_state("inactive")
+                self.stop_button.set_state("inactive")
+            
+            # Actualizar píldoras (Status Pills)
+            if litert_connected:
+                litert_backend = data.get("litert_backend", "CPU")
+                self.model_pill.setText(f"🧠 LiteRT: {litert_backend}")
+                if litert_backend == "GPU":
+                    self.model_pill.setStyleSheet("""
+                        QPushButton {
+                            background-color: rgba(203, 166, 247, 20);
+                            border: 1px solid rgba(203, 166, 247, 100);
+                            border-radius: 10px;
+                            color: #cba6f7;
+                            font-family: 'Inter';
+                            font-size: 10px;
+                            padding: 2px 8px;
+                        }
+                    """)
+                else:
+                    self.model_pill.setStyleSheet("""
+                        QPushButton {
+                            background-color: rgba(166, 227, 161, 20);
+                            border: 1px solid rgba(166, 227, 161, 100);
+                            border-radius: 10px;
+                            color: #a6e3a1;
+                            font-family: 'Inter';
+                            font-size: 10px;
+                            padding: 2px 8px;
+                        }
+                    """)
+            else:
+                self.model_pill.setText("🧠 LiteRT: Inactivo")
+                self.model_pill.setStyleSheet("""
+                    QPushButton {
+                        background-color: rgba(108, 112, 134, 20);
+                        border: 1px solid rgba(108, 112, 134, 80);
+                        border-radius: 10px;
+                        color: #6c7086;
+                        font-family: 'Inter';
+                        font-size: 10px;
+                        padding: 2px 8px;
+                    }
+                """)
+            
+            # Audio Pill acortado
+            audio_text = bluetooth_audio.split(" (")[0]
+            self.audio_pill.setText(f"󰓃 {audio_text}")
+            
+            # History Pill
+            self.history_pill.setText(f"󰅪 {conversation_length} msgs")
+            
+            # Accel Pill (GPU/CPU verídico)
+            gpu_active = data.get("gpu_active", False)
+            if gpu_active:
+                self.accel_pill.setText("⚡ GPU: Activa")
+                self.accel_pill.setStyleSheet("""
+                    QPushButton {
+                        background-color: rgba(250, 179, 135, 20);
+                        border: 1px solid rgba(250, 179, 135, 100);
+                        border-radius: 10px;
+                        color: #fab387;
+                        font-family: 'Inter';
+                        font-size: 10px;
+                        padding: 2px 8px;
+                    }
+                """)
+            else:
+                self.accel_pill.setText("⚙️ CPU: Activa")
+                self.accel_pill.setStyleSheet("""
+                    QPushButton {
+                        background-color: rgba(137, 180, 250, 20);
+                        border: 1px solid rgba(137, 180, 250, 80);
+                        border-radius: 10px;
+                        color: #89b4fa;
+                        font-family: 'Inter';
+                        font-size: 10px;
+                        padding: 2px 8px;
+                    }
+                """)
 
+            
+            # Cambios de estilo y placeholder en input principal
+            if is_processing and not self.last_recording_state:
+                if "Escuchando" in self.input_field.placeholderText():
+                    self.input_field.setPlaceholderText("Escuchando...")
+                else:
+                    self.input_field.setPlaceholderText("Pensando...")
+                self.input_field.setEnabled(False)
+                self.central_widget.setStyleSheet("""
+                    QFrame {
+                        background-color: rgba(30, 30, 46, 240);
+                        border: 2px solid #f38ba8;
+                        border-radius: 15px;
+                    }
+                """)
+            
+            elif not is_processing and self.last_recording_state:
+                self.input_field.setPlaceholderText("Pregunta algo o habla...")
+                self.input_field.setEnabled(True)
+                self.central_widget.setStyleSheet("""
+                    QFrame {
+                        background-color: rgba(30, 30, 46, 240);
+                        border: 2px solid #89b4fa;
+                        border-radius: 15px;
+                    }
+                """)
+                
+                # Actualizar automáticamente tras finalizar
+                if not self.isHidden() and not self.pending_gui_request and not self._resetting:
+                    await self.update_last_response()
+            
+            self.last_recording_state = is_processing
+        except Exception as e:
+            print(f"Error actualizando UI de estado: {e}", file=sys.stderr, flush=True)
+            self.set_offline_ui()
+
+    def set_offline_ui(self):
+        """Configura los elementos de la interfaz en modo Desconectado/Fuera de servicio."""
+        self.model_pill.setText("🧠 Desconectado")
+        self.model_pill.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(108, 112, 134, 20);
+                border: 1px solid rgba(108, 112, 134, 80);
+                border-radius: 10px;
+                color: #6c7086;
+                font-family: 'Inter';
+                font-size: 10px;
+                padding: 2px 8px;
+            }
+        """)
+        self.accel_pill.setText("⚙️ Desconectado")
+        self.accel_pill.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(108, 112, 134, 20);
+                border: 1px solid rgba(108, 112, 134, 80);
+                border-radius: 10px;
+                color: #6c7086;
+                font-family: 'Inter';
+                font-size: 10px;
+                padding: 2px 8px;
+            }
+        """)
+        self.visualizer.set_state("inactive")
+        self.stop_button.set_state("offline")
 
     async def update_last_response(self):
         """Muestra el historial completo de la conversación."""
@@ -933,6 +951,7 @@ class SpotlightWindow(QMainWindow):
         # Mostrar lo que el usuario escribe inmediatamente
         self.chat_area.setMarkdown(f"**Tú:** {text}\n\n---\n\n**AsistenteIA:** ...")
 
+        error_occurred = False
         try:
             async with httpx.AsyncClient(timeout=None) as client:
                 async with client.stream("POST", "http://127.0.0.1:8765/transcribe/stream", json={"text": text}) as response:
@@ -959,16 +978,29 @@ class SpotlightWindow(QMainWindow):
                         pass
                     else:
                         if self.current_request_id == req_id:
-                            self.chat_area.setPlainText(f"Error: {response.status_code}")
+                            error_occurred = True
+                            print(f"Error en el stream: Código de estado HTTP {response.status_code}", file=sys.stderr, flush=True)
+                            self.chat_area.clear()
+                            self.chat_area.hide()
+                            self.animate_height(110)
+                            self.visualizer.set_state("inactive")
         except Exception as e:
             if self.current_request_id == req_id:
-                self.chat_area.setPlainText(f"Error de conexión: {e}")
+                error_occurred = True
+                print(f"Error de conexión con el backend: {e}", file=sys.stderr, flush=True)
+                self.chat_area.clear()
+                self.chat_area.hide()
+                self.animate_height(110)
+                self.visualizer.set_state("inactive")
         finally:
             # Solo limpiar o reactivar si somos la misma época
             if self.current_request_id == req_id:
                 self.pending_gui_request = False
                 self.input_field.setEnabled(True)
-                self.input_field.clear()
+                if error_occurred:
+                    self.input_field.setText(text)
+                else:
+                    self.input_field.clear()
                 self.input_field.setFocus()
 
     def keyPressEvent(self, event: QKeyEvent):
@@ -988,6 +1020,12 @@ class SpotlightWindow(QMainWindow):
                 event.accept()
                 return
             asyncio.create_task(self.update_last_response())
+            event.accept()
+            return
+            
+        # Ctrl+L para abrir terminal de logs
+        elif event.key() == Qt.Key_L and event.modifiers() & Qt.ControlModifier:
+            self.open_logs_terminal()
             event.accept()
             return
             
@@ -1020,6 +1058,47 @@ class SpotlightWindow(QMainWindow):
                 return
                 
         super().keyPressEvent(event)
+
+    def open_logs_terminal(self):
+        """Abre una terminal gráfica física y ejecuta logs.sh en ella."""
+        import shutil
+        import subprocess
+        
+        project_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        logs_script = os.path.join(project_dir, "logs.sh")
+        
+        # Lista de emuladores de terminal soportados en orden de preferencia
+        terminals = ["alacritty", "kitty", "foot"]
+        chosen_terminal = None
+        for term in terminals:
+            if shutil.which(term):
+                chosen_terminal = term
+                break
+                
+        if not chosen_terminal:
+            print("Error: No se encontró ningún emulador de terminal compatible (Alacritty, Kitty, Foot) instalado.", file=sys.stderr, flush=True)
+            return
+            
+        try:
+            # Construir comando según la terminal seleccionada
+            if chosen_terminal == "alacritty":
+                args = ["alacritty", "--working-directory", project_dir, "-e", "bash", logs_script]
+            elif chosen_terminal == "kitty":
+                args = ["kitty", "--directory", project_dir, "bash", logs_script]
+            elif chosen_terminal == "foot":
+                args = ["foot", "-d", project_dir, "bash", logs_script]
+            else:
+                args = [chosen_terminal, "-e", "bash", logs_script]
+                
+            print(f"Abriendo logs en {chosen_terminal}...", flush=True)
+            subprocess.Popen(
+                args,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True
+            )
+        except Exception as e:
+            print(f"Error abriendo terminal de logs: {e}", file=sys.stderr, flush=True)
 
 def main():
     app = QApplication(sys.argv)

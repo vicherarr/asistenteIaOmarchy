@@ -43,7 +43,9 @@ EOF
 
 echo "-> Recargando systemd..."
 systemctl --user daemon-reload
-systemctl --user enable "$SERVICE_NAME"
+# NOTA: No habilitamos el servicio por defecto para evitar que se ejecute en el arranque.
+# Se iniciará bajo demanda al presionar Super + Z.
+# systemctl --user enable "$SERVICE_NAME"
 
 echo "=== Instalación completada ==="
 echo "Puedes iniciarlo con: ./startservice.sh"
