@@ -212,6 +212,16 @@ async def execute_system_command(command: str) -> str:
         command: El binario o comando exacto a ejecutar.
     """
     command = _sanitize_tool_args(command)
+
+    # Normalizar comandos playerctl sin --player para que siempre apunten a Spotify
+    import re as _re
+    _playerctl_actions = {"next", "previous", "pause", "play", "stop", "play-pause"}
+    _pc_match = _re.match(r'^playerctl\s+(' + '|'.join(_playerctl_actions) + r')$', command.strip())
+    if _pc_match:
+        action = _pc_match.group(1)
+        command = f"playerctl --player=spotify {action}"
+        logger.info(f"playerctl normalizado a: {command}")
+
     logger.info(f"Redirigiendo execute_system_command a terminal visible: {command}")
     return await open_terminal_and_run_command(command)
 
@@ -324,7 +334,7 @@ async def play_specific_music(query: str) -> str:
         logger.warning(
             f"play_specific_music recibió palabra de control '{query}' → redirigiendo a playerctl {action}"
         )
-        return await execute_system_command(f"playerctl {action}")
+        return await execute_system_command(f"playerctl --player=spotify {action}")
 
     # Buscamos de forma muy abierta
     search_query = f"Spotify artist track album {query}"
