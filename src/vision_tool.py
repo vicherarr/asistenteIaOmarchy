@@ -317,3 +317,104 @@ async def analyze_screen(source: str = "full", target: str = "") -> str:
     except Exception as e:
         logger.error(f"Error inesperado en analyze_screen: {e}", exc_info=True)
         return f"Error capturando la pantalla: {e}"
+
+
+# MIME types de imagen aceptados del portapapeles, por orden de preferencia. PIL los
+# decodifica todos; preferimos png/jpeg por ser los más universales.
+_CLIPBOARD_IMAGE_TYPES = (
+    "image/png", "image/jpeg", "image/jpg", "image/webp", "image/bmp", "image/tiff",
+)
+
+
+async def _list_clipboard_image_types() -> list[str]:
+    """Devuelve los tipos MIME 'image/*' presentes en el portapapeles (Wayland)."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "wl-paste", "--list-types",
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=5)
+    except FileNotFoundError:
+        raise VisionToolError("wl-paste no encontrado (instala wl-clipboard).")
+    except asyncio.TimeoutError:
+        raise VisionToolError("Timeout consultando el portapapeles.")
+    # wl-paste devuelve código 1 cuando el portapapeles está vacío: no es un error fatal.
+    types = [t.strip().lower() for t in out.decode(errors="ignore").splitlines() if t.strip()]
+    return [t for t in types if t.startswith("image/")]
+
+
+async def _dump_clipboard_image(mime: str, output_path: str) -> None:
+    """Vuelca los bytes de la imagen del portapapeles (tipo 'mime') a 'output_path'."""
+    try:
+        with open(output_path, "wb") as f:
+            proc = await asyncio.create_subprocess_exec(
+                "wl-paste", "--type", mime,
+                stdout=f, stderr=subprocess.PIPE,
+            )
+            _, err = await asyncio.wait_for(proc.communicate(), timeout=10)
+    except asyncio.TimeoutError:
+        raise VisionToolError("Timeout leyendo la imagen del portapapeles.")
+    if proc.returncode != 0:
+        raise VisionToolError(f"wl-paste falló: {err.decode(errors='ignore').strip()}")
+    if not Path(output_path).exists() or Path(output_path).stat().st_size == 0:
+        raise VisionToolError("El portapapeles no contenía datos de imagen.")
+
+
+def _normalize_clipboard_image(raw_path: str, output_dir: Path) -> str:
+    """Decodifica los bytes crudos, normaliza a RGB, redimensiona y guarda como JPEG.
+
+    Reencodamos siempre (no como _resize_image, que puede devolver el original) porque el
+    volcado del portapapeles no tiene extensión fiable y puede venir en formatos variados.
+    """
+    with Image.open(raw_path) as img:
+        img = img.convert("RGB")
+        if max(img.size) > MAX_IMAGE_DIMENSION:
+            ratio = MAX_IMAGE_DIMENSION / max(img.size)
+            img = img.resize(
+                (int(img.size[0] * ratio), int(img.size[1] * ratio)),
+                Image.Resampling.LANCZOS,
+            )
+        out_path = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False, dir=output_dir).name
+        img.save(out_path, "JPEG", quality=85)
+    logger.info(f"Imagen del portapapeles preparada: {Path(out_path).stat().st_size // 1024}KB")
+    return out_path
+
+
+async def analyze_clipboard_image() -> str:
+    """
+    Analiza la IMAGEN que el usuario tiene copiada en el portapapeles.
+    Úsala cuando el usuario diga "mira la imagen de mi portapapeles", "mira lo que he
+    copiado", "analiza la captura que tengo copiada" o haga preguntas sobre una imagen
+    que acaba de copiar (por ejemplo, una captura de pantalla en el portapapeles).
+    El contenido se analiza automáticamente después; no inventes lo que aparece.
+
+    Para TEXTO copiado usa clipboard_manager(action='paste'); esta herramienta es solo
+    para imágenes.
+    """
+    vision = VisionTool()
+    try:
+        image_types = await _list_clipboard_image_types()
+    except VisionToolError as e:
+        logger.error(f"Error consultando el portapapeles: {e}")
+        return f"No pude leer el portapapeles: {e}"
+
+    if not image_types:
+        return ("No hay ninguna imagen en el portapapeles. Copia primero una imagen "
+                "(por ejemplo, una captura de pantalla) y vuelve a pedírmelo.")
+
+    chosen = next((t for t in _CLIPBOARD_IMAGE_TYPES if t in image_types), image_types[0])
+    raw_path = vision._new_tmp(suffix=".bin")
+    try:
+        await _dump_clipboard_image(chosen, raw_path)
+        prepared = _normalize_clipboard_image(raw_path, vision.output_dir)
+        stage_vision_capture(prepared)
+        return "Imagen del portapapeles cargada. Analizando el contenido visual."
+    except VisionToolError as e:
+        logger.error(f"Error leyendo imagen del portapapeles: {e}")
+        return f"No pude leer la imagen del portapapeles: {e}"
+    except Exception as e:
+        logger.error(f"Error inesperado en analyze_clipboard_image: {e}", exc_info=True)
+        return ("No pude interpretar la imagen del portapapeles; "
+                "asegúrate de tener una imagen copiada.")
+    finally:
+        Path(raw_path).unlink(missing_ok=True)

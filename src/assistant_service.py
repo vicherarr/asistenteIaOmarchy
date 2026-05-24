@@ -25,7 +25,7 @@ from src.command_executor import (
     launch_application,
     close_application
 )
-from src.vision_tool import analyze_screen, get_pending_vision
+from src.vision_tool import analyze_screen, analyze_clipboard_image, get_pending_vision
 from src.litert_client import LiteRTClient
 from src.tts_engine import TTSEngine
 from src.stt_engine import STTEngine
@@ -68,6 +68,7 @@ class AssistantService:
             launch_application,
             close_application,
             analyze_screen,
+            analyze_clipboard_image,
         ]
 
     def _extract_sentences(self, text_buffer: str) -> tuple[List[str], str]:
