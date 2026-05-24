@@ -606,13 +606,15 @@ def _is_waiting_for_password(screen_output: str) -> bool:
 
 async def open_terminal_and_run_command(command: str) -> str:
     """
-    Abre una terminal gráfica visible (como Alacritty, Kitty o Foot) y ejecuta un comando específico en ella.
-    Si ya hay una terminal de AsistenteIA abierta, enviará y ejecutará el comando en la misma ventana.
-    Mantiene la ventana de la terminal abierta para que el usuario pueda ver el resultado,
-    interactuar con ella o escribir su contraseña de administrador (sudo) si es necesario.
+    Abre una terminal gráfica visible o crea una nueva pestaña/shell (bash) en la ventana existente.
+    Llama a esta herramienta cuando el usuario te pida abrir una terminal, otra terminal, una segunda o tercera
+    terminal, una pestaña nueva o un intérprete de comandos bash/zsh.
+    Si ya hay una terminal abierta gráficamente en pantalla, esta herramienta creará y enfocará automáticamente
+    una nueva pestaña limpia de comandos en la misma ventana de terminal.
+    Mantiene la ventana de la terminal abierta para que el usuario interactúe con ella.
     
     Args:
-        command: El comando exacto de Linux que se ejecutará dentro de la terminal.
+        command: El comando de Linux a ejecutar. Si solo deseas abrir una terminal/pestaña limpia, pasa "" (cadena vacía) o "bash".
     """
     import shutil
     import subprocess
@@ -620,17 +622,7 @@ async def open_terminal_and_run_command(command: str) -> str:
     command = _sanitize_tool_args(command)
     session_name = "asistenteia"
     
-    # Verificar si el comando está en la lista blanca
-    executor = CommandExecutor()
-    is_verified = executor._is_safe_command(command)
-    
-    wrapped_command = command
-    banner_line = None
-    if not command.strip().endswith("&"):
-        cmd_name = command.strip().split()[0].split("/")[-1] if command.strip() else "comando"
-        banner_line = f'test $? = 0 && echo "✅ {cmd_name} OK" || echo "❌ {cmd_name} ERROR $?"'
-    
-    # 1. Comprobar si la sesión de tmux existe
+    # 1. Comprobar si la sesión de tmux existe y está acoplada
     session_exists = False
     session_attached = False
     
@@ -648,21 +640,49 @@ async def open_terminal_and_run_command(command: str) -> str:
                         break
     except Exception as e:
         logger.error(f"Error comprobando estado de tmux: {e}")
-        
-    # 2. Si la sesión existe, verificar si el pane activo está ocupado
-    if session_exists:
+
+    # 2. Interceptar si el comando es abrir una nueva terminal/shell
+    cmd_strip = command.strip().lower()
+    is_terminal_launcher = cmd_strip in ("alacritty", "kitty", "foot", "bash", "zsh", "sh", "") or any(cmd_strip.startswith(term) for term in ("alacritty ", "kitty ", "foot ", "bash ", "zsh ", "sh "))
+    
+    if is_terminal_launcher:
+        logger.info(f"Interceptado comando de terminal redundante o vacío: '{command}'")
+        if session_attached:
+            # Si el terminal ya está abierto gráficamente en pantalla, creamos un nuevo tab (pestaña) en tmux
+            logger.info("Terminal ya abierta. Creando nueva pestaña de shell (bash).")
+            ok_nw, err_nw = await _run_tmux_cmd(["new-window", "-t", f"{session_name}:", "-n", "bash"])
+            if not ok_nw:
+                logger.error(f"Error al crear nueva pestaña en tmux: {err_nw}")
+                return f"Error al abrir una nueva pestaña de terminal: {err_nw}"
+            return "Éxito: Se ha creado y enfocado una nueva pestaña de terminal en la ventana existente."
+        else:
+            # Si está cerrada, procedemos al paso de abrir la ventana de terminal (que se adjuntará a la sesión)
+            command = ""  # Limpiamos el comando para que no escriba nada adicional
+            banner_line = None
+    else:
+        wrapped_command = command
+        banner_line = None
+        if not command.strip().endswith("&"):
+            cmd_name = command.strip().split()[0].split("/")[-1] if command.strip() else "comando"
+            banner_line = f'test $? = 0 && echo "✅ {cmd_name} OK" || echo "❌ {cmd_name} ERROR $?"'
+
+    # 3. Si la sesión existe y hay un comando a ejecutar, verificar si el pane activo está ocupado
+    if session_exists and command:
         try:
-            ok_proc, current_proc = await _run_tmux_cmd(["display-message", "-p", "-t", session_name, "#{pane_current_command}"])
+            ok_proc, current_proc = await _run_tmux_cmd(["display-message", "-p", "-t", f"{session_name}:", "#{pane_current_command}"])
             if ok_proc and current_proc.strip().lower() not in ("bash", "zsh", "sh", "tmux"):
-                logger.info(f"Terminal ocupada con el proceso '{current_proc.strip()}'. Creando nueva pestaña de tmux.")
                 cmd_name = command.strip().split()[0].split("/")[-1] if command.strip() else "comando"
-                await _run_tmux_cmd(["new-window", "-t", session_name, "-n", cmd_name, "bash"])
+                logger.info(f"Terminal ocupada con el proceso '{current_proc.strip()}'. Creando nueva pestaña de tmux: {cmd_name}")
+                ok_nw, err_nw = await _run_tmux_cmd(["new-window", "-t", f"{session_name}:", "-n", cmd_name, "bash"])
+                if not ok_nw:
+                    logger.error(f"Error al crear nueva pestaña ocupada en tmux: {err_nw}")
+                    return f"Error al crear nueva pestaña de terminal para {cmd_name}: {err_nw}"
                 # Dar un momento para que el nuevo shell se inicialice
                 await asyncio.sleep(0.5)
         except Exception as e:
             logger.error(f"Error comprobando ocupación de terminal: {e}")
 
-    # 3. Si no está acoplada a una terminal gráfica, abrir la ventana del emulador
+    # 4. Si no está acoplada a una terminal gráfica, abrir la ventana del emulador
     if not session_attached:
         terminals = ["alacritty", "kitty", "foot"]
         chosen_terminal = None
@@ -688,41 +708,49 @@ async def open_terminal_and_run_command(command: str) -> str:
             )
             # Esperar a que la terminal gráfica se inicialice y adjunte
             await asyncio.sleep(0.8)
+            session_attached = True
         except Exception as e:
             logger.error(f"Error abriendo terminal gráfica: {e}")
             return f"Error al abrir la terminal gráfica: {e}"
-            
-    # 4. Enviar el comando principal
+
+    # 5. Enviar el comando principal
+    if not command:
+        return "Éxito: Terminal persistente de AsistenteIA abierta correctamente."
+
     try:
+        cmd_name = command.strip().split()[0].split("/")[-1] if command.strip() else "comando"
+        # Renombrar la pestaña activa actual en tmux para asociarla al comando
+        await _run_tmux_cmd(["rename-window", "-t", f"{session_name}:", cmd_name])
+
         logger.info(f"Enviando comando a la sesión '{session_name}': {command}")
         buf_file = settings.TEMP_DIR / "tmux_buf"
         buf_file.write_text(command.strip() + "\n", encoding="utf-8")
-        await _run_tmux_cmd(["load-buffer", "-b", "cmd", "-t", session_name, str(buf_file)])
-        await _run_tmux_cmd(["paste-buffer", "-b", "cmd", "-t", session_name])
-        await _run_tmux_cmd(["send-keys", "-t", session_name, "C-m"])
+        await _run_tmux_cmd(["load-buffer", "-b", "cmd", "-t", f"{session_name}:", str(buf_file)])
+        await _run_tmux_cmd(["paste-buffer", "-b", "cmd", "-t", f"{session_name}:"])
+        await _run_tmux_cmd(["send-keys", "-t", f"{session_name}:", "C-m"])
         buf_file.unlink(missing_ok=True)
         
         # Esperar el renderizado inicial y ver si solicita password
         await asyncio.sleep(1.5)
         
-        # 5. Detección dinámica de prompt de contraseña (sudo)
-        ok_capture, screen_output = await _run_tmux_cmd(["capture-pane", "-p", "-t", session_name])
+        # 6. Detección dinámica de prompt de contraseña (sudo)
+        ok_capture, screen_output = await _run_tmux_cmd(["capture-pane", "-p", "-t", f"{session_name}:"])
         if ok_capture and _is_waiting_for_password(screen_output):
             logger.info("Detectado prompt de contraseña (sudo). Cancelando envío automático del banner_line.")
             banner_line = None
             
-        # 6. Enviar banner si no se canceló
+        # 7. Enviar banner si no se canceló
         if banner_line:
             buf_file.write_text(banner_line + "\n", encoding="utf-8")
-            await _run_tmux_cmd(["load-buffer", "-b", "cmd", "-t", session_name, str(buf_file)])
-            await _run_tmux_cmd(["paste-buffer", "-b", "cmd", "-t", session_name])
-            await _run_tmux_cmd(["send-keys", "-t", session_name, "C-m"])
+            await _run_tmux_cmd(["load-buffer", "-b", "cmd", "-t", f"{session_name}:", str(buf_file)])
+            await _run_tmux_cmd(["paste-buffer", "-b", "cmd", "-t", f"{session_name}:"])
+            await _run_tmux_cmd(["send-keys", "-t", f"{session_name}:", "C-m"])
             buf_file.unlink(missing_ok=True)
             # Esperar a que el banner se ejecute
             await asyncio.sleep(1.0)
             
-        # 7. Capturar salida final
-        ok_capture, screen_output = await _run_tmux_cmd(["capture-pane", "-p", "-t", session_name])
+        # 8. Capturar salida final
+        ok_capture, screen_output = await _run_tmux_cmd(["capture-pane", "-p", "-t", f"{session_name}:"])
         if ok_capture and screen_output:
             lines = screen_output.splitlines()
             last_lines = lines[-60:]
@@ -740,9 +768,45 @@ async def open_terminal_and_run_command(command: str) -> str:
         return f"Error al ejecutar comando en la terminal: {e}"
 
 
+def _process_screen_output(output: str) -> str:
+    import re
+    if not output:
+        return "La pantalla de la terminal está vacía."
+        
+    # Buscar si hay algún indicador de código de salida en el contenido capturado
+    success_match = re.search(r"\[AsistenteIA: '([^']+)'\s+finalizado correctamente\]", output)
+    success_match_new = re.search(r"✅\s+(\S+)\s+OK", output)
+    
+    exit_code_match = re.search(r"\[AsistenteIA: '([^']+)'\s+falló con código de error (\d+)\]", output)
+    exit_code_match_new = re.search(r"❌\s+(\S+)\s+ERROR\s+(\d+)", output)
+    
+    # Devolver últimas 60 líneas para contexto suficiente
+    lines = output.splitlines()
+    last_lines = lines[-60:]
+    screen_content = "\n".join(last_lines)
+    
+    # Límite inteligente: 4000 chars (~1300 tokens) para lectura de pantalla
+    max_chars = 4000
+    if len(screen_content) > max_chars:
+        screen_content = screen_content[:max_chars] + "\n...[pantalla truncada]"
+    
+    if exit_code_match or exit_code_match_new:
+        cmd_name = exit_code_match.group(1) if exit_code_match else exit_code_match_new.group(1)
+        exit_code = int(exit_code_match.group(2)) if exit_code_match else int(exit_code_match_new.group(2))
+        explanation = explain_exit_code(exit_code)
+        return f"❌ ERROR EN TERMINAL: '{cmd_name}' falló (código {exit_code})\n\nQué significa: {explanation}\n\nCONTENIDO VISIBLE EN LA TERMINAL:\n\n{screen_content}"
+    elif success_match or success_match_new:
+        cmd_name = success_match.group(1) if success_match else success_match_new.group(1)
+        explanation = explain_exit_code(0)
+        return f"✅ '{cmd_name}' completado exitosamente\n\nQué significa: {explanation}\n\nCONTENIDO VISIBLE EN LA TERMINAL:\n\n{screen_content}"
+    
+    return "CONTENIDO VISIBLE EN LA TERMINAL:\n\n" + screen_content
+
+
 async def read_terminal_screen() -> str:
     """
     Lee el contenido textual visible en la pantalla de la terminal persistente (sesión tmux 'asistenteia').
+    Si hay múltiples pestañas abiertas, leerá el contenido de todas ellas para darte una visión completa.
     Usa esto para verificar el resultado de un comando que acabas de ejecutar, comprobar si
     se produjo un error, o ver si la consola está esperando interacción (ej: pidiendo contraseña de sudo).
     """
@@ -758,43 +822,42 @@ async def read_terminal_screen() -> str:
         if not ok:
             return "La terminal persistente no está iniciada (no hay sesión activa de tmux)."
             
-        # Capturar el panel activo de la sesión de tmux
-        ok_capture, output = await _run_tmux_cmd(["capture-pane", "-p", "-t", session_name])
+        # 1. Obtener la lista de ventanas (pestañas) en la sesión
+        ok_list, list_output = await _run_tmux_cmd(["list-windows", "-t", f"{session_name}:", "-F", "#I:#W:#{window_active}"])
+        
+        if ok_list and list_output:
+            windows = list_output.strip().splitlines()
+            # Si solo hay una pestaña, realizamos el flujo estándar directo (retrocompatible)
+            if len(windows) <= 1:
+                ok_capture, output = await _run_tmux_cmd(["capture-pane", "-p", "-t", f"{session_name}:"])
+                if not ok_capture:
+                    return f"Error al capturar la pantalla de la terminal: {output}"
+                return _process_screen_output(output)
+            
+            # Si hay múltiples pestañas, capturamos cada una y las unimos
+            combined_content = []
+            for win in windows:
+                parts = win.split(":")
+                if len(parts) >= 3:
+                    idx, name, active = parts[0], parts[1], parts[2]
+                    is_active = active == "1"
+                    active_label = " - ACTIVA ACTUALMENTE" if is_active else ""
+                    
+                    ok_cap, win_output = await _run_tmux_cmd(["capture-pane", "-p", "-t", f"{session_name}:{idx}"])
+                    if ok_cap and win_output:
+                        processed = _process_screen_output(win_output)
+                        combined_content.append(f"=== PESTAÑA '{name}' (Índice {idx}{active_label}) ===\n{processed}\n")
+            
+            if combined_content:
+                return "\n".join(combined_content)
+            
+        # Fallback si falla list-windows
+        ok_capture, output = await _run_tmux_cmd(["capture-pane", "-p", "-t", f"{session_name}:"])
         if ok_capture:
-            if not output:
-                return "La pantalla de la terminal está vacía."
-                
-            # Buscar si hay algún indicador de código de salida en el contenido capturado
-            # Soportar tanto el formato antiguo (para tests) como el nuevo de producción (emojis ✅/❌)
-            success_match = re.search(r"\[AsistenteIA: '([^']+)'\s+finalizado correctamente\]", output)
-            success_match_new = re.search(r"✅\s+(\S+)\s+OK", output)
-            
-            exit_code_match = re.search(r"\[AsistenteIA: '([^']+)'\s+falló con código de error (\d+)\]", output)
-            exit_code_match_new = re.search(r"❌\s+(\S+)\s+ERROR\s+(\d+)", output)
-            
-            # Devolver últimas 60 líneas para contexto suficiente
-            lines = output.splitlines()
-            last_lines = lines[-60:]
-            screen_content = "\n".join(last_lines)
-            
-            # Límite inteligente: 4000 chars (~1300 tokens) para lectura de pantalla
-            max_chars = 4000
-            if len(screen_content) > max_chars:
-                screen_content = screen_content[:max_chars] + "\n...[pantalla truncada]"
-            
-            if exit_code_match or exit_code_match_new:
-                cmd_name = exit_code_match.group(1) if exit_code_match else exit_code_match_new.group(1)
-                exit_code = int(exit_code_match.group(2)) if exit_code_match else int(exit_code_match_new.group(2))
-                explanation = explain_exit_code(exit_code)
-                return f"❌ ERROR EN TERMINAL: '{cmd_name}' falló (código {exit_code})\n\nQué significa: {explanation}\n\nCONTENIDO VISIBLE EN LA TERMINAL:\n\n{screen_content}"
-            elif success_match or success_match_new:
-                cmd_name = success_match.group(1) if success_match else success_match_new.group(1)
-                explanation = explain_exit_code(0)
-                return f"✅ '{cmd_name}' completado exitosamente\n\nQué significa: {explanation}\n\nCONTENIDO VISIBLE EN LA TERMINAL:\n\n{screen_content}"
-            
-            return "CONTENIDO VISIBLE EN LA TERMINAL:\n\n" + screen_content
+            return _process_screen_output(output)
         else:
             return f"Error al capturar la pantalla de la terminal: {output}"
+            
     except Exception as e:
         logger.error(f"Error en read_terminal_screen: {e}")
         return f"Excepción leyendo pantalla de la terminal: {e}"
@@ -817,7 +880,7 @@ async def send_input_to_terminal(input_text: str) -> str:
             return "La terminal persistente no está iniciada (no hay proceso activo al cual enviar entrada)."
             
         # Enviar las teclas y presionar ENTER (C-m)
-        await _run_tmux_cmd(["send-keys", "-t", session_name, input_text, "C-m"])
+        await _run_tmux_cmd(["send-keys", "-t", f"{session_name}:", input_text, "C-m"])
         return f"Éxito: Se ha enviado la entrada '{input_text}' al proceso de la terminal."
     except Exception as e:
         logger.error(f"Error en send_input_to_terminal: {e}")
@@ -837,7 +900,7 @@ async def interrupt_terminal_command() -> str:
             return "La terminal persistente no está activa (no hay ningún proceso para interrumpir)."
             
         # Enviar Ctrl+C
-        await _run_tmux_cmd(["send-keys", "-t", session_name, "C-c"])
+        await _run_tmux_cmd(["send-keys", "-t", f"{session_name}:", "C-c"])
         return "Éxito: Señal de interrupción Ctrl+C enviada a la terminal para detener el comando activo."
     except Exception as e:
         logger.error(f"Error en interrupt_terminal_command: {e}")

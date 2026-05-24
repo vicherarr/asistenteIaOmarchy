@@ -116,9 +116,11 @@ async def test_read_terminal_screen_success_status():
     from src.command_executor import read_terminal_screen
     with patch('src.command_executor._run_tmux_cmd') as mock_tmux:
         # First call: has-session (success)
-        # Second call: capture-pane (success with exit code marker)
+        # Second call: list-windows (success with 1 window)
+        # Third call: capture-pane (success with exit code marker)
         mock_tmux.side_effect = [
             (True, ""),  # has-session
+            (True, "1:asistenteia:1"),  # list-windows
             (True, "ls -la\n[AsistenteIA: 'ls' finalizado correctamente]\n"),  # capture-pane
         ]
         
@@ -133,7 +135,8 @@ async def test_read_terminal_screen_error_status():
     with patch('src.command_executor._run_tmux_cmd') as mock_tmux:
         mock_tmux.side_effect = [
             (True, ""),  # has-session
-            (True, "cat non_existent\n[AsistenteIA: 'cat' falló con código de error 127]\n"),
+            (True, "1:asistenteia:1"),  # list-windows
+            (True, "cat non_existent\n[AsistenteIA: 'cat' falló con código de error 127]\n"),  # capture-pane
         ]
         
         result = await read_terminal_screen()
