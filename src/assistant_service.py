@@ -443,7 +443,8 @@ class AssistantService:
                     await queue_text.put(clean)
 
             # Guardar respuesta final acumulada en el historial
-            conversation_history.append(ChatMessage(role="assistant", content=accumulated_text))
+            cleaned_final = self._clean_tool_calls(accumulated_text)
+            conversation_history.append(ChatMessage(role="assistant", content=cleaned_final))
 
         except asyncio.CancelledError:
             logger.info("process_transcription_stream cancelado. Deteniendo workers de TTS...")
