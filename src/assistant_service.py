@@ -284,16 +284,6 @@ class AssistantService:
         sentence_buffer = ""
         chunk_count = 0
 
-        # Detectar si es un comando de control de musica (silenciar TTS en exito)
-        _MUSIC_CONTROL_WORDS = {
-            "siguiente", "siguiente cancion", "siguiente canción",
-            "anterior", "cancion anterior", "canción anterior",
-            "atras", "atrás", "pausa", "pausar", "para la musica",
-            "para la música", "reanuda", "play", "continua", "continúa",
-            "salta", "la siguiente", "la anterior",
-        }
-        suppress_tts = text.strip().lower().rstrip(".,!¡?¿") in _MUSIC_CONTROL_WORDS
-
         try:
             # Primera llamada al modelo
             async for chunk in self.litert.chat_stream(
@@ -311,11 +301,10 @@ class AssistantService:
                 if not is_tool_call:
                     sentence_buffer += chunk
                     sentences, sentence_buffer = self._extract_sentences(sentence_buffer)
-                    if not suppress_tts:
-                        for s in sentences:
-                            clean = strip_markdown(s)
-                            if self._is_speakable(clean):
-                                await queue_text.put(clean)
+                    for s in sentences:
+                        clean = strip_markdown(s)
+                        if self._is_speakable(clean):
+                            await queue_text.put(clean)
                 
                 # Filtrar tool calls antes de yield al cliente
                 clean_chunk = self._clean_tool_calls(chunk, strip=False)
@@ -430,13 +419,8 @@ class AssistantService:
                     except Exception as e:
                         logger.error(f"Error leyendo terminal tras tool calling: {e}")
                         fallback = "Comando ejecutado en la terminal."
-                elif any(kw in lower_text for kw in ["música", "canción", "play", "spotify", "pon", "siguiente", "anterior", "pausa", "salta", "reanuda"]):
-                    if not suppress_tts:
-                        fallback = "Reproduciendo música."
-                        accumulated_text = fallback
-                        yield fallback
-                        await queue_text.put(fallback)
-                    return  # Sin voz para comandos de música
+                elif any(kw in lower_text for kw in ["música", "canción", "play", "spotify", "pon"]):
+                    fallback = "Reproduciendo música."
                 elif any(kw in lower_text for kw in ["pantalla", "captura", "ver", "mira"]):
                     fallback = "Analizando la pantalla."
                 elif any(kw in lower_text for kw in ["busca", "buscar", "investiga", "web"]):
@@ -453,7 +437,7 @@ class AssistantService:
                 await queue_text.put(fallback)
 
             # Encolar lo que quede en el buffer
-            if sentence_buffer.strip() and not suppress_tts:
+            if sentence_buffer.strip():
                 clean = strip_markdown(sentence_buffer)
                 if self._is_speakable(clean):
                     await queue_text.put(clean)
