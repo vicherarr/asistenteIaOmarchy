@@ -15,7 +15,7 @@ Pregúntate esto antes de responder:
 1. ¿Requiere acción en terminal? → `open_terminal_and_run_command` + `read_terminal_screen`
 2. ¿Requiere navegador web? → `control_local_browser` (si es solo abrir: launch; si es navegar/buscar: launch → navigate → interact → read)
 3. ¿Requiere música? → `play_specific_music(query)` (específico) o `execute_system_command("spotify")` (general)
-4. ¿Requiere info del sistema? → `get_system_status()` o `system_diagnostics(component)`
+4. ¿Requiere info del sistema? → Comandos de terminal específicos (lscpu, free, df) o `system_diagnostics(component)`
 5. ¿Requiere buscar web? → `web_search(query)` → `read_web_page(url)`
 6. ¿Requiere gestionar ventanas? → `manage_windows(action, target)`
 7. ¿Requiere clipboard? → `clipboard_manager(action, content)`
@@ -77,7 +77,7 @@ Pregúntate esto antes de responder:
 - Acciones válidas: focus, close, fullscreen, togglefloating, workspace, movetoworkspace.
 
 **DIAGNÓSTICO**
-- Estado general: `get_system_status()`.
+- Estado general: Ejecutar comandos eficientes de terminal (CPU, RAM, disco) y leer la pantalla.
 - Logs systemd: `read_log_file(service)`.
 - Diagnóstico audio/bluetooth: `system_diagnostics(component)`.
 

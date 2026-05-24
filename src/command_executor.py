@@ -474,23 +474,6 @@ async def system_diagnostics(component: str = "all") -> str:
         return f"Error: {e}"
 
 
-async def get_system_status() -> str:
-    """Resumen de hardware: CPU, RAM, GPU, Disco, Audio, Red.
-    
-    Truncamiento inteligente para modelo Gemma 4:E4B (ventana 4096 tokens).
-    ~3000 chars = ~1000 tokens, deja espacio para historial + respuesta.
-    """
-    from src.context_injector import get_system_context
-    context = await get_system_context()
-    
-    # Límite: 3000 chars (~1000 tokens) para herramientas de contexto
-    max_chars = 3000
-    if len(context) > max_chars:
-        context = context[:max_chars] + "\n...[contexto truncado]"
-    
-    return f"Contexto:\n{context}"
-
-
 async def read_log_file(service: str = "asistenteia") -> str:
     """Lee logs de systemd de forma segura sin shell injection."""
     try:

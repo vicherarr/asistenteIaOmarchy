@@ -102,8 +102,8 @@ PROMPTS_PRUEBA = [
     # 7. Diagnóstico del sistema
     {
         "nombre": "diagnostico_sistema",
-        "prompt": "Cómo está mi sistema? Cuéntame el estado actual",
-        "herramienta_esperada": "get_system_status",
+        "prompt": "Cómo está mi disco? Dime el espacio",
+        "herramienta_esperada": "open_terminal_and_run_command",
     },
     # 8. Navegación web
     {
@@ -301,7 +301,6 @@ class TestToolCalling:
 
         herramientas_esperadas = [
             "execute_system_command",
-            "get_system_status",
             "read_log_file",
             "clipboard_manager",
             "web_search",

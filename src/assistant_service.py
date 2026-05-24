@@ -10,7 +10,6 @@ from typing import Optional, List
 from src.schema import ChatMessage
 from src.command_executor import (
     execute_system_command, 
-    get_system_status, 
     read_log_file, 
     clipboard_manager,
     web_search,
@@ -52,7 +51,6 @@ class AssistantService:
         # Lista de herramientas para LiteRT
         self.tools = [
             execute_system_command,
-            get_system_status,
             read_log_file,
             clipboard_manager,
             web_search,
