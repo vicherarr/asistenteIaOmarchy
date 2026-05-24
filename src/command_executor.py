@@ -266,6 +266,44 @@ async def clipboard_manager(action: str, content: str = "") -> str:
         return f"Error en clipboard_manager: {e}"
 
 
+def _ddg_html_search(query: str, max_results: int = 5) -> list[dict]:
+    """Fallback de búsqueda vía el endpoint HTML de DuckDuckGo (solo stdlib).
+
+    Se usa cuando la librería DDGS falla o devuelve vacío (rate-limit, cambios de API).
+    Devuelve dicts con las mismas claves que DDGS: title, href, body.
+    """
+    import urllib.parse
+    import urllib.request
+    import html as _html
+
+    url = "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote(query)
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+    })
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        page_html = resp.read().decode("utf-8", errors="ignore")
+
+    results: list[dict] = []
+    # Cada resultado: <a ... class="result__a" href="...">título</a>
+    for m in re.finditer(r'class="result__a"[^>]*href="(.*?)"[^>]*>(.*?)</a>', page_html, re.DOTALL):
+        href = _html.unescape(m.group(1))
+        title = _html.unescape(re.sub(r'<.*?>', '', m.group(2))).strip()
+        # DDG html envuelve la URL real en un redirect: //duckduckgo.com/l/?uddg=<encoded>
+        if "uddg=" in href:
+            parsed = urllib.parse.urlparse(href)
+            uddg = urllib.parse.parse_qs(parsed.query).get("uddg")
+            if uddg:
+                href = uddg[0]
+        if href.startswith("//"):
+            href = "https:" + href
+        if href and title:
+            results.append({"title": title, "href": href, "body": ""})
+        if len(results) >= max_results:
+            break
+    return results
+
+
 async def web_search(query: str) -> str:
     """
     Busca información en internet (DuckDuckGo).
@@ -277,9 +315,18 @@ async def web_search(query: str) -> str:
             from duckduckgo_search import DDGS
             with DDGS() as ddgs:
                 return list(ddgs.text(query, max_results=5))
-        
-        search_results = await asyncio.to_thread(_search)
-        if not search_results: 
+
+        try:
+            search_results = await asyncio.to_thread(_search)
+        except Exception as e:
+            logger.warning(f"DDGS falló ({e}); usando fallback HTML de DuckDuckGo.")
+            search_results = None
+
+        if not search_results:
+            # Fallback robusto al endpoint HTML cuando la librería falla o no devuelve nada
+            search_results = await asyncio.to_thread(_ddg_html_search, query, 5)
+
+        if not search_results:
             return f"No hay resultados para: {query}"
         
         summary = f"Resultados para '{query}' (Para abrir un sitio, usa: execute_system_command con 'chromium <URL>'):\n\n"
@@ -533,64 +580,6 @@ async def read_web_page(url: str) -> str:
     except Exception as e:
         logger.error(f"Error en read_web_page: {e}")
         return f"Error leyendo la página web: {e}"
-
-
-async def _playwright_task(action: str, target: str, value: str = "") -> str:
-    """Tarea interna asíncrona para Playwright."""
-    from playwright.async_api import async_playwright
-    
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        # User agent moderno para evitar bloqueos básicos
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
-        )
-        page = await context.new_page()
-        
-        try:
-            if action == "navigate":
-                await page.goto(target, wait_until="networkidle", timeout=20000)
-                # Extraer texto simplificado via JS
-                content = await page.evaluate("document.body.innerText")
-                title = await page.title()
-                return f"CONTENIDO DE {title} ({target}):\n\n{content[:4000]}"
-            
-            elif action == "click":
-                url, selector = target, value
-                await page.goto(url, wait_until="networkidle")
-                await page.click(selector)
-                await page.wait_for_timeout(1000)
-                content = await page.evaluate("document.body.innerText")
-                return f"Acción realizada. Nuevo contenido:\n\n{content[:2000]}"
-            
-            else:
-                return f"Acción '{action}' no soportada en interact_web."
-                
-        except Exception as e:
-            return f"Error en interacción web: {e}"
-        finally:
-            await browser.close()
-
-
-async def interact_web(action: str, target: str, value: str = "") -> str:
-    """
-    Interactúa con sitios web dinámicos (JavaScript, SPAs, Clics). 
-    Úsala si 'read_web_page' falla o el sitio requiere interacción.
-    
-    Args:
-        action: 'navigate' (leer sitio con JS), 'click' (hacer clic en selector).
-        target: URL para navegar, o URL para la acción de clic.
-        value: Selector CSS (solo para acción 'click').
-    """
-    action = _sanitize_tool_args(action)
-    target = _sanitize_tool_args(target)
-    value = _sanitize_tool_args(value)
-    
-    try:
-        return await _playwright_task(action, target, value)
-    except Exception as e:
-        logger.error(f"Error en interact_web: {e}")
-        return f"Error crítico en automatización web: {e}"
 
 
 async def _run_tmux_cmd(args: list[str], timeout: float = 5.0) -> tuple[bool, str]:
@@ -1011,7 +1000,7 @@ async def control_local_browser(action: str, target: str = "", value: str = "") 
             elif action == "type":
                 return await browser_type(page, target, value)
             elif action == "read":
-                return await browser_read(page)
+                return await browser_read(page, value)
             elif action == "look":
                 return await browser_look(page, value)
             elif action == "scroll":

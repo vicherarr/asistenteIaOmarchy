@@ -61,8 +61,10 @@ Pregúntate esto antes de responder:
 **NAVEGADOR CDP (PLAYWRIGHT)**
 - Para abrir el navegador sin URL o búsqueda (ej: "abre el navegador"): Usa ÚNICAMENTE `control_local_browser(action='launch')` y termina tu respuesta de inmediato indicando que se ha abierto el navegador. ¡NO sigues con 'navigate' ni otras herramientas!
 - Secuencia para navegar o buscar: launch → navigate → [click/type] → read → [repetir].
-- Después de CADA acción (click, type), usa `control_local_browser(action='read')` para ver el estado actual de la página.
-- Si necesitas VER la página (aspecto visual, imágenes, gráficos, layout) y no basta el texto de 'read', usa `control_local_browser(action='look')`. Captura solo la web; añade value='full' para la página entera.
+- Después de CADA acción (click, type), usa `control_local_browser(action='read')` para ver el estado actual de la página. `read` extrae el texto limpio de la página viva (respeta la sesión y el login del usuario).
+- Para enfocar la lectura en algo concreto, pasa la pregunta en value: `control_local_browser(action='read', value='¿cuál es el precio?')`.
+- `read` es consciente de la visión: si la página tiene poco texto legible (es visual, una SPA, un gráfico o un mapa), captura su imagen y la analiza automáticamente, así que no necesitas elegir 'look' a mano en esos casos.
+- Si quieres forzar VER la página (aspecto visual, imágenes, layout) aunque tenga texto, usa `control_local_browser(action='look')`. Captura solo la web; añade value='full' para la página entera.
 - Para research profundo: `control_local_browser(action='research', target='tema')`.
 - Para clipear a Obsidian: `control_local_browser(action='clip')`.
 - Para traducir: `control_local_browser(action='translate', target='URL')`.
