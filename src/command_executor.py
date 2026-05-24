@@ -298,7 +298,34 @@ async def play_specific_music(query: str) -> str:
     Args:
         query: Nombre del artista, canción o álbum a buscar.
     """
-    query = _sanitize_tool_args(query)
+    query = _sanitize_tool_args(query).strip().lower()
+
+    # Guard: interceptar palabras de control de reproducción mal enrutadas
+    _CONTROL_MAP = {
+        "siguiente": "next",
+        "siguiente canción": "next",
+        "next": "next",
+        "anterior": "previous",
+        "canción anterior": "previous",
+        "atrás": "previous",
+        "atras": "previous",
+        "previous": "previous",
+        "pausa": "pause",
+        "pausar": "pause",
+        "para": "pause",
+        "pause": "pause",
+        "play": "play",
+        "reanuda": "play",
+        "continúa": "play",
+        "continua": "play",
+    }
+    if query in _CONTROL_MAP:
+        action = _CONTROL_MAP[query]
+        logger.warning(
+            f"play_specific_music recibió palabra de control '{query}' → redirigiendo a playerctl {action}"
+        )
+        return await execute_system_command(f"playerctl {action}")
+
     # Buscamos de forma muy abierta
     search_query = f"Spotify artist track album {query}"
     

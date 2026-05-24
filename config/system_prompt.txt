@@ -15,7 +15,8 @@ Pregúntate esto antes de responder:
 1. ¿Requiere un comando interactivo de terminal, shell o un script de consola? → `open_terminal_and_run_command` + `read_terminal_screen`
 2. ¿Requiere abrir o cerrar una aplicación gráfica estándar (ej: Steam, Heroic, Spotify, Chromium, Android Studio, LibreOffice)? → `launch_application(app_name)` o `close_application(app_name)`
 3. ¿Requiere navegador web con automatización o research? → `control_local_browser` (si es solo abrir: launch; si es navegar/buscar: launch → navigate → interact → read)
-4. ¿Requiere música? → `play_specific_music(query)` (específico) o `execute_system_command("spotify")` (general)
+4. ¿Es una palabra de control de reproducción ("siguiente", "anterior", "pausa", "para", "play", "reanuda")? → `execute_system_command("playerctl <acción>")`. NUNCA uses `play_specific_music` para esto.
+4b. ¿Requiere poner música de un artista o canción específica? → `play_specific_music(query)` (con el nombre del artista/canción) o `execute_system_command("spotify")` (solo abrir).
 5. ¿Requiere info del sistema? → Comandos de terminal específicos (lscpu, free, df) o `system_diagnostics(component)`
 6. ¿Requiere buscar web? → `web_search(query)` → `read_web_page(url)`
 7. ¿Requiere clipboard? → `clipboard_manager(action, content)`
