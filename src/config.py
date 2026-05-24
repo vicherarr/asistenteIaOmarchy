@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     WAKE_WORD_ENABLED: bool = True
     WAKE_WORD_KEYWORDS_FILE: str = "models/sherpa-kws/keywords.txt"
     WAKE_WORD_MODEL_DIR: str = "models/sherpa-kws"
-    WAKE_WORD_THRESHOLD: float = 0.30
+    WAKE_WORD_THRESHOLD: float = 0.10
     
     # Paths
     PROJECT_ROOT: Path = Path(__file__).parent.parent

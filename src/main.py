@@ -299,6 +299,10 @@ async def lifespan(app: FastAPI):
                 keywords_file=str(settings.PROJECT_ROOT / settings.WAKE_WORD_KEYWORDS_FILE),
                 on_wake_word_detected=on_wake_detected,
                 keywords_threshold=settings.WAKE_WORD_THRESHOLD,
+                keywords_score=2.0,
+                max_active_paths=8,
+                num_trailing_blanks=0,
+                input_gain=3.0,
                 provider=settings.LITERT_BACKEND if settings.LITERT_BACKEND in ("cpu", "cuda") else "cpu",
             )
             state.wake_word_listener.start()

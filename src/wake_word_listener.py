@@ -53,20 +53,22 @@ class SherpaWakeWordListener:
         num_threads: int = 1,
         keywords_threshold: float = 0.25,
         keywords_score: float = 1.0,
-        max_active_paths: int = 4,
-        num_trailing_blanks: int = 1,
+        max_active_paths: int = 8,
+        num_trailing_blanks: int = 0,
+        input_gain: float = 3.0,
     ) -> None:
         """
         Args:
             model_dir: Directorio con encoder.onnx, decoder.onnx, joiner.onnx, tokens.txt
             keywords_file: Ruta al archivo de keywords generado con sherpa-onnx-cli text2token
             on_wake_word_detected: Callback sin argumentos que se ejecuta al detectar la wake word
-            provider: "cpu" o "cuda"
+            provider: cpu o cuda
             num_threads: Hilos para ONNX Runtime (1 es suficiente para CPU)
-            keywords_threshold: Umbral de detección (0.0-1.0). Más alto = más estricto
+            keywords_threshold: Umbral de deteccion (0.0-1.0). Mas alto es mas estricto
             keywords_score: Boost score para los tokens de la keyword
-            max_active_paths: Beam width durante decoding
-            num_trailing_blanks: Blanks necesarios después de la keyword para confirmar detección
+            max_active_paths: Beam width durante decoding (mas alto capta senales debiles)
+            num_trailing_blanks: Blanks tras la keyword para confirmar deteccion (0 = inmediato)
+            input_gain: Factor de amplificacion de la senal de microfono (>1.0 boosted)
         """
         if not SHERPA_AVAILABLE:
             raise ImportError(
@@ -82,6 +84,7 @@ class SherpaWakeWordListener:
         self._keywords_score = keywords_score
         self._max_active_paths = max_active_paths
         self._num_trailing_blanks = num_trailing_blanks
+        self._input_gain = input_gain
 
         self._spotter: Optional[sherpa_onnx.KeywordSpotter] = None
         self._thread: Optional[threading.Thread] = None
@@ -155,6 +158,10 @@ class SherpaWakeWordListener:
                         logger.warning("Buffer overflow en micrófono wake word")
 
                     samples = samples.reshape(-1)
+                    # Amplificar la senal para captar voz suave
+                    if self._input_gain != 1.0:
+                        import numpy as np
+                        samples = np.clip(samples * self._input_gain, -1.0, 1.0)
                     stream.accept_waveform(sample_rate, samples)
 
                     while self._spotter.is_ready(stream):
