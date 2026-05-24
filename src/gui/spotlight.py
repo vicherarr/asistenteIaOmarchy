@@ -4,6 +4,7 @@ import httpx
 import os
 import signal
 import math
+from src.config import settings
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLineEdit, QVBoxLayout, QHBoxLayout,
     QWidget, QTextBrowser, QFrame, QPushButton
@@ -619,6 +620,23 @@ class SpotlightWindow(QMainWindow):
         self.pending_gui_request = False
         self._resetting = False
 
+        # Configurar URL base dinámica (soporte SSL/TLS)
+        protocol = "https" if (settings.SSL_KEYFILE and settings.SSL_CERTFILE) else "http"
+        self.base_url = f"{protocol}://{settings.HOST}:{settings.PORT}"
+
+    def get_http_client(self, timeout=None) -> httpx.AsyncClient:
+        """Retorna un cliente httpx.AsyncClient configurado con el token y TLS local."""
+        headers = {}
+        if settings.API_TOKEN:
+            headers["X-API-Token"] = settings.API_TOKEN
+            
+        verify = True
+        # Si se usan certificados autofirmados, desactivar verificación SSL en local
+        if settings.SSL_KEYFILE and settings.SSL_CERTFILE:
+            verify = False
+            
+        return httpx.AsyncClient(headers=headers, timeout=timeout, verify=verify)
+
     @Property(int)
     def windowHeight(self):
         return self._height
@@ -648,8 +666,8 @@ class SpotlightWindow(QMainWindow):
             # Feedback visual inmediato
             self.stop_button.set_state("inactive")
             
-            async with httpx.AsyncClient() as client:
-                await client.post("http://127.0.0.1:8765/cancel")
+            async with self.get_http_client() as client:
+                await client.post(f"{self.base_url}/cancel")
             self.input_field.setPlaceholderText("Interrumpido.")
             self.visualizer.set_state("inactive")
             QTimer.singleShot(2000, lambda: self.input_field.setPlaceholderText("Pregunta algo o habla..."))
@@ -680,8 +698,8 @@ class SpotlightWindow(QMainWindow):
             QTimer.singleShot(500, lambda: setattr(self, '_resetting', False))
             
             # Llamada al backend en segundo plano desacoplada de la UI
-            async with httpx.AsyncClient() as client:
-                await client.post("http://127.0.0.1:8765/reset")
+            async with self.get_http_client() as client:
+                await client.post(f"{self.base_url}/reset")
         except Exception as e:
             print(f"Error reiniciando: {e}")
             self._resetting = False
@@ -692,8 +710,8 @@ class SpotlightWindow(QMainWindow):
         
         while True:
             try:
-                async with httpx.AsyncClient(timeout=None) as client:
-                    async with client.stream("GET", "http://127.0.0.1:8765/status/events") as response:
+                async with self.get_http_client(timeout=None) as client:
+                    async with client.stream("GET", f"{self.base_url}/status/events") as response:
                         if response.status_code == 200:
                             async for line in response.aiter_lines():
                                 if line.startswith("data:"):
@@ -896,8 +914,8 @@ class SpotlightWindow(QMainWindow):
     async def update_last_response(self):
         """Muestra el historial completo de la conversación."""
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get("http://127.0.0.1:8765/history")
+            async with self.get_http_client() as client:
+                response = await client.get(f"{self.base_url}/history")
                 if response.status_code == 200:
                     data = response.json()
                     history = data.get("history", [])
@@ -953,8 +971,8 @@ class SpotlightWindow(QMainWindow):
 
         error_occurred = False
         try:
-            async with httpx.AsyncClient(timeout=None) as client:
-                async with client.stream("POST", "http://127.0.0.1:8765/transcribe/stream", json={"text": text}) as response:
+            async with self.get_http_client(timeout=None) as client:
+                async with client.stream("POST", f"{self.base_url}/transcribe/stream", json={"text": text}) as response:
                     if response.status_code == 200:
                         first_chunk = True
                         accumulated_response = ""
@@ -1033,7 +1051,10 @@ class SpotlightWindow(QMainWindow):
         elif event.key() == Qt.Key_G and event.modifiers() & Qt.ControlModifier:
             import webbrowser
             print("Abriendo interfaz de chat web en el navegador...", flush=True)
-            webbrowser.open("http://127.0.0.1:8765/chat")
+            url = f"{self.base_url}/chat"
+            if settings.API_TOKEN:
+                url += f"?token={settings.API_TOKEN}"
+            webbrowser.open(url)
             event.accept()
             return
             

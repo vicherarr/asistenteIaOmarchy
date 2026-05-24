@@ -253,10 +253,31 @@
         </footer>
     </main>
 
+    <!-- PANTALLA DE ACCESO DENEGADO -->
+    <div id="unauthorized-screen" class="hidden fixed inset-0 z-50 bg-base flex flex-col items-center justify-center text-center p-6 space-y-6">
+        <div class="w-20 h-20 rounded-3xl bg-red/10 border border-red/20 flex items-center justify-center shadow-lg shadow-red/10">
+            <i class="fa-solid fa-shield-halved text-red text-4xl animate-pulse"></i>
+        </div>
+        <div class="space-y-2 max-w-md">
+            <h2 class="font-outfit font-bold text-3xl text-text tracking-wide bg-gradient-to-r from-red to-mauve bg-clip-text text-transparent">Acceso Protegido</h2>
+            <p class="text-subtext text-sm leading-relaxed">
+                Esta interfaz está protegida de forma segura. Se requiere un **Token de Acceso** válido para interactuar con los servicios locales de AsistenteIA.
+            </p>
+        </div>
+        <div class="w-full max-w-sm bg-surface/30 border border-overlay/20 rounded-2xl p-5 space-y-4.5 shadow-xl">
+            <p class="text-xs text-subtext">Abre la interfaz desde Spotlight pulsando <kbd class="px-1.5 py-0.5 bg-surface border border-overlay/50 rounded text-[10px] font-mono text-text">Ctrl+G</kbd> o introduce el token manualmente:</p>
+            <input type="password" id="manual-token-input" placeholder="Introduce tu API Token..." class="w-full py-2.5 px-4 bg-surface/50 border border-overlay/40 rounded-xl outline-none text-text text-sm focus:border-lavender/80 transition-all text-center placeholder-subtext focus:ring-1 focus:ring-lavender/50">
+            <button onclick="saveManualToken()" class="w-full py-2.5 px-4 bg-lavender hover:bg-mauve text-mantle rounded-xl text-sm font-semibold transition-all active:scale-[0.98]">
+                Validar Acceso
+            </button>
+        </div>
+    </div>
+
     <!-- LÓGICA DE JAVASCRIPT -->
     <script>
         let isProcessing = false;
         let eventSource = null;
+        let apiToken = "";
 
         // Configuración inicial de Marked
         marked.setOptions({
@@ -272,16 +293,69 @@
 
         // Al iniciar la página
         window.addEventListener('DOMContentLoaded', () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            const tokenFromUrl = urlParams.get('token');
+            
+            if (tokenFromUrl) {
+                apiToken = tokenFromUrl;
+                sessionStorage.setItem('api_token', apiToken);
+                // Limpiar el token de la barra de navegación para evitar fugas en el historial
+                const cleanUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;
+                window.history.replaceState({}, document.title, cleanUrl);
+            } else {
+                apiToken = sessionStorage.getItem('api_token') || "";
+            }
+            
+            initApp();
+        });
+
+        // Inicializar aplicación
+        function initApp() {
             loadHistory();
             startSSEListener();
             document.getElementById('user-input').focus();
-        });
+        }
+
+        // Mostrar pantalla de no autorizado
+        function showUnauthorizedScreen() {
+            document.getElementById('unauthorized-screen').classList.remove('hidden');
+        }
+
+        // Ocultar pantalla de no autorizado
+        function hideUnauthorizedScreen() {
+            document.getElementById('unauthorized-screen').classList.add('hidden');
+        }
+
+        // Guardar token introducido manualmente
+        function saveManualToken() {
+            const input = document.getElementById('manual-token-input');
+            const token = input.value.trim();
+            if (token) {
+                apiToken = token;
+                sessionStorage.setItem('api_token', apiToken);
+                input.value = '';
+                hideUnauthorizedScreen();
+                initApp();
+            }
+        }
 
         // Cargar Historial del Servidor
         async function loadHistory() {
             try {
-                const response = await fetch("http://127.0.0.1:8765/history");
+                const headers = {};
+                if (apiToken) {
+                    headers["X-API-Token"] = apiToken;
+                }
+                
+                const response = await fetch("history", { headers });
+                
+                if (response.status === 401) {
+                    showUnauthorizedScreen();
+                    return;
+                }
+
                 if (response.ok) {
+                    hideUnauthorizedScreen();
                     const data = await response.json();
                     const history = data.history || [];
                     
@@ -307,7 +381,8 @@
                 eventSource.close();
             }
 
-            eventSource = new EventSource("http://127.0.0.1:8765/status/events");
+            const sseUrl = "status/events" + (apiToken ? "?token=" + encodeURIComponent(apiToken) : "");
+            eventSource = new EventSource(sseUrl);
 
             eventSource.onmessage = (event) => {
                 try {
@@ -511,13 +586,24 @@
             let accumulatedText = "";
 
             try {
-                const response = await fetch("http://127.0.0.1:8765/transcribe/stream", {
+                const headers = {
+                    "Content-Type": "application/json"
+                };
+                if (apiToken) {
+                    headers["X-API-Token"] = apiToken;
+                }
+
+                const response = await fetch("transcribe/stream", {
                     method: "POST",
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
+                    headers: headers,
                     body: JSON.stringify({ text: text })
                 });
+
+                if (response.status === 401) {
+                    showUnauthorizedScreen();
+                    assistantBubble.innerHTML = "<p class='text-red font-semibold'><i class='fa-solid fa-shield-halved'></i> Sesión no autorizada. Introduce un token válido.</p>";
+                    return;
+                }
 
                 if (response.ok) {
                     const reader = response.body.getReader();
@@ -572,7 +658,21 @@
         async function newConversation() {
             if (confirm("¿Estás seguro de que quieres limpiar la conversación?")) {
                 try {
-                    const response = await fetch("http://127.0.0.1:8765/reset", { method: "POST" });
+                    const headers = {};
+                    if (apiToken) {
+                        headers["X-API-Token"] = apiToken;
+                    }
+
+                    const response = await fetch("reset", { 
+                        method: "POST",
+                        headers: headers
+                    });
+
+                    if (response.status === 401) {
+                        showUnauthorizedScreen();
+                        return;
+                    }
+
                     if (response.ok) {
                         const container = document.getElementById('messages-container');
                         container.innerHTML = '';
@@ -605,6 +705,7 @@
             chatHistory.scrollTop = chatHistory.scrollHeight;
         }
 
+        // Escapar HTML para mensajes del usuario
         function escapeHTML(str) {
             return str
                 .replace(/&/g, "&amp;")

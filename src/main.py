@@ -18,6 +18,7 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
+from fastapi.security import APIKeyHeader, APIKeyQuery
 from pydantic import BaseModel
 
 from src.audio_manager import AudioManager
@@ -179,6 +180,29 @@ class AppState:
 def get_app_state(request: Request) -> AppState:
     """Dependencia de FastAPI para inyectar el estado."""
     return request.app.state.app_state
+
+
+api_key_header = APIKeyHeader(name="X-API-Token", auto_error=False)
+api_key_query = APIKeyQuery(name="token", auto_error=False)
+
+
+async def verify_token(
+    token_header: Optional[str] = Depends(api_key_header),
+    token_query: Optional[str] = Depends(api_key_query)
+):
+    """Dependencia para verificar el token de acceso."""
+    expected_token = settings.API_TOKEN
+    if not expected_token:
+        # Si no hay token configurado en .env, permitimos acceso libre
+        return
+
+    if token_header == expected_token or token_query == expected_token:
+        return
+
+    raise HTTPException(
+        status_code=401,
+        detail="No autorizado: Token de acceso ausente o inválido."
+    )
 
 
 class TranscriptionRequest(BaseModel):
@@ -386,7 +410,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-@app.post("/transcribe/stream")
+@app.post("/transcribe/stream", dependencies=[Depends(verify_token)])
 async def handle_transcription_stream(
     request: TranscriptionRequest,
     state: AppState = Depends(get_app_state)
@@ -425,7 +449,7 @@ async def handle_transcription_stream(
     return StreamingResponse(stream_generator(), media_type="text/plain")
 
 
-@app.post("/transcribe", response_model=TranscriptionResponse)
+@app.post("/transcribe", response_model=TranscriptionResponse, dependencies=[Depends(verify_token)])
 async def handle_transcription(
     request: TranscriptionRequest,
     state: AppState = Depends(get_app_state)
@@ -465,7 +489,7 @@ async def handle_transcription(
             state.processing = False
 
 
-@app.post("/listen/toggle")
+@app.post("/listen/toggle", dependencies=[Depends(verify_token)])
 async def toggle_listen(state: AppState = Depends(get_app_state)):
     """Alterna el estado de grabación del micrófono."""
     logger.info(
@@ -554,7 +578,7 @@ async def toggle_listen(state: AppState = Depends(get_app_state)):
         return {"status": "listening"}
 
 
-@app.post("/cancel")
+@app.post("/cancel", dependencies=[Depends(verify_token)])
 async def cancel_processing(state: AppState = Depends(get_app_state)):
     """Cancela cualquier procesamiento en curso y detiene TTS."""
     cancelled = False
@@ -579,7 +603,7 @@ async def cancel_processing(state: AppState = Depends(get_app_state)):
     return {"status": "cancelled", "was_processing": cancelled}
 
 
-@app.get("/status", response_model=StatusResponse)
+@app.get("/status", response_model=StatusResponse, dependencies=[Depends(verify_token)])
 async def get_status(state: AppState = Depends(get_app_state)):
     """Estado actual del asistente."""
     litert_ok = state.litert_client.engine is not None
@@ -616,7 +640,7 @@ async def get_status(state: AppState = Depends(get_app_state)):
     )
 
 
-@app.get("/status/events")
+@app.get("/status/events", dependencies=[Depends(verify_token)])
 async def status_events(request: Request, state: AppState = Depends(get_app_state)):
     """Canal de eventos en tiempo real (SSE) para el estado del asistente."""
     import json
@@ -721,7 +745,7 @@ async def health_check(state: AppState = Depends(get_app_state)):
 
 
 
-@app.get("/history")
+@app.get("/history", dependencies=[Depends(verify_token)])
 async def get_history(state: AppState = Depends(get_app_state)):
     """Devuelve el historial completo o el último mensaje."""
     return {
@@ -730,7 +754,7 @@ async def get_history(state: AppState = Depends(get_app_state)):
     }
 
 
-@app.post("/reset")
+@app.post("/reset", dependencies=[Depends(verify_token)])
 async def reset_conversation(state: AppState = Depends(get_app_state)):
     """Reinicia el historial de conversación y aborta cualquier procesamiento o TTS activo."""
     if state.current_task and not state.current_task.done():
@@ -755,7 +779,7 @@ async def reset_conversation(state: AppState = Depends(get_app_state)):
     return {"status": "reset", "message": "Historial de conversación y procesos del backend reiniciados"}
 
 
-@app.post("/audio/configure")
+@app.post("/audio/configure", dependencies=[Depends(verify_token)])
 async def configure_audio(state: AppState = Depends(get_app_state)):
     """Reconfigura dispositivos de audio Bluetooth."""
     if state.audio_manager:
@@ -770,9 +794,18 @@ async def configure_audio(state: AppState = Depends(get_app_state)):
 
 if __name__ == "__main__":
     import uvicorn
+    
+    ssl_keyfile = settings.SSL_KEYFILE if settings.SSL_KEYFILE and os.path.exists(settings.SSL_KEYFILE) else None
+    ssl_certfile = settings.SSL_CERTFILE if settings.SSL_CERTFILE and os.path.exists(settings.SSL_CERTFILE) else None
+    
+    if ssl_keyfile and ssl_certfile:
+        logger.info(f"Iniciando servidor en modo seguro (HTTPS) con certificado autofirmado.")
+    
     uvicorn.run(
         "src.main:app",
         host=settings.HOST,
         port=settings.PORT,
         log_level="info" if not settings.DEBUG else "debug",
+        ssl_keyfile=ssl_keyfile,
+        ssl_certfile=ssl_certfile,
     )

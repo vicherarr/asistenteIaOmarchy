@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     PORT: int = 8765
     DEBUG: bool = False
     
+    # Seguridad y Cifrado
+    API_TOKEN: Optional[str] = None
+    SSL_KEYFILE: Optional[str] = None
+    SSL_CERTFILE: Optional[str] = None
+    
     # LiteRT
     LITERT_MODEL_PATH: str = "models/gemma-4-E4B-it.litertlm"
     LITERT_BACKEND: str = "gpu"

@@ -31,3 +31,6 @@ models/
 /test_*.py
 /test_*.txt
 /wget-log
+
+# Certificados locales
+config/certs/
