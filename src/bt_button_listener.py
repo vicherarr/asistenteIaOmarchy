@@ -101,14 +101,14 @@ class BtButtonListener:
             logger.warning("BtButtonListener ya está en ejecución.")
             return
 
+        self._running = True
         self._device = self._find_device()
         if not self._device:
-            raise BtButtonListenerError(
-                f"No se encontró dispositivo Bluetooth que coincida con {self._filter}. "
-                "Asegúrate de que esté emparejado y conectado."
+            logger.warning(
+                f"No se encontró dispositivo Bluetooth {self._filter} al arrancar. "
+                "El listener buscará y se conectará automáticamente en segundo plano cuando esté disponible."
             )
 
-        self._running = True
         self._task = asyncio.create_task(self._read_loop())
         logger.info("BtButtonListener iniciado.")
 
@@ -134,28 +134,49 @@ class BtButtonListener:
         logger.info("BtButtonListener detenido.")
 
     async def _read_loop(self) -> None:
-        """Loop principal de lectura de eventos evdev."""
-        if not self._device:
-            return
+        """Loop principal de lectura de eventos evdev con auto-reconexión."""
+        while self._running:
+            if not self._device:
+                self._device = self._find_device()
+                if not self._device:
+                    await asyncio.sleep(5.0)
+                    continue
+                else:
+                    logger.info(f"Dispositivo BT re-conectado y abierto: {self._device.name} en {self._device.path}")
 
-        try:
-            if self._grab:
-                self._device.grab()
-                logger.info("Grab exclusivo activado en dispositivo evdev.")
-        except Exception as e:
-            logger.warning(f"No se pudo hacer grab exclusivo: {e}")
+            try:
+                if self._grab:
+                    try:
+                        self._device.grab()
+                        logger.info("Grab exclusivo activado en dispositivo evdev.")
+                    except Exception as e:
+                        logger.warning(f"No se pudo hacer grab exclusivo: {e}")
 
-        # Leer eventos de forma asíncrona usando el loop integrado de evdev
-        try:
-            async for event in self._device.async_read_loop():
-                if not self._running:
-                    break
-                if event.type == ecodes.EV_KEY and event.value == 1:  # Solo KEY_PRESS
-                    self._handle_key(event.code)
-        except asyncio.CancelledError:
-            logger.debug("Loop de lectura cancelado.")
-        except Exception as e:
-            logger.error(f"Error leyendo eventos evdev: {e}")
+                # Leer eventos de forma asíncrona usando el loop integrado de evdev
+                async for event in self._device.async_read_loop():
+                    if not self._running:
+                        break
+                    if event.type == ecodes.EV_KEY and event.value == 1:  # Solo KEY_PRESS
+                        self._handle_key(event.code)
+            except asyncio.CancelledError:
+                logger.debug("Loop de lectura cancelado.")
+                break
+            except Exception as e:
+                logger.error(f"Error leyendo eventos evdev: {e}")
+                # Limpiar el dispositivo roto
+                if self._device:
+                    try:
+                        self._device.ungrab()
+                    except Exception:
+                        pass
+                    try:
+                        self._device.close()
+                    except Exception:
+                        pass
+                    self._device = None
+                
+                # Esperar antes de reintentar buscar el dispositivo de nuevo
+                await asyncio.sleep(3.0)
 
     def _handle_key(self, code: int) -> None:
         """Mapea códigos de tecla a callbacks correspondientes."""
