@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     # LiteRT
     LITERT_MODEL_PATH: str = "models/gemma-4-E4B-it.litertlm"
     LITERT_BACKEND: str = "gpu"
+    LITERT_TIMEOUT: float = 35.0
 
     # Assistant
     MAX_HISTORY: int = 10

@@ -191,7 +191,7 @@ class LiteRTClient:
                                 elif hasattr(chunk, "text"):
                                     text_parts.append(chunk.text)
                                 
-                                text_to_send = "".join(text_parts)
+                                text_to_send = "".join(text_parts).replace("\u2581", " ")
                                 if text_to_send:
                                     loop.call_soon_threadsafe(queue.put_nowait, ("text", text_to_send))
                             break  # Éxito
@@ -213,7 +213,27 @@ class LiteRTClient:
             inference_task = asyncio.create_task(asyncio.to_thread(run_inference))
             try:
                 while True:
-                    msg_type, val = await queue.get()
+                    try:
+                        msg_type, val = await asyncio.wait_for(queue.get(), timeout=settings.LITERT_TIMEOUT)
+                    except asyncio.TimeoutError:
+                        logger.critical(
+                            f"¡TIMEOUT CRÍTICO! LiteRT chat_stream superó el límite de {settings.LITERT_TIMEOUT}s "
+                            "sin emitir respuesta. El modelo LLM parece colgado ('cao'). Reiniciando el servicio..."
+                        )
+                        try:
+                            import subprocess
+                            subprocess.Popen(
+                                ["notify-send", "AsistenteIA - ERROR CRÍTICO", "El modelo LLM se ha bloqueado. Reiniciando servicio..."],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL
+                            )
+                        except Exception as notify_err:
+                            logger.warning(f"No se pudo enviar notificación de reinicio: {notify_err}")
+                        
+                        import os
+                        os._exit(1)
+                        raise RuntimeError("LiteRT chat_stream timed out")
+
                     if msg_type == "text":
                         yield val
                     elif msg_type == "done":
@@ -263,16 +283,38 @@ class LiteRTClient:
                     sync_tools.append(tool)
 
         # Asegurar que solo una sesión de inferencia corre a la vez
-        async with self._lock:
-            # Ejecutamos la inferencia en un hilo separado para no bloquear el event loop
-            return await asyncio.to_thread(
-                self._chat_sync, 
-                prompt, 
-                sync_tools, 
-                system_prompt, 
-                history,
-                image_path
+        async def _run_chat_under_lock():
+            async with self._lock:
+                # Ejecutamos la inferencia en un hilo separado para no bloquear el event loop
+                return await asyncio.to_thread(
+                    self._chat_sync, 
+                    prompt, 
+                    sync_tools, 
+                    system_prompt, 
+                    history,
+                    image_path
+                )
+
+        try:
+            return await asyncio.wait_for(_run_chat_under_lock(), timeout=settings.LITERT_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.critical(
+                f"¡TIMEOUT CRÍTICO! La inferencia de LiteRT chat() superó el límite de {settings.LITERT_TIMEOUT}s. "
+                "El modelo LLM parece colgado ('cao'). Reiniciando el servicio..."
             )
+            try:
+                import subprocess
+                subprocess.Popen(
+                    ["notify-send", "AsistenteIA - ERROR CRÍTICO", "El modelo LLM se ha bloqueado. Reiniciando servicio..."],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+            except Exception as notify_err:
+                logger.warning(f"No se pudo enviar notificación de reinicio: {notify_err}")
+            
+            import os
+            os._exit(1)
+            raise RuntimeError("LiteRT chat timed out")
 
     def _chat_sync(
         self, 
@@ -367,15 +409,15 @@ class LiteRTClient:
                             for part in response.get("content", []):
                                 if part.get("type") == "text":
                                     text += part.get("text", "")
-                            return text.strip()
+                            return text.replace("\u2581", " ").strip()
                         
                         if hasattr(response, "text"):
-                            return response.text
+                            return response.text.replace("\u2581", " ")
                         
                         try:
-                            return response["content"][0]["text"]
+                            return response["content"][0]["text"].replace("\u2581", " ")
                         except:
-                            return str(response)
+                            return str(response).replace("\u2581", " ")
                 except Exception as e:
                     err_str = str(e)
                     if "Failed to parse tool calls" in err_str or "INVALID_ARGUMENT" in err_str:

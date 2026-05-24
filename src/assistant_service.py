@@ -305,7 +305,7 @@ class AssistantService:
                             await queue_text.put(clean)
                 
                 # Filtrar tool calls antes de yield al cliente
-                clean_chunk = self._clean_tool_calls(chunk)
+                clean_chunk = self._clean_tool_calls(chunk, strip=False)
                 if clean_chunk:
                     yield clean_chunk
 
@@ -462,7 +462,7 @@ class AssistantService:
             await queue_text.put(None)
             # Los workers continúan en background reproduciendo audio pendiente
 
-    def _clean_tool_calls(self, text: str) -> str:
+    def _clean_tool_calls(self, text: str, strip: bool = True) -> str:
         """Elimina tokens de tool call del texto visible al usuario.
         
         LiteRT genera tool calls como: <|tool_call|>call:func{args}<|tool_call|>
@@ -471,7 +471,7 @@ class AssistantService:
         cleaned = re.sub(r'<\|tool_call\|>.*?<\|tool_call\|>', '', text, flags=re.DOTALL)
         cleaned = re.sub(r'<\|tool_call\|>.*', '', cleaned, flags=re.DOTALL)
         cleaned = re.sub(r'.*<\|tool_call\|>', '', cleaned, flags=re.DOTALL)
-        return cleaned.strip()
+        return cleaned.strip() if strip else cleaned
 
     async def process_transcription(
         self,
