@@ -308,6 +308,8 @@ async def web_search(query: str) -> str:
     """
     Busca información en internet (DuckDuckGo).
     Usa esto para responder preguntas sobre temas actuales, noticias o documentación técnica.
+    Devuelve resultados con URLs reales. Para abrir o leer una de esas páginas, copia la URL
+    EXACTA del resultado; NUNCA inventes ni adivines direcciones a partir del tema.
     """
     query = _sanitize_tool_args(query)
     try:
@@ -549,9 +551,10 @@ async def read_web_page(url: str) -> str:
     """
     Descarga y extrae el texto principal de una página web (limpio de anuncios y menús).
     Úsala después de web_search para leer el contenido profundo de un artículo o documentación.
-    
+
     Args:
-        url: La dirección web completa a leer.
+        url: La dirección web completa a leer. DEBE ser una URL literal de los resultados de
+             web_search; nunca inventes ni adivines la dirección.
     """
     url = _sanitize_tool_args(url)
     if not url.startswith("http"):
@@ -945,7 +948,9 @@ async def control_local_browser(action: str, target: str = "", value: str = "") 
     Args:
         action: La acción a realizar:
             'launch': Solo inicia el navegador si no está abierto.
-            'navigate': Va a una URL específica (ej. target='https://google.com').
+            'navigate': Va a una URL específica (ej. target='https://google.com'). La URL debe
+                    ser literal: si no la conoces, busca antes con web_search y usa la URL de un
+                    resultado. NUNCA inventes ni adivines direcciones.
             'click': Hace clic en un elemento web usando un selector CSS (ej. target='button.submit').
             'type': Escribe texto en un campo usando un selector CSS (ej. target='input#search', value='recetas de cocina').
             'read': Lee el título y el texto visible de la pestaña activa actual.
