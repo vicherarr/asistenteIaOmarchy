@@ -21,7 +21,7 @@ class AudioRecorder:
         # Parámetros VAD
         self._sample_rate = 16000
         self._frame_duration_ms = 30  # ms
-        self._silence_timeout = 2.0   # Segundos de silencio para cortar
+        self._silence_timeout = 1.5   # Segundos de silencio para cortar
 
     def start_recording(self, source_id: Optional[str] = None, on_silence_callback: Optional[Callable] = None) -> Path:
         """Inicia la grabación y un monitor VAD en segundo plano."""
