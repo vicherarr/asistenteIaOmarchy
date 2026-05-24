@@ -199,7 +199,7 @@ class LiteRTClient:
                         err_str = str(e)
                         if "Failed to parse tool calls" in err_str or "INVALID_ARGUMENT" in err_str:
                             if attempt == 0:
-                                logger.warning("Tool call parsing failed, retrying without tools...")
+                                logger.warning(f"Tool call parsing failed ({e}), retrying without tools...", exc_info=True)
                                 tools_to_use = None
                                 continue
                         raise
@@ -422,7 +422,7 @@ class LiteRTClient:
                     err_str = str(e)
                     if "Failed to parse tool calls" in err_str or "INVALID_ARGUMENT" in err_str:
                         if attempt == 0:
-                            logger.warning("Tool call parsing failed in chat, retrying without tools...")
+                            logger.warning(f"Tool call parsing failed in chat ({e}), retrying without tools...", exc_info=True)
                             tools_to_use = None
                             continue
                     raise

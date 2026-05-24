@@ -76,6 +76,9 @@ class CommandExecutor:
         "journalctl",
         "dmesg",
         "pgrep",
+        "pkill",
+        "killall",
+        "kill",
         "dbus-send",
         "ls",
         "cd",
@@ -1134,6 +1137,286 @@ async def launch_application(app_name: str) -> str:
     except Exception as e:
         logger.error(f"Error en fallback de lanzamiento para '{matched_name}': {e}")
         return f"No se pudo iniciar la aplicación '{matched_name}'. Error: {e}"
+
+
+async def close_application(app_name: str) -> str:
+    """
+    Busca una aplicacion activa o proceso por su nombre y la cierra de forma segura.
+    Usa esta herramienta cuando el usuario pida cerrar, detener o salir de una aplicacion como Steam o Chromium.
+    
+    Args:
+        app_name: Nombre de la aplicacion a cerrar.
+    """
+    import os
+    import shutil
+    import json
+    import signal
+    import re
+    import shlex
+    from pathlib import Path
+    
+    app_name = _sanitize_tool_args(app_name)
+    query = app_name.lower().strip()
+    
+    if not query:
+        return "Error: Debes proporcionar el nombre de una aplicación para cerrar."
+        
+    query_norm = re.sub(r'[^a-z0-9]', '', query)
+    query_words = [w for w in re.split(r'[^a-z0-9]', query) if w]
+    
+    # 1. Buscar la aplicación en los archivos .desktop para extraer metadatos de lanzamiento (WMClass, Binario Exec)
+    search_dirs = [
+        Path(os.path.expanduser("~/.local/share/applications")),
+        Path("/usr/share/applications"),
+        Path("/usr/local/share/applications"),
+        Path("/var/lib/flatpak/exports/share/applications"),
+        Path(os.path.expanduser("~/.local/share/flatpak/exports/share/applications"))
+    ]
+    
+    desktop_files = []
+    for d in search_dirs:
+        if d.exists() and d.is_dir():
+            try:
+                files = await asyncio.to_thread(lambda dir_path: list(dir_path.glob("*.desktop")), d)
+                desktop_files.extend(files)
+            except Exception as e:
+                logger.warning(f"Error listando archivos desktop en {d}: {e}")
+                
+    def parse_desktop_file(filepath: Path) -> Optional[dict]:
+        try:
+            content = filepath.read_text(errors="ignore")
+            entry = {}
+            in_desktop_entry = False
+            for line in content.splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line == "[Desktop Entry]":
+                    in_desktop_entry = True
+                    continue
+                elif line.startswith("[") and line.endswith("]"):
+                    in_desktop_entry = False
+                    continue
+                if in_desktop_entry and "=" in line:
+                    key, val = line.split("=", 1)
+                    entry[key.strip()] = val.strip()
+            return entry
+        except Exception:
+            return None
+            
+    matches = []
+    for filepath in desktop_files:
+        entry = await asyncio.to_thread(parse_desktop_file, filepath)
+        if not entry:
+            continue
+            
+        name = entry.get("Name", "")
+        exec_cmd = entry.get("Exec", "")
+        no_display = entry.get("NoDisplay", "false").lower() == "true"
+        hidden = entry.get("Hidden", "false").lower() == "true"
+        
+        if no_display or hidden or not name or not exec_cmd:
+            continue
+            
+        name_lower = name.lower()
+        file_lower = filepath.name.lower()
+        
+        score = 0
+        if query == name_lower:
+            score = 100
+        elif name_lower.startswith(query):
+            score = 80
+        elif query in name_lower:
+            score = 50
+        elif query in file_lower:
+            score = 30
+            
+        if score > 0:
+            matches.append((score, name, exec_cmd, filepath, entry))
+            
+    # Extraer tokens del mejor archivo .desktop coincidente (si existe)
+    wm_class = ""
+    exec_binary = ""
+    desktop_id = ""
+    app_name_parsed = ""
+    
+    if matches:
+        matches.sort(key=lambda x: x[0], reverse=True)
+        best_match = matches[0]
+        matched_name = best_match[1]
+        exec_cmd = best_match[2]
+        filepath = best_match[3]
+        entry = best_match[4]
+        
+        wm_class = entry.get("StartupWMClass", "").lower()
+        desktop_id = filepath.stem.lower()
+        app_name_parsed = matched_name.lower()
+        
+        cleaned_exec = re.sub(r'%[fFuUkicd]', '', exec_cmd).strip()
+        if cleaned_exec:
+            try:
+                args = shlex.split(cleaned_exec)
+                if args:
+                    exec_binary = Path(args[0]).name.lower()
+            except Exception:
+                pass
+                
+    # Compilar un set de tokens de búsqueda
+    search_tokens = {query, query_norm}
+    if wm_class:
+        search_tokens.add(wm_class.lower())
+        search_tokens.add(re.sub(r'[^a-z0-9]', '', wm_class.lower()))
+    if exec_binary:
+        search_tokens.add(exec_binary.lower())
+        search_tokens.add(re.sub(r'[^a-z0-9]', '', exec_binary.lower()))
+        if "." in exec_binary:
+            search_tokens.add(exec_binary.split(".")[0])
+    if desktop_id:
+        search_tokens.add(desktop_id.lower())
+        search_tokens.add(re.sub(r'[^a-z0-9]', '', desktop_id.lower()))
+    if app_name_parsed:
+        search_tokens.add(app_name_parsed.lower())
+        search_tokens.add(re.sub(r'[^a-z0-9]', '', app_name_parsed.lower()))
+        
+    search_tokens = {t for t in search_tokens if t and len(t) > 2}
+    
+    closed_graphical = False
+    closed_pids = []
+    matched_app_name = ""
+    
+    # 2. Intentar cerrarla como ventana gráfica en Hyprland
+    if shutil.which("hyprctl"):
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "hyprctl", "clients", "-j",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode == 0:
+                clients = json.loads(stdout.decode(errors="ignore"))
+                graphical_matches = []
+                
+                for client in clients:
+                    c_class = client.get("class", "").lower()
+                    c_title = client.get("title", "").lower()
+                    c_init_class = client.get("initialClass", "").lower()
+                    c_init_title = client.get("initialTitle", "").lower()
+                    address = client.get("address", "")
+                    pid = client.get("pid", 0)
+                    
+                    if not address:
+                        continue
+                        
+                    c_class_norm = re.sub(r'[^a-z0-9]', '', c_class)
+                    c_init_class_norm = re.sub(r'[^a-z0-9]', '', c_init_class)
+                    
+                    score = 0
+                    if any(t == c_class or t == c_init_class or t == c_class_norm or t == c_init_class_norm for t in search_tokens):
+                        score = 100
+                    elif any(t in c_class or t in c_init_class or c_class in t or c_init_class in t for t in search_tokens):
+                        score = 80
+                    elif any(t in c_title or t in c_init_title for t in search_tokens):
+                        score = 60
+                    elif query_words and all(w in c_title or w in c_init_title for w in query_words):
+                        score = 40
+                        
+                    if score > 0:
+                        graphical_matches.append((score, client.get("class", "Aplicación"), address, pid))
+                        
+                if graphical_matches:
+                    graphical_matches.sort(key=lambda x: x[0], reverse=True)
+                    best_match = graphical_matches[0]
+                    matched_app_name = best_match[1]
+                    
+                    target_class = best_match[1].lower()
+                    windows_to_close = [m for m in graphical_matches if m[1].lower() == target_class]
+                    
+                    logger.info(f"Cerrando {len(windows_to_close)} ventanas de clase '{best_match[1]}' vía Hyprland")
+                    for _, _, address, pid in windows_to_close:
+                        close_cmd = f"hyprctl dispatch closewindow address:{address}"
+                        proc = await asyncio.create_subprocess_shell(
+                            close_cmd,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE
+                        )
+                        await proc.communicate()
+                        closed_graphical = True
+                        if pid > 0:
+                            closed_pids.append(pid)
+        except Exception as e:
+            logger.error(f"Error cerrando ventanas vía Hyprland para '{app_name}': {e}")
+
+    # 3. Fallback/Complemento: Buscar y terminar todos los procesos coincidentes en /proc
+    own_pid = os.getpid()
+    
+    def scan_proc_for_tokens() -> list[tuple[int, str]]:
+        found = []
+        for path in Path("/proc").glob("[0-9]*"):
+            try:
+                pid = int(path.name)
+                if pid == own_pid:
+                    continue
+                    
+                comm_path = path / "comm"
+                comm = ""
+                if comm_path.exists():
+                    comm = comm_path.read_text(errors="ignore").strip().lower()
+                
+                cmdline_path = path / "cmdline"
+                cmdline = ""
+                if cmdline_path.exists():
+                    cmdline = cmdline_path.read_text(errors="ignore").replace("\x00", " ").lower()
+                
+                if "asistenteia" in cmdline or "antigravity" in cmdline:
+                    continue
+                
+                comm_norm = re.sub(r'[^a-z0-9]', '', comm)
+                cmdline_norm = re.sub(r'[^a-z0-9]', '', cmdline)
+                
+                matched = False
+                # Comprobar tokens del Exec o StartupWMClass en comm/cmdline
+                if any(t == comm or t == comm_norm or t in cmdline for t in search_tokens if len(t) > 2):
+                    matched = True
+                # Comprobar palabras de consulta en comm/cmdline
+                elif query_words and all(w in comm or w in cmdline for w in query_words):
+                    matched = True
+                
+                if matched:
+                    name = comm if comm else (cmdline.split()[0] if cmdline.strip() else "proceso")
+                    found.append((pid, name))
+            except (ValueError, OSError, PermissionError):
+                continue
+        return found
+
+    try:
+        proc_matches = await asyncio.to_thread(scan_proc_for_tokens)
+        if proc_matches:
+            logger.info(f"Procesos a cerrar para '{app_name}': {proc_matches}")
+            killed_names = set()
+            for pid, name in proc_matches:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                    closed_pids.append(pid)
+                    killed_names.add(name)
+                except OSError:
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                        closed_pids.append(pid)
+                        killed_names.add(name)
+                    except OSError:
+                        pass
+            if closed_pids:
+                apps_list = ", ".join(killed_names)
+                return f"He cerrado los procesos de '{apps_list}' (PIDs: {closed_pids})."
+    except Exception as e:
+        logger.error(f"Error terminando procesos para '{app_name}': {e}")
+        
+    if closed_graphical:
+        return f"He cerrado las ventanas de '{matched_app_name}' de forma gráfica."
+        
+    return f"No encontré ninguna aplicación activa o proceso en ejecución para '{app_name}'."
 
 
 
