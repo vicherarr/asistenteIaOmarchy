@@ -75,8 +75,8 @@ async def main():
         print(f"✅ Escuchando dispositivo: {listener.device_name}")
         print("   Esperando eventos...\n")
 
-        # Esperar 30 segundos o hasta interrupción
-        await asyncio.sleep(30)
+        # Esperar 120 segundos o hasta interrupción
+        await asyncio.sleep(120)
 
     except KeyboardInterrupt:
         print("\n\n🛑 Interrumpido por el usuario.")

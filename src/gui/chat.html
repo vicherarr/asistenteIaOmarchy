@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="es" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AsistenteIA Chat</title>
+    
+    <!-- Google Fonts: Inter & Outfit -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- FontAwesome para Iconos Premium -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Marked.js para Renderizar Markdown -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    
+    <!-- Highlight.js para Sintaxis de Código Premium -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+    
+    <!-- Configuración del tema Catppuccin Macchiato en Tailwind -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        base: '#24273a',     // Fondo principal
+                        mantle: '#1e2030',   // Fondo secundario / sidebar
+                        crust: '#181926',    // Detalles oscuros
+                        text: '#cdd6f4',     // Texto principal
+                        subtext: '#a5adcb',  // Subtexto
+                        lavender: '#b4befe', // Acento primario
+                        blue: '#89b4fa',     // Links / Acento
+                        mauve: '#cba6f7',    // Visuales / Enfoque
+                        red: '#f38ba8',      // Errores / Alertas
+                        green: '#a6e3a1',    // Éxitos
+                        surface: '#363a4f',  // Tarjetas / Burbujas
+                        overlay: '#494d64'   // Bordes / Inputs
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        outfit: ['Outfit', 'sans-serif']
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        /* Estilos personalizados para scroll y animaciones */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1e2030;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #494d64;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #b4befe;
+        }
+        
+        /* Efecto cursor de escritura */
+        .typing-cursor::after {
+            content: "▊";
+            animation: blink 0.8s infinite;
+            color: #b4befe;
+        }
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+
+        /* Estilizado fino de markdown renderizado */
+        .markdown-content h1 { font-size: 1.5rem; font-weight: 700; margin: 1rem 0 0.5rem; color: #b4befe; font-family: 'Outfit', sans-serif; }
+        .markdown-content h2 { font-size: 1.25rem; font-weight: 600; margin: 0.8rem 0 0.4rem; color: #89b4fa; font-family: 'Outfit', sans-serif; }
+        .markdown-content h3 { font-size: 1.1rem; font-weight: 600; margin: 0.6rem 0 0.3rem; color: #cba6f7; }
+        .markdown-content p { margin-bottom: 0.75rem; line-height: 1.6; }
+        .markdown-content ul { list-style-type: disc; padding-left: 1.5rem; margin-bottom: 0.75rem; }
+        .markdown-content ol { list-style-type: decimal; padding-left: 1.5rem; margin-bottom: 0.75rem; }
+        .markdown-content li { margin-bottom: 0.25rem; }
+        .markdown-content code { background-color: #181926; padding: 2px 5px; border-radius: 4px; font-family: monospace; font-size: 0.9em; color: #f38ba8; }
+        .markdown-content pre { background-color: #181926; padding: 1rem; border-radius: 8px; overflow-x: auto; margin: 1rem 0; border: 1px solid rgba(180, 190, 254, 0.1); position: relative; }
+        .markdown-content pre code { background-color: transparent; padding: 0; border-radius: 0; color: inherit; font-size: 0.875rem; }
+        .markdown-content blockquote { border-left: 4px solid #b4befe; padding-left: 1rem; color: #a5adcb; font-style: italic; margin: 1rem 0; }
+        .markdown-content table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+        .markdown-content th, .markdown-content td { border: 1px solid #494d64; padding: 8px 12px; text-align: left; }
+        .markdown-content th { background-color: #1e2030; color: #b4befe; }
+        .markdown-content a { color: #89b4fa; text-decoration: underline; transition: color 0.2s; }
+        .markdown-content a:hover { color: #b4befe; }
+    </style>
+</head>
+<body class="h-full flex bg-base text-text font-sans overflow-hidden">
+
+    <!-- BARRA LATERAL (Sidebar) -->
+    <aside id="sidebar" class="fixed inset-y-0 left-0 z-40 w-64 bg-mantle border-r border-overlay/30 flex flex-col transition-transform -translate-x-full md:translate-x-0 md:static md:flex-shrink-0">
+        
+        <!-- Header del Sidebar -->
+        <div class="p-4 border-b border-overlay/20 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-lavender to-mauve flex items-center justify-center shadow-lg shadow-lavender/20">
+                    <i class="fa-solid fa-brain text-mantle text-lg"></i>
+                </div>
+                <h1 class="font-outfit font-bold text-lg tracking-wide bg-gradient-to-r from-lavender to-blue bg-clip-text text-transparent">AsistenteIA</h1>
+            </div>
+            <!-- Botón cerrar móvil -->
+            <button onclick="toggleMobileSidebar()" class="md:hidden text-subtext hover:text-text p-1">
+                <i class="fa-solid fa-xmark text-lg"></i>
+            </button>
+        </div>
+
+        <!-- Botón Nuevo Chat -->
+        <div class="p-3">
+            <button onclick="newConversation()" class="w-full py-2.5 px-4 bg-surface hover:bg-overlay/50 border border-overlay/40 hover:border-lavender/60 rounded-xl flex items-center justify-center gap-2.5 text-sm font-semibold transition-all duration-300 shadow-sm text-lavender active:scale-[0.98]">
+                <i class="fa-solid fa-plus text-xs"></i>
+                Nueva Conversación
+            </button>
+        </div>
+
+        <!-- Indicadores de Estado del Sistema -->
+        <div class="flex-1 overflow-y-auto p-3 space-y-4">
+            <div class="bg-surface/30 border border-overlay/10 rounded-xl p-3.5 space-y-3">
+                <h3 class="text-xs font-bold text-subtext uppercase tracking-wider mb-2">Estado del Sistema</h3>
+                
+                <!-- Status Pill -->
+                <div class="flex items-center justify-between">
+                    <span class="text-xs text-subtext">Backend:</span>
+                    <span id="backend-status-pill" class="py-1 px-2.5 rounded-full text-[10px] font-bold bg-red/10 text-red border border-red/20 flex items-center gap-1.5 transition-all">
+                        <span class="w-1.5 h-1.5 rounded-full bg-red animate-pulse"></span>
+                        Desconectado
+                    </span>
+                </div>
+
+                <!-- Accel Pill -->
+                <div class="flex items-center justify-between">
+                    <span class="text-xs text-subtext">Aceleración:</span>
+                    <span id="accel-status-pill" class="py-1 px-2.5 rounded-full text-[10px] font-bold bg-overlay/20 text-subtext border border-overlay/30">
+                        --
+                    </span>
+                </div>
+
+                <!-- Audio Pill -->
+                <div class="flex items-center justify-between">
+                    <span class="text-xs text-subtext">Audio:</span>
+                    <span id="audio-status-pill" class="text-xs font-medium text-text max-w-[120px] truncate text-right">
+                        Desconectado
+                    </span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer del Sidebar -->
+        <div class="p-4 border-t border-overlay/20 bg-crust/50 text-xs text-subtext space-y-2">
+            <div class="flex items-center gap-2">
+                <kbd class="px-1.5 py-0.5 bg-surface border border-overlay/50 rounded text-[10px] font-mono text-text">Enter</kbd>
+                <span>Enviar mensaje</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <kbd class="px-1.5 py-0.5 bg-surface border border-overlay/50 rounded text-[10px] font-mono text-text">Shift+Enter</kbd>
+                <span>Salto de línea</span>
+            </div>
+            <div class="pt-2 text-[10px] text-center border-t border-overlay/10 text-overlay">
+                AsistenteIA local • LiteRT Gemma 4
+            </div>
+        </div>
+    </aside>
+
+    <!-- ZONA CENTRAL DE CHAT -->
+    <main class="flex-1 flex flex-col h-full relative overflow-hidden bg-base">
+        
+        <!-- Top Bar Móvil -->
+        <header class="h-14 border-b border-overlay/20 bg-mantle/40 backdrop-blur-md flex items-center justify-between px-4 md:px-6 z-30">
+            <button onclick="toggleMobileSidebar()" class="md:hidden text-subtext hover:text-text p-1.5">
+                <i class="fa-solid fa-bars text-lg"></i>
+            </button>
+            <div class="flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-green shadow-lg shadow-green/40" id="top-status-indicator"></span>
+                <span class="font-outfit font-bold text-sm tracking-wide text-text" id="top-status-text">AsistenteIA Listo</span>
+            </div>
+            <div class="flex items-center gap-3">
+                <button onclick="window.close()" class="text-subtext hover:text-red p-1.5 transition-colors" title="Cerrar ventana">
+                    <i class="fa-solid fa-power-off text-lg"></i>
+                </button>
+            </div>
+        </header>
+
+        <!-- Contenedor del Historial de Chat -->
+        <div id="chat-history" class="flex-1 overflow-y-auto px-4 py-6 md:p-8 space-y-6 max-w-4xl w-full mx-auto">
+            
+            <!-- Estado Inicial Vacío -->
+            <div id="empty-state" class="h-full flex flex-col items-center justify-center text-center space-y-6 py-12">
+                <div class="w-16 h-16 rounded-2xl bg-gradient-to-tr from-lavender/30 to-mauve/30 border border-lavender/20 flex items-center justify-center animate-bounce">
+                    <i class="fa-regular fa-comment-dots text-lavender text-3xl"></i>
+                </div>
+                <div class="space-y-2 max-w-md">
+                    <h2 class="font-outfit font-bold text-2xl text-text">¿En qué puedo ayudarte hoy?</h2>
+                    <p class="text-subtext text-sm leading-relaxed">
+                        Esta es la interfaz de chat de tu **AsistenteIA**. Puedes escribir tus preguntas, solicitar diagnósticos de sistema, análisis de pantallas o redacción de notas.
+                    </p>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-lg mt-6">
+                    <button onclick="fillExample('¿Cuál es el estado del sistema?')" class="p-3 bg-surface/30 hover:bg-surface/80 border border-overlay/20 hover:border-lavender/40 rounded-xl text-left text-xs text-subtext hover:text-text transition-all active:scale-[0.98]">
+                        <p class="font-semibold text-lavender mb-1">🔍 Diagnóstico</p>
+                        ¿Cuál es el estado del sistema?
+                    </button>
+                    <button onclick="fillExample('Redacta una nota sobre la arquitectura de transición de Ollama a LiteRT')" class="p-3 bg-surface/30 hover:bg-surface/80 border border-overlay/20 hover:border-lavender/40 rounded-xl text-left text-xs text-subtext hover:text-text transition-all active:scale-[0.98]">
+                        <p class="font-semibold text-mauve mb-1">📝 Redactar Nota</p>
+                        Redacta una nota sobre la transición a LiteRT.
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Burbujas de Mensaje Dinámicas -->
+            <div id="messages-container" class="space-y-6"></div>
+        </div>
+
+        <!-- Formulario e Input al Pie -->
+        <footer class="p-4 md:p-6 bg-gradient-to-t from-base via-base to-base/0 border-t border-overlay/10 z-20">
+            <div class="max-w-4xl w-full mx-auto relative">
+                <form id="chat-form" onsubmit="handleSubmit(event)" class="relative flex items-center bg-surface/50 border border-overlay/40 rounded-2xl focus-within:border-lavender/80 focus-within:ring-1 focus-within:ring-lavender/50 transition-all shadow-lg shadow-crust/40 overflow-hidden pr-12">
+                    
+                    <!-- Textarea auto-ajustable -->
+                    <textarea 
+                        id="user-input" 
+                        rows="1" 
+                        oninput="adjustInputHeight(this)"
+                        onkeydown="handleKeyPress(event)"
+                        placeholder="Pregunta algo al asistente..." 
+                        class="w-full py-4 pl-4 pr-1 bg-transparent resize-none border-none outline-none text-text placeholder-subtext text-sm focus:ring-0 max-h-48 overflow-y-auto leading-relaxed"
+                    ></textarea>
+                    
+                    <!-- Botón Enviar -->
+                    <button 
+                        type="submit" 
+                        id="send-button"
+                        class="absolute right-3.5 bottom-3.5 w-9 h-9 rounded-xl bg-lavender hover:bg-mauve text-mantle flex items-center justify-center transition-all duration-300 active:scale-95 disabled:opacity-40 disabled:hover:bg-lavender disabled:scale-100"
+                    >
+                        <i class="fa-solid fa-paper-plane text-sm"></i>
+                    </button>
+                </form>
+                <div class="text-[10px] text-center text-overlay mt-2">
+                    AsistenteIA procesa tu texto localmente con el modelo Gemma 4:E4B.
+                </div>
+            </div>
+        </footer>
+    </main>
+
+    <!-- LÓGICA DE JAVASCRIPT -->
+    <script>
+        let isProcessing = false;
+        let eventSource = null;
+
+        // Configuración inicial de Marked
+        marked.setOptions({
+            highlight: function(code, lang) {
+                if (lang && hljs.getLanguage(lang)) {
+                    return hljs.highlight(code, { language: lang }).value;
+                }
+                return hljs.highlightAuto(code).value;
+            },
+            breaks: true,
+            gfm: true
+        });
+
+        // Al iniciar la página
+        window.addEventListener('DOMContentLoaded', () => {
+            loadHistory();
+            startSSEListener();
+            document.getElementById('user-input').focus();
+        });
+
+        // Cargar Historial del Servidor
+        async function loadHistory() {
+            try {
+                const response = await fetch("http://127.0.0.1:8765/history");
+                if (response.ok) {
+                    const data = await response.json();
+                    const history = data.history || [];
+                    
+                    if (history.length > 0) {
+                        document.getElementById('empty-state').classList.add('hidden');
+                        const container = document.getElementById('messages-container');
+                        container.innerHTML = '';
+                        
+                        history.forEach(msg => {
+                            appendMessage(msg.role === 'user' ? 'user' : 'assistant', msg.content);
+                        });
+                        scrollToBottom();
+                    }
+                }
+            } catch (err) {
+                console.error("Error cargando historial:", err);
+            }
+        }
+
+        // Suscribirse al Canal SSE del Backend
+        function startSSEListener() {
+            if (eventSource) {
+                eventSource.close();
+            }
+
+            eventSource = new EventSource("http://127.0.0.1:8765/status/events");
+
+            eventSource.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    updateSystemStatus(data);
+                } catch (err) {
+                    console.error("Error parseando evento SSE:", err);
+                }
+            };
+
+            eventSource.onerror = (err) => {
+                console.warn("Conexión SSE perdida. Intentando reconectar...");
+                setOfflineUI();
+            };
+        }
+
+        // Actualizar UI con datos de estado
+        function updateSystemStatus(data) {
+            const statusPill = document.getElementById('backend-status-pill');
+            const topIndicator = document.getElementById('top-status-indicator');
+            const topStatusText = document.getElementById('top-status-text');
+            const accelPill = document.getElementById('accel-status-pill');
+            const audioPill = document.getElementById('audio-status-pill');
+
+            const litertConnected = data.litert_connected;
+            const litertBackend = data.litert_backend || "CPU";
+            const isProcessingBackend = data.processing;
+            const isSpeaking = data.speaking;
+            const bluetoothAudio = data.bluetooth_audio || "Desconectado";
+            const conversationLength = data.conversation_length || 0;
+
+            if (litertConnected) {
+                // Backend Conectado
+                statusPill.className = "py-1 px-2.5 rounded-full text-[10px] font-bold bg-green/10 text-green border border-green/20 flex items-center gap-1.5";
+                statusPill.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-green"></span>LiteRT: ${litertBackend}`;
+                
+                // Accel Pill
+                const gpuActive = data.gpu_active;
+                if (gpuActive) {
+                    accelPill.className = "py-1 px-2.5 rounded-full text-[10px] font-bold bg-yellow-500/10 text-yellow-500 border border-yellow-500/20";
+                    accelPill.innerText = "⚡ GPU Activa";
+                } else {
+                    accelPill.className = "py-1 px-2.5 rounded-full text-[10px] font-bold bg-blue/10 text-blue border border-blue/20";
+                    accelPill.innerText = "⚙️ CPU Activa";
+                }
+
+                // Top Status Bar
+                if (isSpeaking) {
+                    topIndicator.className = "w-2.5 h-2.5 rounded-full bg-mauve shadow-lg shadow-mauve/40 animate-pulse";
+                    topStatusText.innerText = "IA hablando...";
+                } else if (isProcessingBackend) {
+                    topIndicator.className = "w-2.5 h-2.5 rounded-full bg-yellow-500 shadow-lg shadow-yellow-500/40 animate-pulse";
+                    topStatusText.innerText = "Pensando...";
+                } else {
+                    topIndicator.className = "w-2.5 h-2.5 rounded-full bg-green shadow-lg shadow-green/40";
+                    topStatusText.innerText = "AsistenteIA Listo";
+                }
+            } else {
+                setOfflineUI();
+            }
+
+            // Audio Pill
+            const audioText = bluetoothAudio.split(" (")[0];
+            audioPill.innerText = audioText;
+            audioPill.title = bluetoothAudio;
+        }
+
+        // Set UI Offline
+        function setOfflineUI() {
+            const statusPill = document.getElementById('backend-status-pill');
+            const topIndicator = document.getElementById('top-status-indicator');
+            const topStatusText = document.getElementById('top-status-text');
+            const accelPill = document.getElementById('accel-status-pill');
+            const audioPill = document.getElementById('audio-status-pill');
+
+            statusPill.className = "py-1 px-2.5 rounded-full text-[10px] font-bold bg-red/10 text-red border border-red/20 flex items-center gap-1.5";
+            statusPill.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-red animate-pulse"></span>Desconectado`;
+
+            topIndicator.className = "w-2.5 h-2.5 rounded-full bg-red shadow-lg shadow-red/40 animate-pulse";
+            topStatusText.innerText = "Backend desconectado";
+
+            accelPill.className = "py-1 px-2.5 rounded-full text-[10px] font-bold bg-overlay/20 text-subtext border border-overlay/30";
+            accelPill.innerText = "--";
+
+            audioPill.innerText = "Desconectado";
+        }
+
+        // Insertar burbuja de mensaje en la pantalla
+        function appendMessage(role, text, isStreaming = false) {
+            document.getElementById('empty-state').classList.add('hidden');
+            const container = document.getElementById('messages-container');
+            
+            const msgId = 'msg-' + Math.random().toString(36).substr(2, 9);
+            const msgDiv = document.createElement('div');
+            
+            if (role === 'user') {
+                msgDiv.className = "flex items-start justify-end gap-3 max-w-full";
+                msgDiv.innerHTML = `
+                    <div class="flex flex-col items-end max-w-[80%]">
+                        <div class="px-4 py-3 bg-surface/40 border border-overlay/20 rounded-2xl rounded-tr-none text-text text-sm shadow-sm leading-relaxed whitespace-pre-wrap">
+                            ${escapeHTML(text)}
+                        </div>
+                    </div>
+                    <div class="w-8 h-8 rounded-lg bg-surface border border-overlay/40 flex items-center justify-center flex-shrink-0 text-lavender shadow-md">
+                        <i class="fa-solid fa-user text-xs"></i>
+                    </div>
+                `;
+            } else {
+                msgDiv.className = "flex items-start gap-3 max-w-full";
+                msgDiv.innerHTML = `
+                    <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-lavender to-mauve flex items-center justify-center flex-shrink-0 shadow-md">
+                        <i class="fa-solid fa-brain text-mantle text-xs"></i>
+                    </div>
+                    <div class="flex flex-col items-start max-w-[85%] relative group">
+                        <div id="${msgId}" class="markdown-content px-4 py-3 bg-surface/20 border border-overlay/10 rounded-2xl rounded-tl-none text-text text-sm leading-relaxed ${isStreaming ? 'typing-cursor' : ''}">
+                            ${isStreaming ? text : marked.parse(text)}
+                        </div>
+                        <button onclick="copyMessage(this, '${msgId}')" class="absolute -right-8 top-1.5 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 text-subtext hover:text-lavender text-xs" title="Copiar mensaje">
+                            <i class="fa-regular fa-copy"></i>
+                        </button>
+                    </div>
+                `;
+            }
+            
+            container.appendChild(msgDiv);
+            if (!isStreaming) {
+                // Habilitar copiado y syntax highlighting
+                msgDiv.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
+                addCopyButtonsToCodeBlocks(msgDiv.querySelector('.markdown-content'));
+            }
+            
+            return msgId;
+        }
+
+        // Agregar botones de copiar a los bloques de código
+        function addCopyButtonsToCodeBlocks(container) {
+            if (!container) return;
+            container.querySelectorAll('pre').forEach(pre => {
+                // Verificar si ya tiene el botón
+                if (pre.querySelector('.btn-copy-code')) return;
+
+                const code = pre.querySelector('code').innerText;
+                const btn = document.createElement('button');
+                btn.className = "btn-copy-code absolute right-2.5 top-2.5 opacity-60 hover:opacity-100 p-1.5 bg-surface rounded-md border border-overlay/50 text-subtext text-[10px] flex items-center gap-1 transition-all";
+                btn.innerHTML = `<i class="fa-regular fa-copy"></i> Copiar`;
+                btn.onclick = () => {
+                    navigator.clipboard.writeText(code).then(() => {
+                        btn.innerHTML = `<i class="fa-solid fa-check text-green"></i> Copiado`;
+                        setTimeout(() => {
+                            btn.innerHTML = `<i class="fa-regular fa-copy"></i> Copiar`;
+                        }, 2000);
+                    });
+                };
+                pre.appendChild(btn);
+            });
+        }
+
+        // Copiar el mensaje completo
+        function copyMessage(btn, msgId) {
+            const el = document.getElementById(msgId);
+            if (!el) return;
+            const text = el.innerText;
+            navigator.clipboard.writeText(text).then(() => {
+                btn.innerHTML = `<i class="fa-solid fa-check text-green"></i>`;
+                setTimeout(() => {
+                    btn.innerHTML = `<i class="fa-regular fa-copy"></i>`;
+                }, 2000);
+            });
+        }
+
+        // Auto-redimensionar el campo de texto de entrada
+        function adjustInputHeight(el) {
+            el.style.height = 'auto';
+            el.style.height = Math.min(el.scrollHeight, 192) + 'px';
+        }
+
+        // Gestionar el envío del formulario
+        async function handleSubmit(event) {
+            if (event) event.preventDefault();
+            if (isProcessing) return;
+
+            const inputField = document.getElementById('user-input');
+            const text = inputField.value.trim();
+            if (!text) return;
+
+            isProcessing = true;
+            inputField.value = '';
+            inputField.style.height = 'auto';
+            inputField.disabled = true;
+            document.getElementById('send-button').disabled = true;
+
+            // Mostrar el mensaje del usuario en pantalla
+            appendMessage('user', text);
+            scrollToBottom();
+
+            // Preparar la burbuja vacía de la IA para ir escribiendo el stream
+            const assistantMsgId = appendMessage('assistant', '', true);
+            const assistantBubble = document.getElementById(assistantMsgId);
+            scrollToBottom();
+
+            let accumulatedText = "";
+
+            try {
+                const response = await fetch("http://127.0.0.1:8765/transcribe/stream", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({ text: text })
+                });
+
+                if (response.ok) {
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    
+                    while (true) {
+                        const { value, done } = await reader.read();
+                        if (done) break;
+                        
+                        const chunk = decoder.decode(value);
+                        accumulatedText += chunk;
+                        
+                        // Parsear Markdown sobre la marcha
+                        assistantBubble.innerHTML = marked.parse(accumulatedText);
+                        scrollToBottom();
+                    }
+                } else if (response.status === 409) {
+                    // Conflicto de procesamiento
+                    assistantBubble.innerHTML = "<p class='text-red font-semibold'><i class='fa-solid fa-triangle-exclamation'></i> El asistente ya está procesando una solicitud.</p>";
+                } else {
+                    assistantBubble.innerHTML = `<p class='text-red font-semibold'><i class='fa-solid fa-triangle-exclamation'></i> Error del servidor: ${response.status}</p>`;
+                }
+            } catch (err) {
+                console.error("Error enviando mensaje:", err);
+                assistantBubble.innerHTML = `<p class='text-red font-semibold'><i class='fa-solid fa-triangle-exclamation'></i> Error de conexión con el backend.</p>`;
+            } finally {
+                // Quitar cursor de escritura y renderizar código al finalizar
+                assistantBubble.classList.remove('typing-cursor');
+                if (accumulatedText) {
+                    assistantBubble.innerHTML = marked.parse(accumulatedText);
+                    assistantBubble.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
+                    addCopyButtonsToCodeBlocks(assistantBubble);
+                }
+                
+                isProcessing = false;
+                inputField.disabled = false;
+                document.getElementById('send-button').disabled = false;
+                inputField.focus();
+                scrollToBottom();
+            }
+        }
+
+        // Controlar teclas en el campo de texto (Enter para enviar, Shift+Enter para salto de línea)
+        function handleKeyPress(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                handleSubmit();
+            }
+        }
+
+        // Limpiar el historial (Reiniciar conversación)
+        async function newConversation() {
+            if (confirm("¿Estás seguro de que quieres limpiar la conversación?")) {
+                try {
+                    const response = await fetch("http://127.0.0.1:8765/reset", { method: "POST" });
+                    if (response.ok) {
+                        const container = document.getElementById('messages-container');
+                        container.innerHTML = '';
+                        document.getElementById('empty-state').classList.remove('hidden');
+                    }
+                } catch (err) {
+                    console.error("Error reiniciando conversación:", err);
+                    alert("No se pudo limpiar la conversación. Revisa la conexión con el backend.");
+                }
+            }
+        }
+
+        // Rellenar input con un ejemplo
+        function fillExample(text) {
+            const inputField = document.getElementById('user-input');
+            inputField.value = text;
+            adjustInputHeight(inputField);
+            inputField.focus();
+        }
+
+        // Toggle Sidebar Móvil
+        function toggleMobileSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            sidebar.classList.toggle('-translate-x-full');
+        }
+
+        // Utilidades
+        function scrollToBottom() {
+            const chatHistory = document.getElementById('chat-history');
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+        }
+
+        function escapeHTML(str) {
+            return str
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+    </script>
+</body>
+</html>

@@ -587,7 +587,7 @@ class SpotlightWindow(QMainWindow):
         self.bottom_layout.addStretch()
         
         # Atajos Rápidos
-        self.shortcuts_label = QPushButton("ESC: Ocultar | Ctrl+R: Reset | Ctrl+H: Historial | Ctrl+L: Logs")
+        self.shortcuts_label = QPushButton("ESC: Ocultar | Ctrl+R: Reset | Ctrl+H: Historial | Ctrl+L: Logs | Ctrl+G: Chat")
         self.shortcuts_label.setEnabled(False)
         self.shortcuts_label.setStyleSheet("""
             QPushButton {
@@ -1026,6 +1026,14 @@ class SpotlightWindow(QMainWindow):
         # Ctrl+L para abrir terminal de logs
         elif event.key() == Qt.Key_L and event.modifiers() & Qt.ControlModifier:
             self.open_logs_terminal()
+            event.accept()
+            return
+            
+        # Ctrl+G para abrir la interfaz de chat web en el navegador
+        elif event.key() == Qt.Key_G and event.modifiers() & Qt.ControlModifier:
+            import webbrowser
+            print("Abriendo interfaz de chat web en el navegador...", flush=True)
+            webbrowser.open("http://127.0.0.1:8765/chat")
             event.accept()
             return
             

@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Depends, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
 from pydantic import BaseModel
 
 from src.audio_manager import AudioManager
@@ -121,7 +121,7 @@ async def rate_limit_middleware(request: Request, call_next):
         return await call_next(request)
 
     # Endpoints de solo lectura sin rate limit
-    if path in ("/health", "/status", "/history", "/status/events"):
+    if path in ("/health", "/status", "/history", "/status/events", "/chat"):
         return await call_next(request)
 
     # Endpoints estrictos (1 req cada 2s)
@@ -647,6 +647,19 @@ async def status_events(request: Request, state: AppState = Depends(get_app_stat
             await asyncio.sleep(0.3)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@app.get("/chat", response_class=HTMLResponse)
+async def get_chat_interface():
+    """Sirve la interfaz gráfica web tipo ChatGPT."""
+    import os
+    chat_file_path = os.path.join(os.path.dirname(__file__), "gui", "chat.html")
+    try:
+        with open(chat_file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        return HTMLResponse(content=content, status_code=200)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Interfaz de chat no encontrada.")
 
 
 @app.get("/health", response_model=HealthResponse)
