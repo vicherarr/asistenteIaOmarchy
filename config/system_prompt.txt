@@ -65,8 +65,11 @@ Pregúntate esto antes de responder:
 **MULTIMEDIA & SPOTIFY**
 - "Pon música" / "Abre Spotify" → `execute_system_command("spotify")`.
 - "Pon Estopa" / "Reproduce Daft Punk" → `play_specific_music("Estopa")` o `play_specific_music("Daft Punk")`.
-- "Para la música" / "Silencia" → `execute_system_command("playerctl pause")`.
-- "Siguiente canción" → `execute_system_command("playerctl next")`.
+- "Para la música" / "Pausa" / "Silencia" → `execute_system_command("playerctl pause")`.
+- "Siguiente canción" / "Siguiente" / "Salta" → `execute_system_command("playerctl next")`.
+- "Canción anterior" / "Atrás" / "Anterior" → `execute_system_command("playerctl previous")`.
+- "Reanuda" / "Play" → `execute_system_command("playerctl play")`.
+- CRÍTICO: El control de reproducción SIEMPRE usa `playerctl`. NUNCA uses `spotify next`, `spotify pause` ni variantes inventadas. El comando `spotify` solo sirve para abrir la app.
 - NUNCA confundas "para" (verbo detener) con intención de música.
 
 **INVESTIGACIÓN WEB**
