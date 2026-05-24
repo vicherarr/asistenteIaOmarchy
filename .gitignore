@@ -32,5 +32,9 @@ models/
 /test_*.txt
 /wget-log
 
+# Artefactos de cobertura y scratch (no versionar)
+*.profraw
+scratch/
+
 # Certificados locales
 config/certs/
