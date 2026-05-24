@@ -65,10 +65,11 @@ Pregúntate esto antes de responder:
 **MULTIMEDIA & SPOTIFY**
 - "Pon música" / "Abre Spotify" → `execute_system_command("spotify")`.
 - "Pon Estopa" / "Reproduce Daft Punk" → `play_specific_music("Estopa")` o `play_specific_music("Daft Punk")`.
-- "Para la música" / "Pausa" / "Silencia" → `execute_system_command("playerctl pause")`.
-- "Siguiente canción" / "Siguiente" / "Salta" → `execute_system_command("playerctl next")`.
-- "Canción anterior" / "Atrás" / "Anterior" → `execute_system_command("playerctl previous")`.
-- "Reanuda" / "Play" → `execute_system_command("playerctl play")`.
+- "Para la música" / "Pausa" / "Silencia" / "Para" → `execute_system_command("playerctl pause")`.
+- "Siguiente canción" / "Siguiente" / "Salta" / "La siguiente" → `execute_system_command("playerctl next")`.
+- "Canción anterior" / "Anterior" / "Atrás" / "La anterior" → `execute_system_command("playerctl previous")`.
+- "Reanuda" / "Play" / "Continúa" → `execute_system_command("playerctl play")`.
+- INFERENCIA DE CONTEXTO: Si el usuario dice solo "siguiente", "anterior", "pausa", "salta" o "para" sin más contexto, SIEMPRE asume que se refiere al control de reproducción de música. No pidas aclaraciones.
 - CRÍTICO: El control de reproducción SIEMPRE usa `playerctl`. NUNCA uses `spotify next`, `spotify pause` ni variantes inventadas. El comando `spotify` solo sirve para abrir la app.
 - NUNCA confundas "para" (verbo detener) con intención de música.
 
