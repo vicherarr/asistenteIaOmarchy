@@ -1,9 +1,13 @@
-"""Módulo de captura de pantalla para visión del asistente."""
+"""Captura de pantalla para la visión del asistente.
+
+La inferencia visual NO ocurre aquí: el motor LiteRT no puede llamarse de forma
+reentrante desde dentro de un tool. En su lugar, analyze_screen captura la pantalla
+y guarda la ruta; AssistantService hace una segunda pasada al modelo con la imagen
+adjunta (ver process_transcription_stream).
+"""
 
 import asyncio
-import base64
 import logging
-import shlex
 import subprocess
 import tempfile
 from pathlib import Path
@@ -15,6 +19,18 @@ logger = logging.getLogger(__name__)
 
 MAX_IMAGE_DIMENSION = 800
 
+# Ruta de la última captura pendiente de analizar. La fija analyze_screen (tool) y la
+# consume AssistantService tras la primera pasada de inferencia.
+_pending_vision_image: Optional[str] = None
+
+
+def get_pending_vision_image() -> Optional[str]:
+    """Devuelve y limpia la ruta de la captura pendiente de análisis visual."""
+    global _pending_vision_image
+    path = _pending_vision_image
+    _pending_vision_image = None
+    return path
+
 
 class VisionToolError(Exception):
     """Errores del módulo de visión."""
@@ -22,16 +38,13 @@ class VisionToolError(Exception):
 
 
 class VisionTool:
-    """Captura la pantalla y la convierte a formato para modelos multimodales."""
+    """Captura la pantalla y preprocesa la imagen."""
 
     def __init__(self, output_dir: Optional[Path] = None) -> None:
         self.output_dir = output_dir or Path(tempfile.gettempdir())
 
     async def capture_screen(self, output_path: Optional[str] = None) -> str:
-        """
-        Captura la pantalla completa usando grim de forma asíncrona.
-        Devuelve la ruta del archivo PNG generado.
-        """
+        """Captura la pantalla completa con grim. Devuelve la ruta del PNG."""
         if output_path is None:
             tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False, dir=self.output_dir)
             output_path = tmp.name
@@ -59,16 +72,12 @@ class VisionTool:
             raise VisionToolError("Timeout capturando pantalla")
 
     async def capture_region(self, output_path: Optional[str] = None) -> str:
-        """
-        Captura una región seleccionada por el usuario usando grim + slurp de forma asíncrona.
-        Devuelve la ruta del archivo PNG generado.
-        """
+        """Captura una región elegida por el usuario con grim + slurp. Devuelve la ruta del PNG."""
         if output_path is None:
             tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False, dir=self.output_dir)
             output_path = tmp.name
 
         try:
-            # 1. Obtener geometría con slurp
             slurp_process = await asyncio.create_subprocess_exec(
                 "slurp",
                 stdout=subprocess.PIPE,
@@ -81,7 +90,6 @@ class VisionTool:
 
             geometry = stdout.decode().strip()
 
-            # 2. Capturar con grim usando la geometría
             grim_process = await asyncio.create_subprocess_exec(
                 "grim", "-g", geometry, output_path,
                 stdout=subprocess.PIPE,
@@ -102,7 +110,7 @@ class VisionTool:
 
     @staticmethod
     def _resize_image(image_path: str, max_dim: int = MAX_IMAGE_DIMENSION) -> str:
-        """Redimensiona la imagen manteniendo aspect ratio. Devuelve path del temp."""
+        """Redimensiona la imagen manteniendo aspect ratio. Devuelve la ruta del resultado."""
         try:
             with Image.open(image_path) as img:
                 if max(img.size) <= max_dim:
@@ -112,51 +120,53 @@ class VisionTool:
                 new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
                 img_resized = img.resize(new_size, Image.Resampling.LANCZOS)
 
-                # Usar un nombre de archivo único para evitar colisiones
                 with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
                     resized_path = tmp.name
-                
+
                 img_resized.save(resized_path, "JPEG", quality=85)
-                
+
                 original_kb = Path(image_path).stat().st_size // 1024
                 resized_kb = Path(resized_path).stat().st_size // 1024
-                logger.info(f"Imagen redimensionada: {original_kb}KB -> {resized_kb}KB ({img_resized.size[0]}x{img_resized.size[1]})")
+                logger.info(
+                    f"Imagen redimensionada: {original_kb}KB → {resized_kb}KB "
+                    f"({img_resized.size[0]}×{img_resized.size[1]})"
+                )
                 return resized_path
         except Exception as e:
             logger.error(f"Error redimensionando imagen: {e}")
             return image_path
 
-# --- Funciones para LiteRT Tool Calling ---
 
 async def analyze_screen(region: str = "full") -> str:
     """
     Toma una captura de pantalla para que el asistente pueda 'ver' lo que hay en ella.
-    Usa esto si el usuario hace preguntas sobre su pantalla, una ventana abierta, 
-    un error visible o cualquier cosa visual.
-    
+    Úsala cuando el usuario pregunte sobre su pantalla, una ventana abierta, un error
+    visible o cualquier elemento visual. El contenido se analizará automáticamente
+    después; no inventes lo que aparece en la imagen.
+
     Args:
-        region: 'full' para pantalla completa, 'select' para dejar al usuario elegir una región.
+        region: 'full' para capturar toda la pantalla; 'select' para que el usuario
+                elija una región con el cursor.
     """
-    vision = VisionTool()
-    
+    global _pending_vision_image
+    vision_tool = VisionTool()
+
     try:
         if region == "select":
-            path = await vision.capture_region()
+            image_path = await vision_tool.capture_region()
         else:
-            path = await vision.capture_screen()
-            
-        # Redimensionar (síncrono es aceptable aquí)
-        resized_path = vision._resize_image(path)
-        
-        # Eliminar el original si se creó uno nuevo
-        if resized_path != path:
-            Path(path).unlink(missing_ok=True)
-        
-        # Guardar en estado global temporal para AssistantService
-        from src.utils import set_pending_image
-        set_pending_image(resized_path)
-        
-        return f"Éxito: Captura de pantalla realizada. Analizando el contenido visual ahora mismo..."
+            image_path = await vision_tool.capture_screen()
+
+        resized_path = vision_tool._resize_image(image_path)
+        if resized_path != image_path:
+            Path(image_path).unlink(missing_ok=True)
+
+        _pending_vision_image = resized_path
+        return "Captura de pantalla realizada. Analizando el contenido visual."
+
+    except VisionToolError as e:
+        logger.error(f"Error de captura en analyze_screen: {e}")
+        return f"No pude capturar la pantalla: {e}"
     except Exception as e:
-        logger.error(f"Error en tool analyze_screen: {e}")
-        return f"Error capturando pantalla: {e}"
+        logger.error(f"Error inesperado en analyze_screen: {e}", exc_info=True)
+        return f"Error capturando la pantalla: {e}"

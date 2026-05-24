@@ -50,16 +50,19 @@ class LiteRTClient:
                     backend_mode = "cpu"
 
             # Estrategia 2: Forzar GPU (Para rendimiento avanzado)
+            # vision_backend=CPU: la visión en GPU crashea por fallo de compilación de
+            # shaders WebGPU/NVVM en NVIDIA. Ejecutar el vision encoder en CPU lo evita
+            # y mantiene el LLM en GPU (un solo motor hace texto, tools, audio y visión).
             if backend_mode == "gpu":
                 try:
-                    logger.info("Intentando forzar motor LiteRT con Backend GPU...")
+                    logger.info("Intentando forzar motor LiteRT con Backend GPU (visión en CPU)...")
                     self.engine = litert_lm.Engine(
                         str(path),
                         backend=litert_lm.Backend.GPU,
-                        vision_backend=None,
+                        vision_backend=litert_lm.Backend.CPU,
                         audio_backend=litert_lm.Backend.CPU
                     )
-                    logger.info("Motor LiteRT cargado exitosamente (Backend GPU).")
+                    logger.info("Motor LiteRT cargado exitosamente (LLM en GPU, visión en CPU).")
                     return
                 except Exception as gpu_err:
                     logger.warning(f"Carga con GPU forzada falló ({gpu_err}). Intentando fallback a CPU...")
@@ -73,7 +76,7 @@ class LiteRTClient:
                     self.engine = litert_lm.Engine(
                         str(path),
                         backend=litert_lm.Backend.CPU,
-                        vision_backend=None,
+                        vision_backend=litert_lm.Backend.CPU,
                         audio_backend=litert_lm.Backend.CPU
                     )
                 else:

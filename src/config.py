@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     SSL_KEYFILE: Optional[str] = None
     SSL_CERTFILE: Optional[str] = None
     
-    # LiteRT
+    # LiteRT (motor único: LLM en GPU, visión y audio en CPU)
     LITERT_MODEL_PATH: str = "models/gemma-4-E4B-it.litertlm"
     LITERT_BACKEND: str = "gpu"
     LITERT_TIMEOUT: float = 35.0

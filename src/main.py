@@ -200,7 +200,6 @@ class AppState:
         self.current_task: Optional[asyncio.Task] = None
         self.processing: bool = False
         self.is_recording: bool = False
-        # Loop multimodal desactivado (analyze_screen no implementado correctamente)
         self.paused_players: list[str] = []
         self.wake_word_listener: Optional[SherpaWakeWordListener] = None
         self.bt_button_listener: Optional["BtButtonListener"] = None  # type: ignore

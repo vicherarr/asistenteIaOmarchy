@@ -9,8 +9,8 @@ from typing import Optional, List
 
 from src.schema import ChatMessage
 from src.command_executor import (
-    execute_system_command, 
-    read_log_file, 
+    execute_system_command,
+    read_log_file,
     clipboard_manager,
     web_search,
     system_diagnostics,
@@ -25,6 +25,7 @@ from src.command_executor import (
     launch_application,
     close_application
 )
+from src.vision_tool import analyze_screen, get_pending_vision_image
 from src.litert_client import LiteRTClient
 from src.tts_engine import TTSEngine
 from src.stt_engine import STTEngine
@@ -65,7 +66,8 @@ class AssistantService:
             send_input_to_terminal,
             interrupt_terminal_command,
             launch_application,
-            close_application
+            close_application,
+            analyze_screen,
         ]
 
     def _extract_sentences(self, text_buffer: str) -> tuple[List[str], str]:
@@ -311,10 +313,48 @@ class AssistantService:
                 if clean_chunk:
                     yield clean_chunk
 
-            # Verificar si la respuesta es significativa. Si no, generar fallback.
-            accumulated_clean = self._clean_tool_calls(accumulated_text)
-            has_meaningful_response = accumulated_clean.strip() and len(accumulated_clean.strip()) > 15
-            
+            # --- Segunda pasada de visión ---
+            # Si analyze_screen capturó una imagen, el motor (LLM en GPU, visión en CPU)
+            # no puede invocarse de forma reentrante desde el tool, así que la describimos
+            # aquí, en una segunda llamada con la imagen adjunta. Esta respuesta sustituye
+            # a la de la primera pasada (que solo disparó el tool).
+            pending_image = get_pending_vision_image()
+            if pending_image:
+                logger.info(f"Captura pendiente detectada. Segunda pasada de visión: {pending_image}")
+                vision_system = (
+                    "Eres Luka. Describe de forma clara, concisa y útil lo que aparece en "
+                    "la captura de pantalla del usuario, respondiendo a su pregunta en español. "
+                    "Básate únicamente en lo que realmente se ve en la imagen."
+                )
+                sentence_buffer = ""  # descartar residuo de la primera pasada (tool call)
+                vision_answer = ""
+                try:
+                    async for vchunk in self.litert.chat_stream(
+                        prompt=text,
+                        tools=None,
+                        system_prompt=vision_system,
+                        history=None,
+                        image_path=pending_image,
+                    ):
+                        vision_answer += vchunk
+                        sentence_buffer += vchunk
+                        sentences, sentence_buffer = self._extract_sentences(sentence_buffer)
+                        for s in sentences:
+                            clean = strip_markdown(s)
+                            if self._is_speakable(clean):
+                                await queue_text.put(clean)
+                        clean_chunk = self._clean_tool_calls(vchunk, strip=False)
+                        if clean_chunk:
+                            yield clean_chunk
+                    accumulated_text = vision_answer
+                finally:
+                    Path(pending_image).unlink(missing_ok=True)
+                has_meaningful_response = True
+            else:
+                # Verificar si la respuesta es significativa. Si no, generar fallback.
+                accumulated_clean = self._clean_tool_calls(accumulated_text)
+                has_meaningful_response = accumulated_clean.strip() and len(accumulated_clean.strip()) > 15
+
             if not has_meaningful_response:
                 logger.info("Respuesta insuficiente. Generando fallback automático...")
                 lower_text = text.lower()
