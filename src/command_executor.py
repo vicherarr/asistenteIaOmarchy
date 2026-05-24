@@ -983,4 +983,158 @@ async def control_local_browser(action: str, target: str = "", value: str = "") 
         return f"Error controlando el navegador gráfico: {e}"
 
 
+async def launch_application(app_name: str) -> str:
+    """
+    Busca una aplicación instalada en el sistema por su nombre y la inicia de forma gráfica.
+    Úsala cuando el usuario te pida abrir o iniciar una aplicación (ej: Steam, Heroic Games Launcher, Chromium, etc.).
+    
+    Args:
+        app_name: Nombre o término de búsqueda de la aplicación a abrir.
+    """
+    import os
+    import re
+    import shutil
+    from pathlib import Path
+    
+    app_name = _sanitize_tool_args(app_name)
+    query = app_name.lower().strip()
+    
+    if not query:
+        return "Error: Debes proporcionar el nombre de una aplicación."
+        
+    search_dirs = [
+        Path(os.path.expanduser("~/.local/share/applications")),
+        Path("/usr/share/applications"),
+        Path("/usr/local/share/applications"),
+        Path("/var/lib/flatpak/exports/share/applications"),
+        Path(os.path.expanduser("~/.local/share/flatpak/exports/share/applications"))
+    ]
+    
+    desktop_files = []
+    for d in search_dirs:
+        if d.exists() and d.is_dir():
+            try:
+                # Usar to_thread para evitar bloquear el event loop con I/O de disco
+                files = await asyncio.to_thread(lambda dir_path: list(dir_path.glob("*.desktop")), d)
+                desktop_files.extend(files)
+            except Exception as e:
+                logger.warning(f"Error listando archivos desktop en {d}: {e}")
+                
+    # Función síncrona para leer y analizar cada archivo .desktop
+    def parse_desktop_file(filepath: Path) -> Optional[dict]:
+        try:
+            content = filepath.read_text(errors="ignore")
+            entry = {}
+            in_desktop_entry = False
+            for line in content.splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line == "[Desktop Entry]":
+                    in_desktop_entry = True
+                    continue
+                elif line.startswith("[") and line.endswith("]"):
+                    in_desktop_entry = False
+                    continue
+                if in_desktop_entry and "=" in line:
+                    key, val = line.split("=", 1)
+                    entry[key.strip()] = val.strip()
+            return entry
+        except Exception:
+            return None
+            
+    matches = []
+    for filepath in desktop_files:
+        entry = await asyncio.to_thread(parse_desktop_file, filepath)
+        if not entry:
+            continue
+            
+        name = entry.get("Name", "")
+        exec_cmd = entry.get("Exec", "")
+        no_display = entry.get("NoDisplay", "false").lower() == "true"
+        hidden = entry.get("Hidden", "false").lower() == "true"
+        
+        if no_display or hidden or not name or not exec_cmd:
+            continue
+            
+        name_lower = name.lower()
+        file_lower = filepath.name.lower()
+        
+        # Guardar puntuación para coincidencia inteligente
+        score = 0
+        if query == name_lower:
+            score = 100  # Coincidencia exacta
+        elif name_lower.startswith(query):
+            score = 80   # Prefijo
+        elif query in name_lower:
+            score = 50   # Subcadena en el nombre
+        elif query in file_lower:
+            score = 30   # Subcadena en el nombre del archivo
+            
+        if score > 0:
+            matches.append((score, name, exec_cmd, filepath))
+            
+    if not matches:
+        return f"No se encontró ninguna aplicación instalada que coincida con '{app_name}'."
+        
+    # Ordenar por mejor coincidencia
+    matches.sort(key=lambda x: x[0], reverse=True)
+    best_match = matches[0]
+    matched_name = best_match[1]
+    exec_cmd = best_match[2]
+    
+    # Sanitizar el comando Exec (remover parámetros tipo %U, %f, etc.)
+    cleaned_exec = re.sub(r'%[fFuUkicd]', '', exec_cmd).strip()
+    
+    if not cleaned_exec:
+        return f"Error: Se encontró '{matched_name}', pero su comando de ejecución no es válido."
+        
+    # Intentar ejecutar con Hyprland dispatch primero
+    if shutil.which("hyprctl"):
+        try:
+            # Escapar comillas dobles para que el comando Lua en Hyprland sea válido
+            escaped_exec = cleaned_exec.replace('"', '\\"')
+            hypr_cmd = f"hyprctl dispatch 'hl.dsp.exec_cmd(\"{escaped_exec}\")'"
+            
+            logger.info(f"Lanzando {matched_name} vía Hyprland Lua dispatcher: {hypr_cmd}")
+            
+            process = await asyncio.create_subprocess_shell(
+                hypr_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode == 0 and b"ok" in stdout.lower():
+                return f"He lanzado exitosamente '{matched_name}' de forma gráfica."
+            else:
+                logger.warning(f"Fallo al lanzar vía hyprctl: {stdout.decode()} {stderr.decode()}. Intentando fallback...")
+        except Exception as e:
+            logger.error(f"Error ejecutando hyprctl dispatch para '{matched_name}': {e}")
+            
+    # Fallback: Lanzar usando subprocess.Popen tradicional (desacoplado)
+    try:
+        import shlex
+        args = shlex.split(cleaned_exec)
+        # Asegurarse de que el binario existe antes de lanzarlo
+        binary = args[0]
+        if not shutil.which(binary) and not os.path.exists(binary):
+            return f"Error: El ejecutable '{binary}' para '{matched_name}' no existe en el sistema."
+            
+        logger.info(f"Lanzando {matched_name} vía fallback Popen: {cleaned_exec}")
+        
+        await asyncio.to_thread(
+            subprocess.Popen,
+            args,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True
+        )
+        return f"He lanzado '{matched_name}' en segundo plano."
+    except Exception as e:
+        logger.error(f"Error en fallback de lanzamiento para '{matched_name}': {e}")
+        return f"No se pudo iniciar la aplicación '{matched_name}'. Error: {e}"
+
+
+
 

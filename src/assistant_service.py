@@ -21,7 +21,8 @@ from src.command_executor import (
     read_terminal_screen,
     control_local_browser,
     send_input_to_terminal,
-    interrupt_terminal_command
+    interrupt_terminal_command,
+    launch_application
 )
 from src.litert_client import LiteRTClient
 from src.tts_engine import TTSEngine
@@ -61,7 +62,8 @@ class AssistantService:
             read_terminal_screen,
             control_local_browser,
             send_input_to_terminal,
-            interrupt_terminal_command
+            interrupt_terminal_command,
+            launch_application
         ]
 
     def _extract_sentences(self, text_buffer: str) -> tuple[List[str], str]:
