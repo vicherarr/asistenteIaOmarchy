@@ -54,6 +54,40 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+class TokenObfuscatorFilter(logging.Filter):
+    """Filtro de logging para ofuscar el parámetro token=... en las trazas de Uvicorn."""
+    def filter(self, record):
+        import re
+        # Ofuscar el token en record.args si están presentes (Uvicorn access logger pasa argumentos)
+        if record.args and len(record.args) >= 3:
+            path = record.args[2]
+            if isinstance(path, str) and "token=" in path:
+                obfuscated_path = re.sub(r"token=[a-zA-Z0-9_\-]+", "token=******", path)
+                args_list = list(record.args)
+                args_list[2] = obfuscated_path
+                record.args = tuple(args_list)
+        
+        # También ofuscar en el mensaje directo o formateado
+        if isinstance(record.msg, str) and "token=" in record.msg:
+            record.msg = re.sub(r"token=[a-zA-Z0-9_\-]+", "token=******", record.msg)
+            
+        return True
+
+
+def setup_logging_filters():
+    """Aplica el filtro de ofuscación de tokens a todos los loggers relevantes."""
+    for logger_name in ("uvicorn", "uvicorn.access", "uvicorn.error", "uvicorn.asgi"):
+        ulogger = logging.getLogger(logger_name)
+        # Evitar duplicados
+        if not any(isinstance(f, TokenObfuscatorFilter) for f in ulogger.filters):
+            ulogger.addFilter(TokenObfuscatorFilter())
+
+
+# Aplicar el filtro de forma inmediata
+setup_logging_filters()
+
+
 MAX_HISTORY = settings.MAX_HISTORY
 
 
@@ -241,6 +275,7 @@ class HealthResponse(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    setup_logging_filters()
     logger.info("Inicializando AsistenteIA con LiteRT...")
     
     state = AppState()
