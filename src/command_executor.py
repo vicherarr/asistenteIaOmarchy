@@ -379,45 +379,6 @@ async def play_specific_music(query: str) -> str:
         return f"Error en el flujo de música: {e}"
 
 
-async def manage_windows(action: str, target: str = "") -> str:
-    """
-    Gestiona ventanas y escritorios de Hyprland.
-    
-    Args:
-        action: 
-            'focus': Enfoca una aplicación (ej. target='chromium').
-            'close': Cierra una ventana.
-            'fullscreen': Alterna pantalla completa.
-            'workspace': Cambia al escritorio número <target> (ej. target='3').
-            'movetoworkspace': Mueve la ventana activa al escritorio <target> (ej. target='2').
-        target: Nombre de la app o número de escritorio según la acción.
-    """
-    action = _sanitize_tool_args(action)
-    target = _sanitize_tool_args(target)
-    cmd = ""
-    
-    if action == "focus": 
-        cmd = f"hyprctl dispatch focuswindow {target}"
-    elif action == "close": 
-        cmd = "hyprctl dispatch killactive" if not target else f"hyprctl dispatch closewindow {target}"
-    elif action == "fullscreen": 
-        cmd = "hyprctl dispatch fullscreen 0"
-    elif action == "workspace":
-        if not target: return "Error: Especifica el número de escritorio."
-        cmd = f"hyprctl dispatch workspace {target}"
-    elif action == "movetoworkspace":
-        if not target: return "Error: Especifica el escritorio destino."
-        cmd = f"hyprctl dispatch movetoworkspace {target}"
-    else: 
-        return f"Acción desconocida: {action}"
-
-    executor = CommandExecutor()
-    try:
-        success, output = await executor.execute(cmd)
-        return f"Éxito: {action} {target} ejecutado." if success else f"Error: {output}"
-    except Exception as e:
-        return f"Error: {e}"
-
 
 async def open_file_manager(folder: str = "") -> str:
     """

@@ -17,8 +17,7 @@ Pregúntate esto antes de responder:
 3. ¿Requiere música? → `play_specific_music(query)` (específico) o `execute_system_command("spotify")` (general)
 4. ¿Requiere info del sistema? → Comandos de terminal específicos (lscpu, free, df) o `system_diagnostics(component)`
 5. ¿Requiere buscar web? → `web_search(query)` → `read_web_page(url)`
-6. ¿Requiere gestionar ventanas? → `manage_windows(action, target)`
-7. ¿Requiere clipboard? → `clipboard_manager(action, content)`
+6. ¿Requiere clipboard? → `clipboard_manager(action, content)`
 
 === COMANDOS EFICIENTES (FILTRAR SALIDA) ===
 - NUNCA ejecutes comandos que devuelvan salidas masivas sin filtrar.
@@ -71,10 +70,6 @@ Pregúntate esto antes de responder:
 - "Copia esto" → `clipboard_manager(action='copy', content='texto')`.
 - "Pega lo que tengo copiado" → `clipboard_manager(action='paste')`.
 - "Resume lo del portapapeles" → `clipboard_manager(action='paste')` primero, luego resume.
-
-**CONTROL DE VENTANAS (HYPRLAND)**
-- Enfocar, cerrar, mover, maximizar, flotar: `manage_windows(action, target)`.
-- Acciones válidas: focus, close, fullscreen, togglefloating, workspace, movetoworkspace.
 
 **DIAGNÓSTICO**
 - Estado general: Ejecutar comandos eficientes de terminal (CPU, RAM, disco) y leer la pantalla.
