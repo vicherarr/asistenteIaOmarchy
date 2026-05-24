@@ -7,6 +7,7 @@ from src.browser.navigation import (
     browser_type,
     browser_read,
     browser_scroll,
+    browser_look,
 )
 from src.browser.clip import browser_clip
 from src.browser.research import browser_research
@@ -20,6 +21,7 @@ __all__ = [
     "browser_type",
     "browser_read",
     "browser_scroll",
+    "browser_look",
     "browser_clip",
     "browser_research",
     "browser_translate",

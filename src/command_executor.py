@@ -960,6 +960,10 @@ async def control_local_browser(action: str, target: str = "", value: str = "") 
             'click': Hace clic en un elemento web usando un selector CSS (ej. target='button.submit').
             'type': Escribe texto en un campo usando un selector CSS (ej. target='input#search', value='recetas de cocina').
             'read': Lee el título y el texto visible de la pestaña activa actual.
+            'look': Captura VISUALMENTE la página web actual (solo la web, no el escritorio) para
+                    que el asistente la 'vea' y la analice. Úsala cuando necesites ver el aspecto o
+                    el resultado visual de una página (imágenes, gráficos, mapas, layout) y no baste
+                    el texto de 'read'. value='full' para capturar la página entera con scroll.
             'scroll': Hace scroll vertical (ej. value='500' para bajar, value='-500' para subir).
             'clip': Guarda la pestaña activa como nota Markdown en Obsidian (~/Documentos/Obsidian Vault/Clippings/).
                     Devuelve el resumen del contenido y la ruta del archivo guardado.
@@ -979,7 +983,7 @@ async def control_local_browser(action: str, target: str = "", value: str = "") 
     from src.browser import (
         ensure_browser, get_page,
         browser_navigate, browser_click, browser_type, browser_read, browser_scroll,
-        browser_clip, browser_research, browser_translate,
+        browser_look, browser_clip, browser_research, browser_translate,
     )
     from playwright.async_api import async_playwright
 
@@ -1008,6 +1012,8 @@ async def control_local_browser(action: str, target: str = "", value: str = "") 
                 return await browser_type(page, target, value)
             elif action == "read":
                 return await browser_read(page)
+            elif action == "look":
+                return await browser_look(page, value)
             elif action == "scroll":
                 return await browser_scroll(page, value)
             elif action == "clip":

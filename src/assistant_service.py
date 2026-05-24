@@ -25,7 +25,7 @@ from src.command_executor import (
     launch_application,
     close_application
 )
-from src.vision_tool import analyze_screen, get_pending_vision_image
+from src.vision_tool import analyze_screen, get_pending_vision
 from src.litert_client import LiteRTClient
 from src.tts_engine import TTSEngine
 from src.stt_engine import STTEngine
@@ -318,19 +318,21 @@ class AssistantService:
             # no puede invocarse de forma reentrante desde el tool, así que la describimos
             # aquí, en una segunda llamada con la imagen adjunta. Esta respuesta sustituye
             # a la de la primera pasada (que solo disparó el tool).
-            pending_image = get_pending_vision_image()
-            if pending_image:
+            pending = get_pending_vision()
+            if pending:
+                pending_image, prompt_hint = pending
                 logger.info(f"Captura pendiente detectada. Segunda pasada de visión: {pending_image}")
                 vision_system = (
                     "Eres Luka. Describe de forma clara, concisa y útil lo que aparece en "
-                    "la captura de pantalla del usuario, respondiendo a su pregunta en español. "
+                    "la captura del usuario, respondiendo a su petición en español. "
                     "Básate únicamente en lo que realmente se ve en la imagen."
                 )
+                vision_prompt = prompt_hint or text
                 sentence_buffer = ""  # descartar residuo de la primera pasada (tool call)
                 vision_answer = ""
                 try:
                     async for vchunk in self.litert.chat_stream(
-                        prompt=text,
+                        prompt=vision_prompt,
                         tools=None,
                         system_prompt=vision_system,
                         history=None,

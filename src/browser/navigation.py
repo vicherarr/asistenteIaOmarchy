@@ -63,3 +63,31 @@ async def browser_scroll(page, value: str) -> str:
     logger.info(f"Haciendo scroll vertical de {scroll_amount}px...")
     await page.evaluate(f"window.scrollBy(0, {scroll_amount})")
     return f"Éxito: Se desplazó la página verticalmente {scroll_amount} píxeles."
+
+
+async def browser_look(page, value: str = "") -> str:
+    """Captura visualmente la página web (solo la web, vía DOM) y la deja lista para análisis.
+
+    No grim/escritorio: usa Playwright, así que captura únicamente el contenido del
+    navegador, independientemente de la ventana enfocada. value='full' captura la página
+    completa con scroll; por defecto solo el viewport visible.
+    """
+    import tempfile
+    from pathlib import Path
+    from src.vision_tool import VisionTool, stage_vision_capture
+
+    full_page = str(value).lower().strip() in ("full", "all", "completa", "entera", "true", "1")
+    tmp_path = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
+
+    logger.info(f"Capturando página web (full_page={full_page})...")
+    await page.screenshot(path=tmp_path, full_page=full_page)
+
+    resized = VisionTool._resize_image(tmp_path)
+    if resized != tmp_path:
+        Path(tmp_path).unlink(missing_ok=True)
+
+    # Sin prompt_hint: la segunda pasada usará la petición original del usuario.
+    stage_vision_capture(resized)
+
+    title = await page.title()
+    return f"Éxito: Captura visual de la página '{title}' realizada. Analizando su contenido."
