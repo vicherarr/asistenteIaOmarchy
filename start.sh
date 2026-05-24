@@ -88,8 +88,8 @@ until curl -s "http://127.0.0.1:$PORT/status" &>/dev/null; do
         tail -n 20 "$LOG_FILE"
         exit 1
     fi
-    if [ $COUNT -ge 30 ]; then
-        echo "(!) Error: El asistente no responde en el puerto $PORT después de 30s."
+    if [ $COUNT -ge 60 ]; then
+        echo "(!) Error: El asistente no responde en el puerto $PORT después de 60s."
         exit 1
     fi
 done

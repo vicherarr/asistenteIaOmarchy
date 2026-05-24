@@ -18,7 +18,7 @@ if ! systemctl --user is-active --quiet asistenteia.service; then
     until curl -s "http://localhost:$PORT/status" &>/dev/null; do
         sleep 1
         COUNT=$((COUNT + 1))
-        if [ $COUNT -ge 15 ]; then
+        if [ $COUNT -ge 45 ]; then
             notify-send "AsistenteIA" "Error: El motor no inicia." -u critical
             exit 1
         fi
