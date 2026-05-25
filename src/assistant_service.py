@@ -25,6 +25,7 @@ from src.command_executor import (
     close_application
 )
 from src.vision_tool import analyze_screen, analyze_clipboard_image, take_screenshot, get_pending_vision
+from src.document_tool import create_document, get_pending_document, build_and_save_document
 from src.litert_client import LiteRTClient
 from src.tts_engine import TTSEngine
 from src.stt_engine import STTEngine
@@ -68,6 +69,7 @@ class AssistantService:
             analyze_screen,
             analyze_clipboard_image,
             take_screenshot,
+            create_document,
         ]
         # Para suprimir tool calls que el modelo a veces emite como TEXTO plano (sintaxis
         # Python: nombre(args)) en lugar del formato del motor. Nunca deben llegar al TTS.
@@ -340,8 +342,40 @@ class AssistantService:
             # no puede invocarse de forma reentrante desde el tool, así que la describimos
             # aquí, en una segunda llamada con la imagen adjunta. Esta respuesta sustituye
             # a la de la primera pasada (que solo disparó el tool).
+            # --- Segunda pasada de documento ---
+            # create_document solo stagea el título; el CONTENIDO se redacta aquí como
+            # texto normal (fiable), no como argumento de tool (que el modelo malforma).
+            pending_doc = get_pending_document()
             pending = get_pending_vision()
-            if pending:
+            if pending_doc:
+                logger.info(f"Documento pendiente. Segunda pasada para redactar: {pending_doc}")
+                doc_system = (
+                    "Eres un redactor experto. Devuelve SOLO el contenido del documento "
+                    "solicitado en Markdown (usa #, ##, listas con - y **negrita** donde "
+                    "convenga). Nada de saludos, comentarios ni explicaciones: solo el documento."
+                )
+                doc_prompt = f"Documento titulado '{pending_doc}'. Redáctalo según esta petición del usuario: {text}"
+                sentence_buffer = ""  # descartar residuo de la 1ª pasada (tool call)
+                markdown = ""
+                async for dchunk in self.litert.chat_stream(
+                    prompt=doc_prompt,
+                    tools=None,
+                    system_prompt=doc_system,
+                    history=None,
+                ):
+                    markdown += dchunk
+                # El contenido NO se habla; se construye el .odt y se confirma en breve.
+                result = await build_and_save_document(pending_doc, markdown)
+                accumulated_text = result
+                # Confirmación hablada fija y limpia: el nombre de archivo lleva guiones
+                # bajos que el filtro de TTS descarta, así que solo va en el texto del chat.
+                ok = result.startswith("Documento '")
+                spoken = "Listo, he creado el documento y lo he abierto en LibreOffice." if ok else result
+                if self._is_speakable(spoken):
+                    await queue_text.put(spoken)
+                yield result
+                has_meaningful_response = True
+            elif pending:
                 pending_image, prompt_hint = pending
                 logger.info(f"Captura pendiente detectada. Segunda pasada de visión: {pending_image}")
                 vision_system = (
