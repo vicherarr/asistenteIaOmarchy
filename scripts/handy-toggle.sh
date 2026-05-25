@@ -5,6 +5,7 @@
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PORT=$(grep '^PORT=' "$PROJECT_DIR/.env" 2>/dev/null | cut -d '=' -f2 | tr -d '[:space:]' || echo "8765")
+TOKEN=$(grep '^API_TOKEN=' "$PROJECT_DIR/.env" 2>/dev/null | cut -d '=' -f2 | tr -d '[:space:]')
 
 # 1. Asegurar que el servicio está activo
 SERVICE_WAS_RUNNING=true
@@ -15,7 +16,7 @@ if ! systemctl --user is-active --quiet asistenteia.service; then
     
     # Esperar a que el servidor responda
     COUNT=0
-    until curl -s "http://localhost:$PORT/status" &>/dev/null; do
+    until curl -sk "https://localhost:$PORT/status" &>/dev/null; do
         sleep 1
         COUNT=$((COUNT + 1))
         if [ $COUNT -ge 45 ]; then
@@ -51,5 +52,5 @@ sleep 0.2
 # 4. Solo enviar toggle si el servicio YA estaba corriendo.
 #    Si acabamos de iniciar el servicio, no grabamos — el wake word ya está escuchando.
 if [ "$SERVICE_WAS_RUNNING" = true ]; then
-    curl -s -X POST "http://localhost:$PORT/listen/toggle" > /dev/null 2>&1
+    curl -sk -X POST "https://localhost:$PORT/listen/toggle" -H "X-API-Token: $TOKEN" > /dev/null 2>&1
 fi

@@ -24,7 +24,7 @@ from src.command_executor import (
     launch_application,
     close_application
 )
-from src.vision_tool import analyze_screen, analyze_clipboard_image, get_pending_vision
+from src.vision_tool import analyze_screen, analyze_clipboard_image, take_screenshot, get_pending_vision
 from src.litert_client import LiteRTClient
 from src.tts_engine import TTSEngine
 from src.stt_engine import STTEngine
@@ -67,7 +67,19 @@ class AssistantService:
             close_application,
             analyze_screen,
             analyze_clipboard_image,
+            take_screenshot,
         ]
+        # Para suprimir tool calls que el modelo a veces emite como TEXTO plano (sintaxis
+        # Python: nombre(args)) en lugar del formato del motor. Nunca deben llegar al TTS.
+        self._tool_names = {t.__name__ for t in self.tools}
+        _names = '|'.join(re.escape(n) for n in self._tool_names)
+        # Detector (para no hablar): dispara con "nombre_tool(" aunque el paréntesis no
+        # se haya cerrado todavía (el stream llega token a token).
+        self._tool_leak_re = re.compile(r'\b(?:' + _names + r')\s*\(')
+        # Removedor (para el texto visible): quita la llamada completa o su residuo.
+        self._tool_call_re = re.compile(r'\b(?:' + _names + r')\s*\([^)]*\)?')
+        # Llamada genérica que ocupa todo el fragmento: "algo(arg=...)" / "algo(".
+        self._generic_call_re = re.compile(r'^\s*[A-Za-z_]\w*\s*\([^)]*\)?\s*$')
 
     def _extract_sentences(self, text_buffer: str) -> tuple[List[str], str]:
         """
@@ -234,6 +246,13 @@ class AssistantService:
         # Rechazar si es solo números y puntuación
         if not any(c.isalpha() for c in text):
             return False
+        # Rechazar tool calls fugadas como texto plano (p.ej. take_screenshot(target='x'))
+        if self._tool_leak_re.search(text) or self._generic_call_re.match(text):
+            return False
+        # Rechazar identificadores snake_case: el habla en español/inglés nunca lleva
+        # guion bajo, así que esto delata nombres de función fugados (analyze_screen, etc.)
+        if re.search(r'\w_\w', text):
+            return False
         return True
 
     async def process_transcription_stream(
@@ -284,6 +303,7 @@ class AssistantService:
         accumulated_text = ""
         sentence_buffer = ""
         chunk_count = 0
+        used_fallback = False
 
         try:
             # Primera llamada al modelo
@@ -297,7 +317,10 @@ class AssistantService:
                 accumulated_text += chunk
                 
                 # Filtrar tool calls antes de procesar para TTS
-                is_tool_call = "<|tool_call|>" in chunk or "call:" in chunk or "<|tool_call|>" in chunk
+                is_tool_call = (
+                    "<|tool_call|>" in chunk or "call:" in chunk
+                    or self._tool_leak_re.search(accumulated_text) is not None
+                )
                 
                 if not is_tool_call:
                     sentence_buffer += chunk
@@ -357,6 +380,7 @@ class AssistantService:
                 has_meaningful_response = accumulated_clean.strip() and len(accumulated_clean.strip()) > 15
 
             if not has_meaningful_response:
+                used_fallback = True
                 logger.info("Respuesta insuficiente. Generando fallback automático...")
                 lower_text = text.lower()
                 
@@ -477,8 +501,9 @@ class AssistantService:
                 yield fallback
                 await queue_text.put(fallback)
 
-            # Encolar lo que quede en el buffer
-            if sentence_buffer.strip():
+            # Encolar lo que quede en el buffer. Si usamos fallback, el residuo es basura
+            # de la tool call fugada (el fallback ya es la respuesta hablada): descartarlo.
+            if sentence_buffer.strip() and not used_fallback:
                 clean = strip_markdown(sentence_buffer)
                 if self._is_speakable(clean):
                     await queue_text.put(clean)
@@ -514,6 +539,8 @@ class AssistantService:
         cleaned = re.sub(r'<\|tool_call\|>.*?<\|tool_call\|>', '', text, flags=re.DOTALL)
         cleaned = re.sub(r'<\|tool_call\|>.*', '', cleaned, flags=re.DOTALL)
         cleaned = re.sub(r'.*<\|tool_call\|>', '', cleaned, flags=re.DOTALL)
+        # Tool calls que el modelo emite como texto plano (sintaxis Python).
+        cleaned = self._tool_call_re.sub('', cleaned)
         return cleaned.strip() if strip else cleaned
 
     async def process_transcription(

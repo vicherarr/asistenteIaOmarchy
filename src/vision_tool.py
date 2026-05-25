@@ -260,13 +260,14 @@ class VisionTool:
 
 async def analyze_screen(source: str = "full", target: str = "") -> str:
     """
-    Captura algo de la pantalla para que el asistente pueda 'verlo' y analizarlo.
-    Úsala cuando el usuario pregunte por su pantalla, una ventana, un error visible, un
-    juego/vídeo a pantalla completa o cualquier elemento visual. El contenido se analiza
-    automáticamente después; no inventes lo que aparece en la imagen.
+    MIRA y ANALIZA la pantalla: Luka examina la imagen y te dice qué contiene.
+    Úsala SOLO cuando el usuario quiera que MIRES, LEAS, DESCRIBAS o ANALICES algo:
+    "mira mi pantalla", "qué ves", "qué pone aquí", "léeme esto", "qué es este error".
+    El contenido se analiza automáticamente después; no inventes lo que aparece.
 
-    Para VER una página WEB usa el navegador: control_local_browser(action='look'),
-    NO esta herramienta.
+    Si el usuario solo quiere HACER, GUARDAR o COPIAR una captura (sin que la analices),
+    usa take_screenshot, NO esta. Para VER una página WEB usa
+    control_local_browser(action='look'), NO esta herramienta.
 
     Args:
         source: qué capturar:
@@ -317,6 +318,82 @@ async def analyze_screen(source: str = "full", target: str = "") -> str:
     except Exception as e:
         logger.error(f"Error inesperado en analyze_screen: {e}", exc_info=True)
         return f"Error capturando la pantalla: {e}"
+
+
+async def _copy_image_to_clipboard(image_path: str) -> bool:
+    """Copia el PNG al portapapeles vía wl-copy. Devuelve True si tuvo éxito.
+
+    wl-copy se demoniza (doble fork) para seguir sirviendo el contenido tras leer stdin.
+    El proceso padre termina enseguida; redirigimos stdout/stderr a DEVNULL para no
+    bloquearnos esperando EOF de un pipe que el demonio hijo mantiene abierto.
+    """
+    try:
+        with open(image_path, "rb") as f:
+            proc = await asyncio.create_subprocess_exec(
+                "wl-copy", "--type", "image/png",
+                stdin=f, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            rc = await asyncio.wait_for(proc.wait(), timeout=5)
+    except FileNotFoundError:
+        logger.warning("wl-copy no encontrado; no se copió al portapapeles.")
+        return False
+    except asyncio.TimeoutError:
+        logger.warning("Timeout copiando la captura al portapapeles.")
+        return False
+    if rc != 0:
+        logger.warning(f"wl-copy devolvió código {rc}.")
+        return False
+    return True
+
+
+def _open_in_annotator(image_path: str) -> bool:
+    """Abre la imagen en satty (visor/anotador) de forma desacoplada. Cae a xdg-open.
+
+    No bloquea: satty queda abierto y sobrevive a este proceso. --copy-command permite
+    que, si el usuario anota, re-copie la versión editada al portapapeles.
+    """
+    for cmd in (
+        ["satty", "--filename", image_path, "--copy-command", "wl-copy"],
+        ["xdg-open", image_path],
+    ):
+        try:
+            subprocess.Popen(
+                cmd, start_new_session=True,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            return True
+        except FileNotFoundError:
+            continue
+        except Exception as e:
+            logger.warning(f"No se pudo abrir el visor con {cmd[0]}: {e}")
+            continue
+    logger.warning("No hay visor disponible (ni satty ni xdg-open).")
+    return False
+
+
+async def take_screenshot() -> str:
+    """Hace una captura de toda la pantalla y la GUARDA para el usuario: la copia al
+    portapapeles y la abre en satty. NO la analiza ni la describe Luka.
+    Úsala para: "haz una captura", "haz un pantallazo", "hazme una captura de
+    pantalla", "captura la pantalla", "copia la pantalla".
+    Si el usuario quiere que LUKA MIRE, LEA o ANALICE la pantalla, usa analyze_screen.
+    """
+    vision = VisionTool()
+    try:
+        path = await vision.capture_screen()
+    except VisionToolError as e:
+        logger.error(f"Error de captura en take_screenshot: {e}")
+        return f"No pude hacer la captura: {e}"
+    except Exception as e:
+        logger.error(f"Error inesperado en take_screenshot: {e}", exc_info=True)
+        return f"Error haciendo la captura: {e}"
+
+    copied = await _copy_image_to_clipboard(path)
+    opened = _open_in_annotator(path)
+
+    detalles = ["copiada al portapapeles" if copied else "no pude copiarla al portapapeles"]
+    detalles.append("abierta en satty" if opened else f"guardada en {path} (no encontré visor)")
+    return f"Captura de pantalla hecha: {' y '.join(detalles)}."
 
 
 # MIME types de imagen aceptados del portapapeles, por orden de preferencia. PIL los
