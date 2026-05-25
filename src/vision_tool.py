@@ -259,27 +259,16 @@ class VisionTool:
 
 
 async def analyze_screen(source: str = "full", target: str = "") -> str:
-    """
-    MIRA y ANALIZA la pantalla: Luka examina la imagen y te dice qué contiene.
-    Úsala SOLO cuando el usuario quiera que MIRES, LEAS, DESCRIBAS o ANALICES algo:
-    "mira mi pantalla", "qué ves", "qué pone aquí", "léeme esto", "qué es este error".
-    El contenido se analiza automáticamente después; no inventes lo que aparece.
-
-    Si el usuario solo quiere HACER, GUARDAR o COPIAR una captura (sin que la analices),
-    usa take_screenshot, NO esta. Para VER una página WEB usa
-    control_local_browser(action='look'), NO esta herramienta.
+    """MIRA y ANALIZA la pantalla y te digo qué contiene; para LEER o DESCRIBIR algo (si solo quieren GUARDAR/COPIAR la captura usa take_screenshot; para una web usa control_local_browser action='look').
 
     Args:
-        source: qué capturar:
-            'full'          → el monitor que el usuario está viendo ahora (incluye juegos
-                              o vídeo a pantalla completa). Úsala para "mira mi pantalla",
-                              "mira lo que estoy viendo", "mira el juego".
-            'active_window' → solo la ventana enfocada del usuario (recomendada para
-                              "mira esta ventana" o "qué dice este error").
-            'window'        → la ventana de una app concreta; indica cuál en 'target'
-                              (ej. target='steam', target='código').
-            'region'        → el usuario dibuja con el cursor el área a capturar.
-        target: nombre de app o título a buscar cuando source='window'.
+        source: una de —
+            full (monitor actual; lo que ve ahora, incluye juego o vídeo),
+            active_window (solo la ventana enfocada),
+            window (una app concreta; indica cuál en target),
+            region (el usuario dibuja el área con el cursor).
+            Por defecto full.
+        target: nombre de app o título cuando source='window'.
     """
     source = (source or "full").lower().strip()
     vision = VisionTool()
@@ -372,11 +361,9 @@ def _open_in_annotator(image_path: str) -> bool:
 
 
 async def take_screenshot() -> str:
-    """Hace una captura de toda la pantalla y la GUARDA para el usuario: la copia al
-    portapapeles y la abre en satty. NO la analiza ni la describe Luka.
-    Úsala para: "haz una captura", "haz un pantallazo", "hazme una captura de
-    pantalla", "captura la pantalla", "copia la pantalla".
-    Si el usuario quiere que LUKA MIRE, LEA o ANALICE la pantalla, usa analyze_screen.
+    """Hace una captura de pantalla y la GUARDA para el usuario: la copia al portapapeles y la abre en satty; NO la analiza (si quieren que MIRES o LEAS la pantalla usa analyze_screen).
+
+    Úsala para "haz una captura", "haz un pantallazo", "captura/copia la pantalla".
     """
     vision = VisionTool()
     try:

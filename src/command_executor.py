@@ -553,8 +553,7 @@ async def read_web_page(url: str) -> str:
     Úsala después de web_search para leer el contenido profundo de un artículo o documentación.
 
     Args:
-        url: La dirección web completa a leer. DEBE ser una URL literal de los resultados de
-             web_search; nunca inventes ni adivines la dirección.
+        url: La URL completa a leer (literal, de un resultado de web_search).
     """
     url = _sanitize_tool_args(url)
     if not url.startswith("http"):
@@ -646,7 +645,7 @@ async def open_terminal_and_run_command(command: str) -> str:
     Mantiene la ventana de la terminal abierta para que el usuario interactúe con ella.
     
     Args:
-        command: El comando de Linux a ejecutar. Si solo deseas abrir una terminal/pestaña limpia, pasa "" (cadena vacía) o "bash".
+        command: El comando Linux a ejecutar; vacío o "bash" para abrir una terminal/pestaña limpia.
     """
     import shutil
     import subprocess
@@ -896,10 +895,8 @@ async def read_terminal_screen() -> str:
 
 
 async def send_input_to_terminal(input_text: str) -> str:
-    """
-    Envía una entrada de texto directa (como responder a preguntas de confirmación [Y/n] o ingresar datos)
-    al flujo de entrada estándar (stdin) del proceso activo en la terminal persistente visible.
-    
+    """Envía texto al stdin del proceso activo en la terminal (p.ej. responder [Y/n] o introducir datos).
+
     Args:
         input_text: El texto exacto a enviar (ej. 'y', 'n', 'mi_contraseña').
     """
@@ -940,39 +937,27 @@ async def interrupt_terminal_command() -> str:
 
 
 async def control_local_browser(action: str, target: str = "", value: str = "") -> str:
-    """
-    Controla el navegador Chromium visible en tu pantalla a través del protocolo de depuración (CDP).
-    Si el navegador no está abierto con la depuración habilitada, lo lanzará automáticamente.
-    La ventana permanecerá visible para que puedas ver y continuar la interacción manualmente.
-    
+    """Controla el navegador web Chromium visible: navegar, clic, escribir, leer, ver (look), investigar, traducir.
+
+    Usa el protocolo CDP; si Chromium no está abierto con depuración, lo lanza solo y la
+    ventana queda visible para que sigas interactuando a mano. Para 'navigate' la URL debe
+    ser literal (búscala con web_search si no la conoces; nunca la inventes). 'look' captura
+    solo la web (no el escritorio). 'clip' guarda en ~/Documentos/Obsidian Vault/Clippings/.
+
     Args:
-        action: La acción a realizar:
-            'launch': Solo inicia el navegador si no está abierto.
-            'navigate': Va a una URL específica (ej. target='https://google.com'). La URL debe
-                    ser literal: si no la conoces, busca antes con web_search y usa la URL de un
-                    resultado. NUNCA inventes ni adivines direcciones.
-            'click': Hace clic en un elemento web usando un selector CSS (ej. target='button.submit').
-            'type': Escribe texto en un campo usando un selector CSS (ej. target='input#search', value='recetas de cocina').
-            'read': Lee el título y el texto visible de la pestaña activa actual.
-            'look': Captura VISUALMENTE la página web actual (solo la web, no el escritorio) para
-                    que el asistente la 'vea' y la analice. Úsala cuando necesites ver el aspecto o
-                    el resultado visual de una página (imágenes, gráficos, mapas, layout) y no baste
-                    el texto de 'read'. value='full' para capturar la página entera con scroll.
-            'scroll': Hace scroll vertical (ej. value='500' para bajar, value='-500' para subir).
-            'clip': Guarda la pestaña activa como nota Markdown en Obsidian (~/Documentos/Obsidian Vault/Clippings/).
-                    Devuelve el resumen del contenido y la ruta del archivo guardado.
-            'research': Investigación profunda y persistente sobre un tema. Navega, busca y recopila
-                        información de múltiples fuentes web de forma autónoma, sin rendirse, hasta un
-                        máximo de 30 pasos. Devuelve un informe completo con todo lo encontrado.
-                        Usa target para el tema o pregunta a investigar.
-                        Usa value para el número máximo de pasos (por defecto 30).
-            'translate': Traduce una página web completa al español y la muestra en un panel overlay
-                        dentro del navegador. Navega a la URL, extrae el texto, lo traduce con Google
-                        Translate, e inyecta un panel visual elegante en el lado derecho de la página.
-                        Usa target para la URL de la página a traducir.
-                        Usa value para el idioma destino (por defecto 'es' para español).
+        action: una de —
+            launch (abre el navegador),
+            navigate (ir a target=URL),
+            click (target=selector CSS),
+            type (target=selector, value=texto),
+            read (texto de la pestaña activa),
+            look (captura visual de la web; value='full' = página entera),
+            scroll (value=píxeles, + baja / - sube),
+            clip (guarda la pestaña en Obsidian),
+            research (investigación profunda; target=tema, value=máx pasos, def. 30),
+            translate (traduce la web al español; target=URL, value=idioma def. 'es').
         target: URL o selector CSS según la acción.
-        value: Texto a escribir o valor de scroll.
+        value: texto, píxeles de scroll u otro parámetro según la acción.
     """
     from src.browser import (
         ensure_browser, get_page,
