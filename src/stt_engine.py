@@ -11,8 +11,8 @@ from src.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Intentar encontrar el modelo en la ubicación por defecto de la instalación
-DEFAULT_MODEL_PATH = Path.home() / ".cache" / "whisper" / "ggml-small.bin"
+# Ubicación del modelo por defecto (configurable vía STT_MODEL_PATH)
+DEFAULT_MODEL_PATH = Path(settings.STT_MODEL_PATH)
 
 
 class STTEngine:
@@ -53,9 +53,11 @@ class STTEngine:
                 "whisper-cli",
                 "--model", str(self.model_path),
                 "--file", str(audio_to_transcribe),
-                "--language", "es",
+                "--language", settings.STT_LANGUAGE,
                 "--no-timestamps",
                 "--beam-size", "5",
+                "--threads", str(settings.STT_THREADS),
+                "--prompt", settings.STT_PROMPT,
                 "--no-gpu",
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

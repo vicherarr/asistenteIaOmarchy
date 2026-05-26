@@ -193,7 +193,7 @@ class AudioManager:
         logger.info(f"Salida por defecto establecida: {node_id}")
 
     async def set_volume(self, node_id: str, volume: float) -> None:
-        """Establece el volumen de un nodo (0.0 a 1.0)."""
+        """Establece el volumen de un nodo (0.0 = mudo, 1.0 = 100%, >1.0 amplifica)."""
         await self._run_wpctl(["set-volume", node_id, str(volume)])
         logger.info(f"Volumen de nodo {node_id} establecido a {volume}")
 

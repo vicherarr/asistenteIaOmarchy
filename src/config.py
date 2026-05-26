@@ -31,6 +31,15 @@ class Settings(BaseSettings):
     # TTS
     KOKORO_VOICE: str = "em_alex"
     KOKORO_LANG: str = "e"
+
+    # STT (Whisper / whisper-cli en CPU)
+    STT_MODEL_PATH: str = str(Path.home() / ".cache" / "whisper" / "ggml-large-v3-turbo.bin")
+    STT_LANGUAGE: str = "es"
+    STT_THREADS: int = 8
+    STT_PROMPT: str = (
+        "Comandos de voz en español para el asistente Luka: música, volumen, "
+        "captura de pantalla, documentos, búsqueda en internet y notas de Obsidian."
+    )
     
     # Wake Word (Sherpa-ONNX KWS)
     WAKE_WORD_ENABLED: bool = True

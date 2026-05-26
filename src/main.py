@@ -590,7 +590,7 @@ async def toggle_listen(state: AppState = Depends(get_app_state)):
         await state.assistant_service.send_notification_async("Escuchando...")
         source_id = state.audio_manager.default_source
         if source_id:
-            asyncio.create_task(state.audio_manager.set_volume(source_id, 0.9))
+            asyncio.create_task(state.audio_manager.set_volume(source_id, 1.8))
         
         # Definir callback para cuando se detecte silencio prolongado
         def on_silence_detected():
