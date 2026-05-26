@@ -280,6 +280,12 @@ async def lifespan(app: FastAPI):
     state = AppState()
     app.state.app_state = state
 
+    # Pre-calentar el worker de STT (carga el modelo en su subproceso aislado)
+    try:
+        await state.stt_engine.start()
+    except Exception as e:
+        logger.warning(f"No se pudo pre-arrancar el worker STT: {e}")
+
     # Configurar audio al inicio
     await state.audio_manager.auto_configure_bluetooth()
 
@@ -426,6 +432,13 @@ async def lifespan(app: FastAPI):
             logger.info("Deteniendo grabación de micrófono...")
             state.audio_recorder.stop_recording()
 
+        # 4. Cerrar worker de STT
+        if state.stt_engine:
+            try:
+                await state.stt_engine.close()
+            except Exception as e:
+                logger.warning(f"Error cerrando worker STT: {e}")
+
         # 5. Cerrar LiteRT client
         if state.litert_client:
             logger.info("Cerrando cliente LiteRT...")
@@ -544,20 +557,25 @@ async def toggle_listen(state: AppState = Depends(get_app_state)):
             if state.current_task and not state.current_task.done():
                 state.current_task.cancel()
             
+            def on_transcription(text: str):
+                # Exponer la transcripción a la UI en cuanto el STT termina,
+                # sin esperar a que el LLM genere la respuesta.
+                state.last_user_transcription = text
+                state.last_transcription_timestamp = asyncio.get_event_loop().time()
+                logger.info(f"Transcripción guardada para UI: {text}")
+                # Notificar al sistema (Hyprland/mako) en el instante del reconocimiento.
+                state.assistant_service.send_notification(f"Has dicho: {text}")
+
             async def process_task():
                 try:
                     sink_id = state.audio_manager.default_sink
-                    result = await state.assistant_service.process_audio(
-                        audio_path, 
+                    await state.assistant_service.process_audio(
+                        audio_path,
                         state.conversation_history,
                         sink_id=sink_id,
-                        max_history=MAX_HISTORY
+                        max_history=MAX_HISTORY,
+                        on_transcription=on_transcription
                     )
-                    # Guardar la transcripción para que la UI la muestre
-                    if result.get("transcribed_text"):
-                        state.last_user_transcription = result["transcribed_text"]
-                        state.last_transcription_timestamp = asyncio.get_event_loop().time()
-                        logger.info(f"Transcripción guardada para UI: {result['transcribed_text']}")
                     # Esperar a que el TTS termine de reproducir
                     await state.assistant_service.wait_for_tts_complete()
                 except Exception as e:

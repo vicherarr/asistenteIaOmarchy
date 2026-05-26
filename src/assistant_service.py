@@ -5,7 +5,7 @@ import logging
 import re
 import subprocess
 from pathlib import Path
-from typing import Optional, List
+from typing import Callable, Optional, List
 
 from src.schema import ChatMessage
 from src.command_executor import (
@@ -172,18 +172,25 @@ class AssistantService:
         audio_path: Path,
         conversation_history: list[ChatMessage],
         sink_id: Optional[str] = None,
-        max_history: int = 10
+        max_history: int = 10,
+        on_transcription: Optional[Callable[[str], None]] = None
     ) -> dict:
-        """Transcribe el audio y procesa el texto resultante."""
+        """Transcribe el audio y procesa el texto resultante.
+
+        on_transcription se invoca en cuanto el STT termina (antes de generar la
+        respuesta), para que la UI pueda mostrar lo que dijo el usuario al instante."""
         await self.send_notification_async("Procesando audio...")
-        
+
         text = await self.stt.transcribe(audio_path)
-        
+
         if not text or len(text.strip()) < 2:
             await self.send_notification_async("No se detectó voz o el mensaje es muy corto.")
             return {"status": "error", "message": "No se detectó voz", "transcribed_text": None}
 
-        await self.send_notification_async(f"Has dicho: {text}")
+        # La notificación "Has dicho" la emite el hook on_transcription en el
+        # instante exacto del reconocimiento (ver main.py).
+        if on_transcription:
+            on_transcription(text)
         result = await self.process_transcription(text, conversation_history, sink_id, max_history)
         result["transcribed_text"] = text
         return result

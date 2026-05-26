@@ -1,9 +1,16 @@
-"""Módulo para la transcripción de voz a texto (STT)."""
+"""Módulo de transcripción de voz a texto (STT).
+
+La inferencia de faster-whisper corre en un subproceso worker dedicado
+(src/stt_worker.py) y NO en este proceso. Motivo: cuando CTranslate2 convive
+con el motor LiteRT en el mismo proceso, la contención de hilos dispara la
+latencia de ~4s a ~12-15s. El worker aísla el STT y mantiene el modelo
+residente, comunicándose por líneas JSON sobre stdin/stdout."""
 
 import asyncio
+import json
 import logging
-import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -11,29 +18,67 @@ from src.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Ubicación del modelo por defecto (configurable vía STT_MODEL_PATH)
-DEFAULT_MODEL_PATH = Path(settings.STT_MODEL_PATH)
-
 
 class STTEngine:
-    """Motor de Speech-To-Text que utiliza whisper-cli de forma asíncrona."""
+    """Cliente del worker de STT. Gestiona su ciclo de vida y la comunicación."""
 
-    def __init__(self, model_path: Optional[Path] = None) -> None:
-        self.model_path = model_path or DEFAULT_MODEL_PATH
-        if not self.model_path.exists():
-            logger.warning(f"Modelo de Whisper no encontrado en {self.model_path}")
+    def __init__(self, model: Optional[str] = None) -> None:
+        self._model_name = model or settings.STT_MODEL
+        self._language = settings.STT_LANGUAGE
+        self._prompt = settings.STT_PROMPT
+        self._vad = settings.STT_VAD
+        self._lock = asyncio.Lock()
+        self._proc: Optional[asyncio.subprocess.Process] = None
+
+    async def start(self) -> None:
+        """Arranca el worker por adelantado (pre-calentado al iniciar el servicio)."""
+        async with self._lock:
+            await self._ensure_worker()
+
+    async def _ensure_worker(self) -> None:
+        """Garantiza que el worker está vivo; lo lanza si hace falta. Asume lock tomado."""
+        if self._proc is not None and self._proc.returncode is None:
+            return
+
+        logger.info(
+            f"Lanzando worker STT '{self._model_name}' "
+            f"({settings.STT_DEVICE}/{settings.STT_COMPUTE_TYPE}, {settings.STT_THREADS} hilos)..."
+        )
+        self._proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-m", "src.stt_worker",
+            "--model", self._model_name,
+            "--device", settings.STT_DEVICE,
+            "--compute-type", settings.STT_COMPUTE_TYPE,
+            "--threads", str(settings.STT_THREADS),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            cwd=str(settings.PROJECT_ROOT),
+        )
+        ready = await self._read_response()
+        if not ready or not ready.get("ready"):
+            raise RuntimeError(f"El worker STT no señaló estar listo: {ready}")
+        logger.info("Worker STT listo y residente.")
+
+    async def _read_response(self) -> Optional[dict]:
+        """Lee líneas de stdout del worker hasta encontrar un JSON válido."""
+        assert self._proc is not None and self._proc.stdout is not None
+        while True:
+            raw = await self._proc.stdout.readline()
+            if not raw:
+                return None  # EOF: el worker ha muerto
+            try:
+                return json.loads(raw.decode().strip())
+            except json.JSONDecodeError:
+                continue  # ignorar cualquier línea no-JSON espuria en stdout
 
     async def transcribe(self, audio_path: Path) -> str:
-        """Transcribe un archivo de audio a texto, con limpieza previa."""
-        if not self.model_path.exists():
-            return "[Error: Modelo Whisper no encontrado]"
-
+        """Transcribe un archivo de audio a texto, con normalización previa."""
         logger.info(f"Procesando audio para STT: {audio_path}")
 
+        # 1. Normalización suave con FFmpeg (configuración óptima demostrada en lab)
+        cleaned_path = audio_path.with_suffix(".cleaned.wav")
+        audio_to_transcribe = audio_path
         try:
-            # 1. Normalización suave con FFmpeg (configuración óptima demostrada en lab)
-            cleaned_path = audio_path.with_suffix(".cleaned.wav")
-
             ffmpeg_process = await asyncio.create_subprocess_exec(
                 "ffmpeg", "-y", "-i", str(audio_path),
                 "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
@@ -41,73 +86,65 @@ class STTEngine:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
             )
-            _, ffmpeg_stderr = await ffmpeg_process.communicate()
-
+            await ffmpeg_process.communicate()
             if ffmpeg_process.returncode == 0:
                 audio_to_transcribe = cleaned_path
-            else:
-                audio_to_transcribe = audio_path
-
-            # 2. Transcripción con whisper-cli (Beam Size 5: el cambio clave)
-            process = await asyncio.create_subprocess_exec(
-                "whisper-cli",
-                "--model", str(self.model_path),
-                "--file", str(audio_to_transcribe),
-                "--language", settings.STT_LANGUAGE,
-                "--no-timestamps",
-                "--beam-size", "5",
-                "--threads", str(settings.STT_THREADS),
-                "--prompt", settings.STT_PROMPT,
-                "--no-gpu",
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-
-            stdout, stderr = await process.communicate()
-
-            # Limpiar archivo temporal normalizado
-            if audio_to_transcribe != audio_path:
-                audio_to_transcribe.unlink(missing_ok=True)
-
-            if process.returncode != 0:
-                error_msg = stderr.decode().strip()
-                logger.error(f"Error en whisper-cli: {error_msg}")
-                return ""
-
-            # El output de whisper-cli suele tener líneas de log y la transcripción
-            # La transcripción suele ser la línea que empieza por un espacio y no tiene ':'
-            output = stdout.decode().strip()
-            lines = output.splitlines()
-
-            transcription = ""
-            for line in lines:
-                # Filtrar líneas de metadatos (que suelen tener formato [00:00:00.000 -> 00:00:00.000])
-                # o líneas de inicialización del modelo.
-                # Con --no-timestamps, whisper-cli suele imprimir la línea limpia con un indentado.
-                clean_line = line.strip()
-                if clean_line and not clean_line.startswith("[") and not ":" in line[:10]:
-                    transcription = clean_line
-                    break
-
-            # Fallback: si no detectamos la línea limpia, tomamos la última línea no vacía que no parezca un log
-            if not transcription and lines:
-                for line in reversed(lines):
-                    if line.strip() and not "whisper" in line.lower():
-                        transcription = line.strip()
-                        break
-
-            logger.info(f"Transcripción obtenida: '{transcription}'")
-            return transcription
-
         except FileNotFoundError:
-            logger.error("whisper-cli no encontrado. Instalar whisper.cpp.")
-            return "[Error: whisper-cli no instalado]"
+            logger.warning("ffmpeg no encontrado; se transcribe el audio sin normalizar.")
+
+        # 2. Transcripción en el worker (serializada; reintenta una vez si el worker murió)
+        try:
+            text = await self._request_transcription(str(audio_to_transcribe))
+            logger.info(f"Transcripción obtenida: '{text}'")
+            return text
         except Exception as e:
-            logger.error(f"Error inesperado en STT: {e}")
-            return f"[Error STT: {e}]"
+            logger.error(f"Error inesperado en STT: {e}", exc_info=True)
+            return ""
         finally:
-            # Limpiar el archivo de audio después de procesarlo
+            if audio_to_transcribe != audio_path:
+                Path(audio_to_transcribe).unlink(missing_ok=True)
+            audio_path.unlink(missing_ok=True)
+
+    async def _request_transcription(self, path: str) -> str:
+        request = {
+            "path": path,
+            "language": self._language,
+            "beam_size": 5,
+            "initial_prompt": self._prompt,
+            "vad_filter": self._vad,
+        }
+        async with self._lock:
+            for attempt in range(2):
+                await self._ensure_worker()
+                assert self._proc is not None and self._proc.stdin is not None
+                try:
+                    self._proc.stdin.write((json.dumps(request, ensure_ascii=False) + "\n").encode())
+                    await self._proc.stdin.drain()
+                    response = await self._read_response()
+                except (BrokenPipeError, ConnectionResetError):
+                    response = None
+
+                if response is None:
+                    # El worker murió: forzar respawn y reintentar una vez.
+                    logger.warning("El worker STT no respondió (caído). Reintentando...")
+                    self._proc = None
+                    continue
+                if "error" in response:
+                    raise RuntimeError(f"Worker STT devolvió error: {response['error']}")
+                return response.get("text", "")
+        raise RuntimeError("El worker STT no respondió tras reintento.")
+
+    async def close(self) -> None:
+        """Detiene el worker de forma ordenada."""
+        async with self._lock:
+            if self._proc is None or self._proc.returncode is not None:
+                return
+            logger.info("Deteniendo worker STT...")
             try:
-                audio_path.unlink(missing_ok=True)
+                self._proc.terminate()
+                await asyncio.wait_for(self._proc.wait(), timeout=3.0)
+            except asyncio.TimeoutError:
+                self._proc.kill()
             except Exception:
                 pass
+            self._proc = None

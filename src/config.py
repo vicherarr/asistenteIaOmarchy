@@ -32,10 +32,13 @@ class Settings(BaseSettings):
     KOKORO_VOICE: str = "em_alex"
     KOKORO_LANG: str = "e"
 
-    # STT (Whisper / whisper-cli en CPU)
-    STT_MODEL_PATH: str = str(Path.home() / ".cache" / "whisper" / "ggml-large-v3-turbo.bin")
+    # STT (faster-whisper / CTranslate2 en CPU)
+    STT_MODEL: str = "large-v3-turbo"
+    STT_DEVICE: str = "cpu"
+    STT_COMPUTE_TYPE: str = "int8"
     STT_LANGUAGE: str = "es"
     STT_THREADS: int = 8
+    STT_VAD: bool = True
     STT_PROMPT: str = (
         "Comandos de voz en español para el asistente Luka: música, volumen, "
         "captura de pantalla, documentos, búsqueda en internet y notas de Obsidian."
