@@ -190,7 +190,7 @@ class AppState:
         self.litert_client = LiteRTClient()
         self.tts_engine = TTSEngine()
         self.audio_recorder = AudioRecorder()
-        self.stt_engine = STTEngine()
+        self.stt_engine = STTEngine(litert_client=self.litert_client)
         self.assistant_service = AssistantService(
             litert_client=self.litert_client,
             tts_engine=self.tts_engine,

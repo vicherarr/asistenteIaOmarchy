@@ -22,16 +22,23 @@ logger = logging.getLogger(__name__)
 class STTEngine:
     """Cliente del worker de STT. Gestiona su ciclo de vida y la comunicación."""
 
-    def __init__(self, model: Optional[str] = None) -> None:
+    def __init__(self, model: Optional[str] = None, litert_client=None) -> None:
         self._model_name = model or settings.STT_MODEL
         self._language = settings.STT_LANGUAGE
         self._prompt = settings.STT_PROMPT
         self._vad = settings.STT_VAD
+        self._use_gemma = settings.STT_USE_GEMMA_AUDIO
+        self._litert = litert_client
         self._lock = asyncio.Lock()
         self._proc: Optional[asyncio.subprocess.Process] = None
 
     async def start(self) -> None:
-        """Arranca el worker por adelantado (pre-calentado al iniciar el servicio)."""
+        """Arranca el worker por adelantado (pre-calentado al iniciar el servicio).
+
+        En modo Gemma no hay worker que arrancar: el reconocimiento usa el motor LiteRT."""
+        if self._use_gemma:
+            logger.info("Reconocimiento por audio nativo de Gemma activo; no se arranca el worker Whisper.")
+            return
         async with self._lock:
             await self._ensure_worker()
 
@@ -92,9 +99,15 @@ class STTEngine:
         except FileNotFoundError:
             logger.warning("ffmpeg no encontrado; se transcribe el audio sin normalizar.")
 
-        # 2. Transcripción en el worker (serializada; reintenta una vez si el worker murió)
+        # 2. Transcripción: Gemma (audio nativo) o worker Whisper, según configuración.
         try:
-            text = await self._request_transcription(str(audio_to_transcribe))
+            if self._use_gemma:
+                if self._litert is None:
+                    logger.error("STT_USE_GEMMA_AUDIO activo pero no se pasó litert_client.")
+                    return ""
+                text = await self._litert.transcribe_audio(str(audio_to_transcribe))
+            else:
+                text = await self._request_transcription(str(audio_to_transcribe))
             logger.info(f"Transcripción obtenida: '{text}'")
             return text
         except Exception as e:

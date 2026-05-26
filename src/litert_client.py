@@ -319,9 +319,64 @@ class LiteRTClient:
             os._exit(1)
             raise RuntimeError("LiteRT chat timed out")
 
+    async def transcribe_audio(self, audio_path: str) -> str:
+        """Transcribe un audio usando el encoder de audio nativo de Gemma (LiteRT).
+
+        Alternativa a Whisper. Ejecuta la inferencia en un hilo, bajo el lock del
+        motor, con el mismo timeout que el resto de llamadas."""
+        if not self.engine:
+            logger.error("transcribe_audio: motor LiteRT no inicializado.")
+            return ""
+
+        async def _run_under_lock():
+            async with self._lock:
+                return await asyncio.to_thread(self._transcribe_audio_sync, audio_path)
+
+        try:
+            return await asyncio.wait_for(_run_under_lock(), timeout=settings.LITERT_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout transcribiendo audio con Gemma ({settings.LITERT_TIMEOUT}s).")
+            return ""
+
+    def _transcribe_audio_sync(self, audio_path: str) -> str:
+        """Versión síncrona (en hilo) de la transcripción por audio de Gemma."""
+        system_message = {
+            "role": "system",
+            "content": [{"type": "text", "text": (
+                "Eres un transcriptor de voz. Devuelve únicamente, en español y sin "
+                "ningún comentario ni explicación, el texto exacto de lo que dice el "
+                "usuario en el audio."
+            )}],
+        }
+        user_message = {
+            "role": "user",
+            "content": [
+                {"type": "audio", "path": str(audio_path)},
+                {"type": "text", "text": "Transcribe este audio."},
+            ],
+        }
+        try:
+            with self.engine.create_conversation(messages=[system_message], tools=None) as conversation:
+                response = conversation.send_message(user_message)
+
+            if isinstance(response, dict):
+                text = "".join(
+                    part.get("text", "")
+                    for part in response.get("content", [])
+                    if part.get("type") == "text"
+                )
+            elif hasattr(response, "text"):
+                text = response.text
+            else:
+                text = str(response)
+            return text.replace("▁", " ").strip()
+        except Exception as e:
+            logger.error(f"Error transcribiendo audio con Gemma: {e}", exc_info=True)
+            return ""
+
     def _chat_sync(
-        self, 
-        prompt: str, 
+        self,
+        prompt: str,
         tools: Optional[List[Callable]], 
         system_prompt: Optional[str],
         history: Optional[List[ChatMessage]],

@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     STT_LANGUAGE: str = "es"
     STT_THREADS: int = 8
     STT_VAD: bool = True
+    # Si True, el reconocimiento usa el audio nativo del modelo Gemma (LiteRT)
+    # en vez de Whisper. False = Whisper (faster-whisper), el comportamiento actual.
+    STT_USE_GEMMA_AUDIO: bool = False
     STT_PROMPT: str = (
         "Comandos de voz en español para el asistente Luka: música, volumen, "
         "captura de pantalla, documentos, búsqueda en internet y notas de Obsidian."
