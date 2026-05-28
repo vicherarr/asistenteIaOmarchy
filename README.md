@@ -1,5 +1,11 @@
 # AsistenteIA — Luka
 
+<p align="center"><b>⚡ Instálalo en un solo comando</b> en CachyOS — Omarchy o Hyprland:</p>
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/vicherarr/asistenteIaOmarchy/master/install.sh | bash
+```
+
 Asistente de voz agéntico para **Linux (CachyOS/Hyprland)** diseñado para funcionar **100% en local y offline**. Una extensión del sistema operativo que permite interactuar por voz o texto en español natural para controlar aplicaciones, ejecutar comandos, automatizar la navegación web, sintetizar documentos y analizar la pantalla.
 
 <p align="center">
