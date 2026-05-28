@@ -15,11 +15,33 @@ PID_FILE="/tmp/asistenteia.pid"
 GUI_PID_FILE="/tmp/asistenteia-gui.pid"
 LOG_FILE="/tmp/asistenteia.log"
 
+# Salida con color y helpers de mensajes (compartidos por los scripts).
+if [ -t 1 ]; then
+    C_RESET=$'\033[0m'; C_B=$'\033[1m'; C_BLUE=$'\033[1;34m'
+    C_GREEN=$'\033[1;32m'; C_YELLOW=$'\033[1;33m'; C_RED=$'\033[1;31m'; C_CYAN=$'\033[1;36m'
+else
+    C_RESET=""; C_B=""; C_BLUE=""; C_GREEN=""; C_YELLOW=""; C_RED=""; C_CYAN=""
+fi
+log()  { printf '%s[*]%s %s\n'  "$C_BLUE"   "$C_RESET" "$*"; }
+ok()   { printf '%s[OK]%s %s\n' "$C_GREEN"  "$C_RESET" "$*"; }
+warn() { printf '%s[!]%s %s\n'  "$C_YELLOW" "$C_RESET" "$*" >&2; }
+err()  { printf '%s[x]%s %s\n'  "$C_RED"    "$C_RESET" "$*" >&2; }
+
 # Lee una clave del .env; devuelve el valor por defecto ($2) si no existe.
 ai_read_env() {
     local key="$1" def="${2:-}" val=""
     val=$(grep -E "^${key}=" "$PROJECT_DIR/.env" 2>/dev/null | head -n1 | cut -d '=' -f2- | tr -d '[:space:]') || true
     echo "${val:-$def}"
+}
+
+# Fija (o crea) una clave KEY=VALUE en el .env conservando el resto del archivo.
+ai_set_env_key() {
+    local key="$1" val="$2" f="$PROJECT_DIR/.env"
+    if grep -q "^${key}=" "$f" 2>/dev/null; then
+        sed -i "s|^${key}=.*|${key}=${val}|" "$f"
+    else
+        printf '%s=%s\n' "$key" "$val" >> "$f"
+    fi
 }
 
 PORT="$(ai_read_env PORT 8765)"

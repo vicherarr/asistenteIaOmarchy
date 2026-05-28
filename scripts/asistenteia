@@ -13,6 +13,16 @@ SCRIPTS_DIR="$(dirname "$SELF")"
 # shellcheck source=_common.sh
 source "$SCRIPTS_DIR/_common.sh"
 
+# Modelos Gemma 4 disponibles (solo E2B/E4B: los únicos con audio nativo).
+# Devuelve "REPO|FICHERO|TAMAÑO" para la clave dada (e2b/e4b).
+ai_model_meta() {
+    case "$1" in
+        e2b) echo "litert-community/gemma-4-E2B-it-litert-lm|gemma-4-E2B-it.litertlm|2.6 GB" ;;
+        e4b) echo "litert-community/gemma-4-E4B-it-litert-lm|gemma-4-E4B-it.litertlm|3.7 GB" ;;
+        *)   return 1 ;;
+    esac
+}
+
 usage() {
     cat <<EOF
 AsistenteIA - uso: asistenteia <comando>
@@ -23,6 +33,8 @@ AsistenteIA - uso: asistenteia <comando>
   toggle       Arranca/alterna la escucha (lo mismo que Super + Z)
   gui          Abre solo la interfaz visual (Spotlight)
   status       Muestra el estado del asistente
+  model [m]    Cambia el modelo (e2b/e4b): lo descarga si falta y reinicia.
+               Sin argumento, muestra el actual y pregunta cuál usar.
   logs         Muestra los logs en tiempo real
   service ...  Gestiona el servicio systemd: install | enable | disable | status | uninstall
   keybindings  (Re)configura los atajos Super+Z / Super+X
@@ -99,6 +111,76 @@ case "$cmd" in
         ;;
     keybindings)
         exec bash "$SCRIPTS_DIR/setup-keybindings.sh" "$PROJECT_DIR"
+        ;;
+    model)
+        sub="${1:-}"
+        cur_file="$(basename "$(ai_read_env LITERT_MODEL_PATH "models/gemma-4-E4B-it.litertlm")")"
+        case "$cur_file" in *E2B*) cur_key=e2b ;; *E4B*) cur_key=e4b ;; *) cur_key="?" ;; esac
+
+        # Sin argumento (o list/status): mostrar el actual y los disponibles.
+        if [ -z "$sub" ] || [ "$sub" = list ] || [ "$sub" = status ]; then
+            echo "Modelo actual: $cur_file"
+            echo
+            echo "Disponibles (ambos con audio nativo):"
+            for k in e2b e4b; do
+                IFS='|' read -r _repo file size _ < <(ai_model_meta "$k")
+                estado="no descargado"; [ -f "$PROJECT_DIR/models/$file" ] && estado="descargado"
+                marca=" "; [ "$k" = "$cur_key" ] && marca="*"
+                printf "  %s %-3s  Gemma 4 %s (~%s)  [%s]\n" "$marca" "$k" "${k^^}" "$size" "$estado"
+            done
+            echo
+            [ "$sub" = list ] || [ "$sub" = status ] && exit 0
+            if [ -r /dev/tty ]; then
+                read -r -p "¿A qué modelo cambiar? [e2b/e4b] (Enter = cancelar): " sub </dev/tty || sub=""
+            fi
+            [ -z "$sub" ] && { echo "Sin cambios."; exit 0; }
+        fi
+
+        sub="$(printf '%s' "$sub" | tr 'A-Z' 'a-z')"
+        if ! meta="$(ai_model_meta "$sub")"; then
+            err "Modelo no válido: '$sub'. Usa e2b o e4b."; exit 1
+        fi
+        IFS='|' read -r repo file size _ <<<"$meta"
+        target="$PROJECT_DIR/models/$file"
+
+        if [ "$sub" = "$cur_key" ] && [ -f "$target" ]; then
+            echo "Ya estás usando Gemma 4 ${sub^^} ($file). Nada que hacer."
+            exit 0
+        fi
+
+        if [ -f "$target" ]; then
+            echo "Gemma 4 ${sub^^} ya está descargado."
+        else
+            echo "Descargando Gemma 4 ${sub^^} (~$size) desde HuggingFace..."
+            "$PROJECT_DIR/venv/bin/python" - "$repo" "$file" "$PROJECT_DIR/models" <<'PY'
+import sys
+try:
+    from huggingface_hub import hf_hub_download
+except ImportError:
+    import subprocess
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "huggingface_hub"])
+    from huggingface_hub import hf_hub_download
+repo, fname, dest = sys.argv[1], sys.argv[2], sys.argv[3]
+hf_hub_download(repo_id=repo, filename=fname, local_dir=dest)
+print("Descargado:", dest + "/" + fname)
+PY
+            if [ ! -f "$target" ]; then err "La descarga falló. Inténtalo de nuevo."; exit 1; fi
+        fi
+
+        ai_set_env_key LITERT_MODEL_PATH "models/$file"
+        echo "Modelo activo: $file"
+
+        if ai_server_up; then
+            echo "Reiniciando para cargar el nuevo modelo..."
+            "$SCRIPTS_DIR/stop-assistant.sh" >/dev/null 2>&1 || true
+            sleep 1
+            case "$(ai_ensure_running 90)" in
+                error) err "No arrancó con el nuevo modelo. Revisa: asistenteia logs"; exit 1 ;;
+                *)     echo "Listo: asistente en marcha con Gemma 4 ${sub^^}." ;;
+            esac
+        else
+            echo "Hecho. Se cargará al arrancar (asistenteia start o Super + Z)."
+        fi
         ;;
     update)
         if [ -d "$PROJECT_DIR/.git" ]; then
