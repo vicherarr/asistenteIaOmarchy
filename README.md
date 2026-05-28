@@ -70,13 +70,14 @@ Todo (inferencia de texto, tool calling, visión multimodal, audio nativo) corre
 
 **Retry automático:** si LiteRT falla al parsear tool calls, reintenta sin herramientas.
 
-### STT: faster-whisper en worker dedicado
+### STT: configurable (faster-whisper o Gemma audio nativo)
 
-`src/stt_engine.py` delega en `src/stt_worker.py`, un **proceso Python separado** que mantiene el modelo `large-v3-turbo` residente en memoria. Comunica por JSON sobre `stdin/stdout` para aislar CTranslate2 de LiteRT y evitar contención de hilos.
+`src/stt_engine.py` soporta dos backends seleccionables con `STT_USE_GEMMA_AUDIO`:
 
-Alternativa: `STT_USE_GEMMA_AUDIO=True` usa el audio nativo de Gemma directamente.
+- **`False` (defecto) — faster-whisper:** delega en `src/stt_worker.py`, un proceso Python separado que mantiene el modelo `large-v3-turbo` residente en memoria. Comunica por JSON sobre `stdin/stdout` para aislar CTranslate2 de LiteRT y evitar contención de hilos.
+- **`True` — Gemma audio nativo:** usa el soporte de audio del propio motor LiteRT, sin proceso externo.
 
-Pre-procesamiento: FFmpeg `loudnorm` + resampleo a 16 kHz mono antes de enviar al modelo.
+En ambos casos el audio se pre-procesa primero con FFmpeg (`loudnorm` + resampleo a 16 kHz mono).
 
 ### TTS: Kokoro en CPU + pipeline doble cola
 
