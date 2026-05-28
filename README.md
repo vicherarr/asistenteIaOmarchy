@@ -16,8 +16,8 @@ Asistente de voz agéntico para **Linux (CachyOS/Hyprland)** diseñado para func
 
 ```mermaid
 graph TD
-    User((Usuario)) -- "Alt + Z / Botón BT / 'LUKA'" --> Toggle[POST /listen/toggle]
-    User -- "Super + Shift + D" --> Spotlight[src/gui/spotlight.py]
+    User((Usuario)) -- "Super + Z / Botón BT / 'LUKA'" --> Toggle[POST /listen/toggle]
+    User -- "asistenteia gui" --> Spotlight[src/gui/spotlight.py]
 
     Toggle --> Rec[src/audio_recorder.py]
     Rec -- ".wav 16kHz" --> STT[src/stt_engine.py]
@@ -221,94 +221,128 @@ config/
   omarchy_commands.md   — Referencia de comandos omarchy para el sistema
 
 scripts/
-  handy-toggle.sh       — Lanzador inteligente: levanta servicio + GUI + toggle_listen
-  start-assistant.sh    — Arranca uvicorn con configuración del entorno
+  asistenteia           — CLI: start/stop/toggle/status/logs/gui/service/update/uninstall
+  _common.sh            — Helpers compartidos (servicio systemd o proceso directo)
+  handy-toggle.sh       — Lanzador inteligente: levanta el motor + GUI + toggle_listen
+  stop-assistant.sh     — Detenedor (Super + X), funciona con o sin servicio
   start-gui.sh          — Lanza únicamente la GUI Spotlight
+  setup-keybindings.sh  — Configura Super+Z/X (Omarchy-Lua, Omarchy nativo o Hyprland)
+  generate-certs.sh     — Genera certificados SSL autofirmados
 
-services/
-  asistenteia.service   — Unit systemd (Type=simple, Restart=on-failure)
+install.sh              — Instalador de un comando (bootstrap curl | bash o clon local)
+installservice.sh       — Crea el unit systemd de usuario (rutas dinámicas)
+uninstall.sh            — Desinstalador completo
 ```
 
 ---
 
-## Instalación y Uso
+<h2 align="center">🚀 Instalación</h2>
 
-### Requisitos
-
-- CachyOS / Arch Linux con Hyprland (u Omarchy) y PipeWire
-- Python 3.11 o 3.12 (el sistema `python` 3.13+ no sirve para Kokoro)
-- El instalador resuelve el resto de dependencias automáticamente
-
-### Instalación en un solo comando
+<p align="center"><b>Un solo comando.</b> Sin clonar nada, sin configurar nada.<br>Pégalo en tu terminal, contesta dos preguntas y listo.</p>
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/vicherarr/asistenteIaOmarchy/master/install.sh | bash
 ```
 
-Esto instala todo en `~/.asistenteia` (carpeta del usuario), descarga el modelo
-Gemma (~3.6 GB), configura los certificados, el comando `asistenteia` y los
-atajos de teclado. Durante la instalación se pregunta si quieres dejarlo como
-**servicio systemd** (para uso permanente) o en **modo bajo demanda**.
+<p align="center">
+  <img src="https://img.shields.io/badge/CachyOS-Omarchy%20%2F%20Hyprland-0096FF?style=flat-square&logo=arch-linux" alt="OS">
+  <img src="https://img.shields.io/badge/instala%20en-~%2F.asistenteia-8A2BE2?style=flat-square" alt="path">
+  <img src="https://img.shields.io/badge/100%25-local%20%26%20offline-success?style=flat-square" alt="offline">
+</p>
 
-Alternativas:
+Durante la instalación solo se te pide **dos cosas**:
+
+> 🔑 **1. Tu contraseña de `sudo`** — para instalar las dependencias del sistema.
+>
+> 🛠️ **2. ¿Servicio o bajo demanda?** — si quieres dejarlo preparado para siempre o arrancarlo tú.
+
+Lo demás es automático: clona el proyecto, prepara el entorno Python, descarga el modelo **Gemma (~3.6 GB)**, genera la configuración (token + certificados SSL), instala el comando `asistenteia` y configura los atajos de teclado. ☕ *Tarda un rato — el modelo pesa.*
+
+### 🎛️ Modos de funcionamiento
+
+| Modo | Cuándo elegirlo | Cómo |
+|------|-----------------|------|
+| **Bajo demanda** | Uso ocasional. Arranca al pulsar `Super + Z`. | responde `n` (o `--no-service`) |
+| **Servicio** | Uso habitual. Lo gestiona systemd y se reinicia solo si falla. | responde `s` (o `--service`) |
+| **Arranque en sesión** | *«Dejarlo para siempre».* Listo nada más iniciar sesión. | `s` + `s` (o `--enable-boot`) |
+
+### 🎹 Atajos de teclado
+
+El instalador los configura solo (detecta **Omarchy-Lua**, **Omarchy nativo** o **Hyprland puro**):
+
+| Atajo | Acción |
+|-------|--------|
+| **`Super + Z`** | 🎙️ Arranca / habla con el asistente — *habla y se envía solo* |
+| **`Super + X`** | ⏹️ Detiene el asistente |
+| Di **«LUKA»** | 🗣️ Wake word: activa la grabación sin tocar el teclado |
+| **▶ PLAY** *(speaker BT)* | Activa grabación |
+| **⏸ PAUSE** *(speaker BT)* | Cancela el procesamiento |
+
+> 💡 ¿Los atajos no responden tras instalar? Ejecuta `hyprctl reload`.
+
+### 🧰 El comando `asistenteia`
+
+Disponible en tu terminal desde cualquier sitio (vive en `~/.local/bin`):
 
 ```bash
-# Desde un clon local
+asistenteia start      # arranca            asistenteia status     # estado actual
+asistenteia stop       # detiene            asistenteia logs       # logs en vivo
+asistenteia toggle     # = Super + Z        asistenteia gui        # solo la GUI
+asistenteia restart    # reinicia           asistenteia update     # actualiza
+asistenteia uninstall  # desinstala         asistenteia service …  # gestiona el servicio
+```
+
+<details>
+<summary><b>⚙️ Opciones avanzadas, instalación manual y desinstalación</b></summary>
+
+#### Requisitos
+
+- CachyOS / Arch Linux con Hyprland (u Omarchy) y PipeWire
+- Python 3.11 o 3.12 (el `python` 3.13+ del sistema no sirve para Kokoro — el instalador lo gestiona)
+
+#### Instalación desde un clon local
+
+```bash
 git clone https://github.com/vicherarr/asistenteIaOmarchy.git
 cd asistenteIaOmarchy
 ./install.sh
-
-# Opciones no interactivas
-./install.sh --service        # instala el servicio (arranque bajo demanda)
-./install.sh --enable-boot    # servicio + arranque automático al iniciar sesión
-./install.sh --no-service     # solo modo bajo demanda (Super + Z)
-./install.sh --dir ~/apps/luka  # instalar en otra carpeta
-./install.sh --no-keybind     # no tocar los atajos de Hyprland
 ```
 
-### Uso
+#### Flags no interactivos
 
 ```bash
-asistenteia start | stop | toggle | restart   # control del asistente
-asistenteia status                            # estado actual
-asistenteia logs                              # logs en tiempo real
-asistenteia gui                               # solo la interfaz Spotlight
-asistenteia service install|enable|disable    # gestionar el servicio systemd
-asistenteia update                            # actualizar a la última versión
-asistenteia uninstall                         # desinstalar
+./install.sh --service          # instala el servicio (arranque bajo demanda)
+./install.sh --enable-boot      # servicio + arranque automático al iniciar sesión
+./install.sh --no-service       # solo modo bajo demanda (Super + Z)
+./install.sh --dir ~/apps/luka  # instalar en otra carpeta
+./install.sh --no-keybind       # no tocar los atajos de Hyprland
 ```
 
-> El comando `asistenteia` vive en `~/.local/bin`. Si no está en tu `PATH`,
-> añádelo (fish: `fish_add_path ~/.local/bin`).
+#### Desinstalación
 
-### Atajos de teclado
+```bash
+asistenteia uninstall     # o bien:  ~/.asistenteia/uninstall.sh
+~/.asistenteia/uninstall.sh --purge   # borra también carpeta + modelos
+```
 
-El instalador los configura automáticamente (detecta Omarchy con config Lua,
-Omarchy nativo o Hyprland puro):
-
-- **Super + Z** — Arranca el asistente / alterna la escucha (habla → envía solo)
-- **Super + X** — Detiene el asistente
-- Di **"LUKA"** — Wake word que activa la grabación sin tocar el teclado
-- **PLAY** en el speaker Bluetooth — Activa grabación
-- **PAUSE** en el speaker Bluetooth — Cancela procesamiento
-
-Tras instalar, recarga Hyprland con `hyprctl reload` si los atajos no responden.
-
-### Variables de entorno relevantes
+#### Variables de entorno (`~/.asistenteia/.env`)
 
 ```bash
 LITERT_MODEL_PATH=models/gemma-4-E4B-it.litertlm
-LITERT_BACKEND=auto           # auto | gpu | cpu
+LITERT_BACKEND=gpu            # auto | gpu | cpu
+STT_USE_GEMMA_AUDIO=False     # True = audio nativo de Gemma | False = faster-whisper
 STT_MODEL=large-v3-turbo
 STT_DEVICE=cpu
 STT_COMPUTE_TYPE=int8
-STT_USE_GEMMA_AUDIO=False     # True para usar audio nativo de Gemma
-KOKORO_VOICE=em_alex
-KOKORO_LANG=e
+KOKORO_VOICE=em_alex          # em_alex | em_santa | ef_dora
+KOKORO_LANG=e                 # e (español) | a (inglés US) | b (inglés UK)
 WAKE_WORD_ENABLED=True
-API_TOKEN=                    # vacío = sin autenticación
+WAKE_WORD_THRESHOLD=0.10      # más bajo = más sensible
+API_TOKEN=                    # el instalador genera uno seguro
 ```
+
+</details>
 
 ---
 
-<p align="center">Hecho para Linux. Funciona offline.</p>
+<p align="center">Hecho para Linux · Funciona <b>offline</b> · Habla con <b>«LUKA»</b> 🎙️</p>
