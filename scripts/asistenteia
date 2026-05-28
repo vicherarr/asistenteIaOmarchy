@@ -34,6 +34,7 @@ AsistenteIA - uso: asistenteia <comando>
   gui          Abre solo la interfaz visual (Spotlight)
   web          Abre la interfaz web de chat en el navegador (arranca si hace falta)
   api          Abre la documentación Swagger de la API (/docs) en el navegador
+  invite       Genera la URL para que alguien se conecte desde la red local
   status       Muestra el estado del asistente
   model [m]    Cambia el modelo (e2b/e4b): lo descarga si falta y reinicia.
                Sin argumento, muestra el actual y pregunta cuál usar.
@@ -106,6 +107,35 @@ case "$cmd" in
         else
             warn "No se encontró 'xdg-open'. Abre esta URL manualmente:"
             echo "  $url"
+        fi
+        ;;
+    invite)
+        ip="$(ai_lan_ip)"
+        if [ -z "$ip" ]; then
+            err "No se pudo averiguar la IP de la red local. ¿Estás conectado a la red?"
+            exit 1
+        fi
+        url="$PROTO://$ip:$PORT/chat"
+        [ -n "$API_TOKEN" ] && url="$url?token=$API_TOKEN"
+
+        echo "Comparte esta URL con quien esté en tu misma red local:"
+        echo
+        printf '  %s%s%s\n' "$C_CYAN" "$url" "$C_RESET"
+        echo
+        # Un QR viene de perlas para conectar el móvil; solo si está disponible.
+        if command -v qrencode >/dev/null 2>&1; then
+            qrencode -t ANSIUTF8 "$url"
+            echo
+        fi
+
+        host="$(ai_read_env HOST 127.0.0.1)"
+        if [ "$host" = "127.0.0.1" ] || [ "$host" = "localhost" ]; then
+            warn "Ahora mismo el asistente solo escucha en local (HOST=$host),"
+            warn "así que esa URL no funcionará desde otro dispositivo."
+            warn "Pon HOST=0.0.0.0 en el .env y reinicia: asistenteia restart"
+        fi
+        if [ "$PROTO" = "https" ]; then
+            echo "Nota: el certificado es autofirmado; el navegador avisará (acepta el riesgo)."
         fi
         ;;
     status)

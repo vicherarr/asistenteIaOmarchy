@@ -72,6 +72,16 @@ ai_import_graphical_env() {
         2>/dev/null || true
 }
 
+# Averigua la IP de este equipo en la red local (la que usaría para salir a
+# Internet, que es la de la LAN). Vacío si no se puede determinar.
+ai_lan_ip() {
+    local ip=""
+    ip=$(ip -4 route get 1.1.1.1 2>/dev/null \
+        | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')
+    [ -z "$ip" ] && ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    echo "$ip"
+}
+
 # ---- Estado del servidor ----------------------------------------------------
 ai_server_up() { curl -sk -o /dev/null --max-time 2 "$BASE_URL/status" 2>/dev/null; }
 
