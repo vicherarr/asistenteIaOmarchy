@@ -304,16 +304,20 @@ class TestToolCalling:
             "read_log_file",
             "clipboard_manager",
             "web_search",
-            "manage_windows",
             "system_diagnostics",
             "read_web_page",
-            "interact_web",
             "play_specific_music",
             "open_terminal_and_run_command",
             "read_terminal_screen",
             "control_local_browser",
             "send_input_to_terminal",
             "interrupt_terminal_command",
+            "launch_application",
+            "close_application",
+            "analyze_screen",
+            "analyze_clipboard_image",
+            "take_screenshot",
+            "create_document",
         ]
 
         for herramienta in herramientas_esperadas:

@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.main import app, AppState, get_app_state
+from src.main import app, AppState, get_app_state, verify_token
 
 
 @pytest.fixture
@@ -47,6 +47,7 @@ def mock_app_state():
 def client(mock_app_state):
     """Configura el cliente de prueba con inyección de dependencias."""
     app.dependency_overrides[get_app_state] = lambda: mock_app_state
+    app.dependency_overrides[verify_token] = lambda: None
     # Parcheamos los motores pesados para que el lifespan no cargue modelos reales ni acceda a hardware
     with patch("src.main.LiteRTClient") as mock_litert_class, \
          patch("src.main.TTSEngine"), \

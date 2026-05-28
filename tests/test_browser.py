@@ -124,7 +124,7 @@ async def test_browser_read():
     mock_page = AsyncMock()
     mock_page.title.return_value = "Test Page"
     mock_page.url = "https://example.com"
-    mock_page.evaluate.return_value = "Hello world content"
+    mock_page.evaluate.return_value = "Hello world content " * 20
     result = await browser_read(mock_page)
     assert "Test Page" in result
     assert "Hello world" in result

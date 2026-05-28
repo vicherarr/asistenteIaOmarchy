@@ -602,7 +602,7 @@ class TestBrowserRead:
     @pytest.mark.asyncio
     async def test_read_pagina_normal(self, mock_page):
         """Leer página normal."""
-        mock_page.evaluate.return_value = "Contenido de la página"
+        mock_page.evaluate.return_value = "Contenido de la página con suficiente texto para superar el umbral mínimo de lectura. " * 5
         result = await browser_read(mock_page)
         assert "INFORMACIÓN DE PESTAÑA ACTIVA" in result
         assert "TÍTULO" in result
@@ -611,10 +611,10 @@ class TestBrowserRead:
 
     @pytest.mark.asyncio
     async def test_read_pagina_vacia(self, mock_page):
-        """Leer página sin contenido."""
+        """Leer página sin contenido cae a visión."""
         mock_page.evaluate.return_value = ""
         result = await browser_read(mock_page)
-        assert "INFORMACIÓN" in result
+        assert "poco texto legible" in result
 
     @pytest.mark.asyncio
     async def test_read_pagina_muy_larga_trunca(self, mock_page):
@@ -626,17 +626,17 @@ class TestBrowserRead:
         assert len(result) < len(contenido_largo)
 
     @pytest.mark.asyncio
-    async def test_read_pagina_exacto_3000_chars(self, mock_page):
-        """Leer página con exactamente 3000 chars no trunca."""
-        contenido = "A" * 3000
+    async def test_read_pagina_exacto_2500_chars(self, mock_page):
+        """Leer página con exactamente 2500 chars no trunca."""
+        contenido = "A" * 2500
         mock_page.evaluate.return_value = contenido
         result = await browser_read(mock_page)
         assert "truncado" not in result
 
     @pytest.mark.asyncio
-    async def test_read_pagina_3001_chars_trunca(self, mock_page):
-        """Leer página con 3001 chars sí trunca."""
-        contenido = "A" * 3001
+    async def test_read_pagina_2501_chars_trunca(self, mock_page):
+        """Leer página con 2501 chars sí trunca."""
+        contenido = "A" * 2501
         mock_page.evaluate.return_value = contenido
         result = await browser_read(mock_page)
         assert "truncado" in result
