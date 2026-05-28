@@ -235,46 +235,64 @@ services/
 
 ### Requisitos
 
-- CachyOS / Arch Linux con Hyprland y PipeWire
-- Python 3.11 + `venv`
-- `tmux`, `grim`, `slurp`, `wl-clipboard`
-- `whisper.cpp` no requerido — STT usa `faster-whisper` (Python, se instala con pip)
-- Modelo LiteRT en `models/gemma-4-E4B-it.litertlm`
-- Modelos Sherpa-ONNX para wake word en el directorio configurado en `WAKE_WORD_MODEL_DIR`
+- CachyOS / Arch Linux con Hyprland (u Omarchy) y PipeWire
+- Python 3.11 o 3.12 (el sistema `python` 3.13+ no sirve para Kokoro)
+- El instalador resuelve el resto de dependencias automáticamente
 
-### Instalación
+### Instalación en un solo comando
 
 ```bash
-git clone <repo>
-cd asistenteia
-./install.sh          # crea venv, instala dependencias
-./installservice.sh   # instala el unit systemd de usuario
-./startservice.sh     # arranca el servicio
+curl -fsSL https://raw.githubusercontent.com/vicherarr/asistenteIaOmarchy/master/install.sh | bash
 ```
 
-### Comandos de utilidad
+Esto instala todo en `~/.asistenteia` (carpeta del usuario), descarga el modelo
+Gemma (~3.6 GB), configura los certificados, el comando `asistenteia` y los
+atajos de teclado. Durante la instalación se pregunta si quieres dejarlo como
+**servicio systemd** (para uso permanente) o en **modo bajo demanda**.
+
+Alternativas:
 
 ```bash
-./startservice.sh     # arranca el servicio systemd
-./stopservice.sh      # detiene el servicio
-./logs.sh             # journalctl -f en tiempo real
-./scripts/start-gui.sh  # lanza solo la GUI Spotlight
+# Desde un clon local
+git clone https://github.com/vicherarr/asistenteIaOmarchy.git
+cd asistenteIaOmarchy
+./install.sh
+
+# Opciones no interactivas
+./install.sh --service        # instala el servicio (arranque bajo demanda)
+./install.sh --enable-boot    # servicio + arranque automático al iniciar sesión
+./install.sh --no-service     # solo modo bajo demanda (Super + Z)
+./install.sh --dir ~/apps/luka  # instalar en otra carpeta
+./install.sh --no-keybind     # no tocar los atajos de Hyprland
 ```
 
-### Atajos de teclado (Hyprland)
+### Uso
 
-Añade en `hyprland.conf`:
-
+```bash
+asistenteia start | stop | toggle | restart   # control del asistente
+asistenteia status                            # estado actual
+asistenteia logs                              # logs en tiempo real
+asistenteia gui                               # solo la interfaz Spotlight
+asistenteia service install|enable|disable    # gestionar el servicio systemd
+asistenteia update                            # actualizar a la última versión
+asistenteia uninstall                         # desinstalar
 ```
-bind = Alt, Z, exec, ~/develop/asistenteia/scripts/handy-toggle.sh
-bind = SUPER SHIFT, D, exec, ~/develop/asistenteia/scripts/start-gui.sh
-```
 
-- `Alt + Z` — Alterna grabación (habla → envía automáticamente)
-- `Super + Shift + D` — Muestra / oculta la interfaz Spotlight
-- Di **"LUKA"** — Wake word que activa grabación sin tocar teclado
+> El comando `asistenteia` vive en `~/.local/bin`. Si no está en tu `PATH`,
+> añádelo (fish: `fish_add_path ~/.local/bin`).
+
+### Atajos de teclado
+
+El instalador los configura automáticamente (detecta Omarchy con config Lua,
+Omarchy nativo o Hyprland puro):
+
+- **Super + Z** — Arranca el asistente / alterna la escucha (habla → envía solo)
+- **Super + X** — Detiene el asistente
+- Di **"LUKA"** — Wake word que activa la grabación sin tocar el teclado
 - **PLAY** en el speaker Bluetooth — Activa grabación
 - **PAUSE** en el speaker Bluetooth — Cancela procesamiento
+
+Tras instalar, recarga Hyprland con `hyprctl reload` si los atajos no responden.
 
 ### Variables de entorno relevantes
 

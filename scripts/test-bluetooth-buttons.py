@@ -10,10 +10,11 @@ Detiene automáticamente tras 30 segundos o con Ctrl+C.
 """
 
 import asyncio
+import os
 import sys
 
-# Asegurar que src/ esté en el path
-sys.path.insert(0, "/home/victor/develop/asistenteia")
+# Asegurar que la raíz del proyecto esté en el path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.bt_button_listener import BtButtonListener
 

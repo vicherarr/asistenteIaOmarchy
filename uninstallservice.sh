@@ -43,7 +43,6 @@ systemctl --user daemon-reload
 echo "-> Limpiando archivos temporales..."
 rm -f /tmp/asistenteia.pid
 rm -f /tmp/asistenteia.log
-rm -f /tmp/asistenteia_started_ollama
 
 echo "=== Servicio desinstalado correctamente ==="
 echo "Nota: El entorno virtual (venv) y los archivos del proyecto permanecen intactos."

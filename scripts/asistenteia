@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# =============================================================================
+# asistenteia - Interfaz de línea de comandos de AsistenteIA
+# =============================================================================
+# Se instala como symlink en ~/.local/bin/asistenteia. Resuelve su ruta real
+# para localizar la instalación, sin rutas hardcodeadas.
+# =============================================================================
+
+set -uo pipefail
+
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPTS_DIR="$(dirname "$SELF")"
+# shellcheck source=_common.sh
+source "$SCRIPTS_DIR/_common.sh"
+
+usage() {
+    cat <<EOF
+AsistenteIA - uso: asistenteia <comando>
+
+  start        Arranca el asistente (servicio si está instalado, si no proceso)
+  stop         Detiene el asistente
+  restart      Reinicia el asistente
+  toggle       Arranca/alterna la escucha (lo mismo que Super + Z)
+  gui          Abre solo la interfaz visual (Spotlight)
+  status       Muestra el estado del asistente
+  logs         Muestra los logs en tiempo real
+  service ...  Gestiona el servicio systemd: install | enable | disable | status | uninstall
+  keybindings  (Re)configura los atajos Super+Z / Super+X
+  update       Actualiza el código (git pull) y sincroniza dependencias
+  uninstall    Desinstala AsistenteIA
+  help         Esta ayuda
+
+Instalación: $PROJECT_DIR
+EOF
+}
+
+cmd="${1:-help}"
+shift || true
+
+case "$cmd" in
+    start)
+        case "$(ai_ensure_running 60)" in
+            already) echo "El asistente ya estaba en marcha ($BASE_URL)." ;;
+            started) echo "Asistente iniciado ($BASE_URL)." ;;
+            *)       err "No se pudo iniciar el asistente. Revisa: asistenteia logs"; exit 1 ;;
+        esac
+        ;;
+    stop)
+        exec "$SCRIPTS_DIR/stop-assistant.sh"
+        ;;
+    restart)
+        "$SCRIPTS_DIR/stop-assistant.sh" >/dev/null 2>&1 || true
+        sleep 1
+        case "$(ai_ensure_running 60)" in
+            error) err "No se pudo reiniciar."; exit 1 ;;
+            *)     echo "Asistente reiniciado ($BASE_URL)." ;;
+        esac
+        ;;
+    toggle)
+        exec "$SCRIPTS_DIR/handy-toggle.sh"
+        ;;
+    gui)
+        exec "$SCRIPTS_DIR/start-gui.sh"
+        ;;
+    status)
+        if ai_server_up; then
+            echo "Estado: EN MARCHA ($BASE_URL)"
+            curl -sk "$BASE_URL/status" -H "X-API-Token: $API_TOKEN" 2>/dev/null || true
+            echo
+        else
+            echo "Estado: DETENIDO"
+        fi
+        if ai_service_installed; then
+            ai_service_active && echo "Servicio systemd: activo" || echo "Servicio systemd: instalado (parado)"
+        else
+            echo "Servicio systemd: no instalado (modo bajo demanda)"
+        fi
+        ;;
+    logs)
+        if ai_service_installed; then
+            journalctl --user -u "$SERVICE_NAME" -f
+        elif [ -f "$LOG_FILE" ]; then
+            tail -n 100 -f "$LOG_FILE"
+        else
+            err "No hay logs disponibles todavía."
+            exit 1
+        fi
+        ;;
+    service)
+        sub="${1:-status}"
+        case "$sub" in
+            install)   exec bash "$PROJECT_DIR/installservice.sh" ;;
+            enable)    exec bash "$PROJECT_DIR/installservice.sh" --enable ;;
+            disable)   systemctl --user disable --now "$SERVICE_NAME"; echo "Servicio deshabilitado." ;;
+            uninstall) exec bash "$PROJECT_DIR/uninstallservice.sh" ;;
+            status)    systemctl --user status "$SERVICE_NAME" --no-pager || true ;;
+            *)         err "Subcomando de servicio no válido: $sub"; exit 1 ;;
+        esac
+        ;;
+    keybindings)
+        exec bash "$SCRIPTS_DIR/setup-keybindings.sh" "$PROJECT_DIR"
+        ;;
+    update)
+        if [ -d "$PROJECT_DIR/.git" ]; then
+            git -C "$PROJECT_DIR" pull --ff-only || { err "No se pudo actualizar."; exit 1; }
+        fi
+        "$PROJECT_DIR/venv/bin/pip" install -r "$PROJECT_DIR/requirements.txt"
+        echo "AsistenteIA actualizado."
+        ;;
+    uninstall)
+        exec bash "$PROJECT_DIR/uninstall.sh"
+        ;;
+    help|-h|--help)
+        usage
+        ;;
+    *)
+        err "Comando desconocido: $cmd"
+        usage
+        exit 1
+        ;;
+esac

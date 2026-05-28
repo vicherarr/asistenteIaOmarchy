@@ -1,38 +1,24 @@
 #!/usr/bin/env bash
 # =============================================================================
-# stop-assistant.sh - Detenedor global de emergencia
+# stop-assistant.sh - Detenedor global (Super + X)
+# =============================================================================
+# Detiene el asistente sea cual sea el modo: servicio systemd o proceso directo.
 # =============================================================================
 
-set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
-notify-send "AsistenteIA" "Deteniendo todos los servicios..."
+notify-send "AsistenteIA" "Deteniendo el asistente..." 2>/dev/null || true
 
-if systemctl --user is-active asistenteia.service > /dev/null 2>&1; then
-    systemctl --user stop asistenteia.service
+# 1. Detener el servicio systemd si está activo.
+if ai_service_active; then
+    systemctl --user stop "$SERVICE_NAME"
 fi
 
-PID_FILE="/tmp/asistenteia.pid"
-if [ -f "$PID_FILE" ]; then
-    PID=$(cat "$PID_FILE")
-    kill "$PID" 2>/dev/null || true
-    rm -f "$PID_FILE"
-fi
+# 2. Detener cualquier proceso directo y liberar el puerto.
+ai_stop_process
 
-pkill -f "python -m src.main" || true
+# 3. Cerrar la interfaz visual.
+ai_stop_gui
 
-GUI_PID_FILE="/tmp/asistenteia-gui.pid"
-if [ -f "$GUI_PID_FILE" ]; then
-    echo "-> Deteniendo interfaz visual..."
-    GUI_PID=$(cat "$GUI_PID_FILE")
-    kill "$GUI_PID" 2>/dev/null || true
-    rm -f "$GUI_PID_FILE"
-fi
-
-if [ -f "/tmp/asistenteia_started_ollama" ]; then
-    echo "-> Deteniendo Ollama residual..."
-    pkill -f "ollama serve" || true
-    rm -f "/tmp/asistenteia_started_ollama"
-fi
-
-notify-send "AsistenteIA" "Todo detenido y limpio."
+notify-send "AsistenteIA" "Asistente detenido." 2>/dev/null || true
 echo "Detención completada."

@@ -1,56 +1,42 @@
 #!/usr/bin/env bash
 # =============================================================================
-# handy-toggle.sh - Iniciador Inteligente con Interfaz Visual
+# handy-toggle.sh - Iniciador inteligente con interfaz visual (Super + Z)
+# =============================================================================
+# Funciona tanto con servicio systemd como en modo bajo demanda (sin servicio).
+# - Si el asistente no está activo, lo arranca y muestra la GUI.
+# - Si ya estaba activo, alterna la escucha del micrófono (toggle).
 # =============================================================================
 
-PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PORT=$(grep '^PORT=' "$PROJECT_DIR/.env" 2>/dev/null | cut -d '=' -f2 | tr -d '[:space:]' || echo "8765")
-TOKEN=$(grep '^API_TOKEN=' "$PROJECT_DIR/.env" 2>/dev/null | cut -d '=' -f2 | tr -d '[:space:]')
+source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
-# 1. Asegurar que el servicio está activo
-SERVICE_WAS_RUNNING=true
-if ! systemctl --user is-active --quiet asistenteia.service; then
-    SERVICE_WAS_RUNNING=false
-    notify-send "AsistenteIA" "Iniciando servicio..." -i info
-    systemctl --user start asistenteia.service
-    
-    # Esperar a que el servidor responda
-    COUNT=0
-    until curl -sk "https://localhost:$PORT/status" &>/dev/null; do
-        sleep 1
-        COUNT=$((COUNT + 1))
-        if [ $COUNT -ge 45 ]; then
-            notify-send "AsistenteIA" "Error: El motor no inicia." -u critical
-            exit 1
-        fi
-    done
+# 1. Asegurar que el motor está activo (servicio o proceso directo).
+STATE="$(ai_ensure_running 45)"
+if [ "$STATE" = "error" ]; then
+    notify-send "AsistenteIA" "Error: el motor no inicia." -u critical 2>/dev/null || true
+    exit 1
+fi
+if [ "$STATE" = "started" ]; then
+    notify-send "AsistenteIA" "Iniciando asistente..." 2>/dev/null || true
 fi
 
-# 2. Levantar la Interfaz Visual (Spotlight) o mostrarla si ya existe
-GUI_PID_FILE="/tmp/asistenteia-gui.pid"
+# 2. Levantar la interfaz visual (Spotlight) o mostrarla si ya existe.
 LAUNCH_GUI=true
-
 if [ -f "$GUI_PID_FILE" ]; then
     GUI_PID=$(cat "$GUI_PID_FILE")
     if kill -0 "$GUI_PID" 2>/dev/null; then
-        # El proceso existe realmente
-        kill -USR2 "$GUI_PID"
+        kill -USR2 "$GUI_PID"   # señal para que la GUI se muestre
         LAUNCH_GUI=false
     else
-        # El archivo PID es basura, lo borramos
         rm -f "$GUI_PID_FILE"
     fi
 fi
+[ "$LAUNCH_GUI" = true ] && "$PROJECT_DIR/scripts/start-gui.sh"
 
-if [ "$LAUNCH_GUI" = true ]; then
-    "$PROJECT_DIR/scripts/start-gui.sh"
-fi
-
-# 3. Dar una pequeña tregua para que la GUI registre el cambio de estado
+# 3. Pequeña tregua para que la GUI registre el cambio de estado.
 sleep 0.2
 
-# 4. Solo enviar toggle si el servicio YA estaba corriendo.
-#    Si acabamos de iniciar el servicio, no grabamos — el wake word ya está escuchando.
-if [ "$SERVICE_WAS_RUNNING" = true ]; then
-    curl -sk -X POST "https://localhost:$PORT/listen/toggle" -H "X-API-Token: $TOKEN" > /dev/null 2>&1
+# 4. Solo enviar toggle si el servidor YA estaba corriendo.
+#    Si acabamos de arrancarlo, el wake word ya está escuchando.
+if [ "$STATE" = "already" ]; then
+    curl -sk -X POST "$BASE_URL/listen/toggle" -H "X-API-Token: $API_TOKEN" >/dev/null 2>&1
 fi

@@ -25,7 +25,7 @@ from src.audio_manager import AudioManager
 from src.litert_client import LiteRTClient
 from src.tts_engine import TTSEngine
 from src.assistant_service import AssistantService
-from src.config import settings
+from src.config import settings, resolve_path
 from src.audio_recorder import AudioRecorder
 from src.stt_engine import STTEngine
 from src.schema import ChatMessage
@@ -851,8 +851,10 @@ async def configure_audio(state: AppState = Depends(get_app_state)):
 if __name__ == "__main__":
     import uvicorn
     
-    ssl_keyfile = settings.SSL_KEYFILE if settings.SSL_KEYFILE and os.path.exists(settings.SSL_KEYFILE) else None
-    ssl_certfile = settings.SSL_CERTFILE if settings.SSL_CERTFILE and os.path.exists(settings.SSL_CERTFILE) else None
+    _keyfile = resolve_path(settings.SSL_KEYFILE)
+    _certfile = resolve_path(settings.SSL_CERTFILE)
+    ssl_keyfile = str(_keyfile) if _keyfile and _keyfile.exists() else None
+    ssl_certfile = str(_certfile) if _certfile and _certfile.exists() else None
     
     if ssl_keyfile and ssl_certfile:
         logger.info(f"Iniciando servidor en modo seguro (HTTPS) con certificado autofirmado.")

@@ -69,6 +69,18 @@ class Settings(BaseSettings):
 # Instancia global de configuración
 settings = Settings()
 
+
+def resolve_path(p: Optional[str]) -> Optional[Path]:
+    """Resuelve una ruta relativa contra PROJECT_ROOT; deja las absolutas tal cual.
+
+    Garantiza que las rutas configuradas funcionen sin depender del directorio
+    de trabajo actual (CWD), independientemente de desde dónde se lance la app.
+    """
+    if not p:
+        return None
+    path = Path(p)
+    return path if path.is_absolute() else settings.PROJECT_ROOT / path
+
 # Asegurar que los directorios existen
 settings.TEMP_DIR.mkdir(parents=True, exist_ok=True)
 (settings.PROJECT_ROOT / "models").mkdir(parents=True, exist_ok=True)

@@ -11,10 +11,21 @@ build/
 *.png
 *.tmp
 
-# LiteRT y Modelos
-models/
+# LiteRT y Modelos pesados (no versionar). Se descargan en la instalación.
+models/*
 *.litertlm*
 *.xnnpack_cache*
+
+# Excepción: el modelo de wake word (Sherpa-ONNX KWS, ~5.5MB) SÍ se versiona
+# para que venga incluido en el clon sin descarga extra.
+!models/sherpa-kws/
+models/sherpa-kws/*
+!models/sherpa-kws/encoder.onnx
+!models/sherpa-kws/decoder.onnx
+!models/sherpa-kws/joiner.onnx
+!models/sherpa-kws/bpe.model
+!models/sherpa-kws/tokens.txt
+!models/sherpa-kws/keywords.txt
 
 # Configuración local
 .env
