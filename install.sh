@@ -29,8 +29,16 @@ REPO_URL="${ASISTENTEIA_REPO:-https://github.com/vicherarr/asistenteIaOmarchy.gi
 REPO_BRANCH="${ASISTENTEIA_BRANCH:-master}"
 LOCAL_BIN="$HOME/.local/bin"
 
-GEMMA_FILE="gemma-4-E4B-it.litertlm"
-GEMMA_REPO="litert-community/gemma-4-E4B-it-litert-lm"
+# Modelos disponibles (ambos con audio nativo). La detección de VRAM elige uno.
+GEMMA_E2B_FILE="gemma-4-E2B-it.litertlm"
+GEMMA_E2B_REPO="litert-community/gemma-4-E2B-it-litert-lm"
+GEMMA_E4B_FILE="gemma-4-E4B-it.litertlm"
+GEMMA_E4B_REPO="litert-community/gemma-4-E4B-it-litert-lm"
+# Se rellenan en el paso de detección de hardware.
+GEMMA_FILE=""
+GEMMA_REPO=""
+MODEL_NAME=""
+LITERT_BACKEND=""
 
 WANT_SERVICE=""        # "", "yes" o "no"
 ENABLE_BOOT=false
@@ -63,6 +71,40 @@ ask_yes_no() {
     read -r -p "$(printf '%s%s%s %s ' "$C_B" "$prompt" "$C_RESET" "$hint")" ans </dev/tty || ans=""
     ans="${ans:-$def}"
     case "$ans" in [sSyY]*) return 0 ;; *) return 1 ;; esac
+}
+
+# VRAM total (MiB) de la GPU dedicada más grande (NVIDIA o AMD). 0 si no hay.
+# La iGPU Intel usa RAM compartida y NO expone mem_info_vram_total, así que no
+# cuenta como GPU dedicada (correcto: no debe usarse para cargar el modelo).
+detect_vram_mib() {
+    local mib=0 v f bytes amd
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        v="$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | sort -nr | head -n1 || true)"
+        case "$v" in ''|*[!0-9]*) : ;; *) mib="$v" ;; esac
+    fi
+    for f in /sys/class/drm/card*/device/mem_info_vram_total; do
+        [ -r "$f" ] || continue
+        bytes="$(cat "$f" 2>/dev/null || echo 0)"
+        case "$bytes" in ''|*[!0-9]*) continue ;; esac
+        amd=$(( bytes / 1048576 ))
+        [ "$amd" -gt "$mib" ] && mib="$amd"
+    done
+    echo "$mib"
+}
+
+# RAM total del sistema en GiB (entero, redondeo hacia abajo).
+detect_ram_gib() {
+    awk '/^MemTotal:/ {printf "%d", $2/1048576}' /proc/meminfo 2>/dev/null || echo 0
+}
+
+# Fija (o crea) una clave KEY=VALUE en un archivo .env conservando el resto.
+ai_set_env_key() {
+    local f="$1" k="$2" v="$3"
+    if grep -q "^${k}=" "$f" 2>/dev/null; then
+        sed -i "s|^${k}=.*|${k}=${v}|" "$f"
+    else
+        printf '%s=%s\n' "$k" "$v" >> "$f"
+    fi
 }
 
 # -----------------------------------------------------------------------------
@@ -209,9 +251,37 @@ log "Instalando navegador de Playwright (Chromium)..."
 ok "Dependencias Python instaladas."
 
 # -----------------------------------------------------------------------------
+# Detección de hardware: elige modelo (E2B/E4B, ambos con audio) y backend según
+# la VRAM de la GPU dedicada. Política conservadora: GPU solo con holgura clara.
+# -----------------------------------------------------------------------------
+step "6/9  Detección de hardware y selección de modelo"
+VRAM_MIB="$(detect_vram_mib)"
+RAM_GIB="$(detect_ram_gib)"
+if [ "$VRAM_MIB" -gt 0 ]; then
+    log "GPU dedicada detectada: ~$(( VRAM_MIB / 1024 )) GiB de VRAM ($VRAM_MIB MiB)."
+else
+    log "No se detectó GPU dedicada (NVIDIA/AMD)."
+fi
+log "RAM del sistema: ${RAM_GIB} GiB."
+
+if [ "$VRAM_MIB" -ge 7168 ]; then            # >= 7 GiB  -> E4B en GPU
+    GEMMA_FILE="$GEMMA_E4B_FILE"; GEMMA_REPO="$GEMMA_E4B_REPO"; LITERT_BACKEND="gpu"; MODEL_NAME="E4B"
+elif [ "$VRAM_MIB" -ge 5120 ]; then          # 5-7 GiB   -> E2B en GPU
+    GEMMA_FILE="$GEMMA_E2B_FILE"; GEMMA_REPO="$GEMMA_E2B_REPO"; LITERT_BACKEND="gpu"; MODEL_NAME="E2B"
+else                                         # < 5 GiB o sin GPU dedicada -> CPU
+    LITERT_BACKEND="cpu"
+    if [ "$RAM_GIB" -ge 10 ]; then
+        GEMMA_FILE="$GEMMA_E4B_FILE"; GEMMA_REPO="$GEMMA_E4B_REPO"; MODEL_NAME="E4B"
+    else
+        GEMMA_FILE="$GEMMA_E2B_FILE"; GEMMA_REPO="$GEMMA_E2B_REPO"; MODEL_NAME="E2B"
+    fi
+fi
+ok "Selección: Gemma 4 $MODEL_NAME ($GEMMA_FILE) con backend $LITERT_BACKEND."
+
+# -----------------------------------------------------------------------------
 # Modelos (wake word ya viene en git; Gemma se copia o se descarga)
 # -----------------------------------------------------------------------------
-step "6/8  Modelo LiteRT Gemma-4-E4B (~3.6 GB)"
+step "7/9  Modelo LiteRT (Gemma 4 $MODEL_NAME)"
 mkdir -p "$INSTALL_DIR/models"
 TARGET_MODEL="$INSTALL_DIR/models/$GEMMA_FILE"
 if [ -f "$TARGET_MODEL" ]; then
@@ -240,19 +310,20 @@ fi
 # -----------------------------------------------------------------------------
 # Configuración: .env, token y certificados
 # -----------------------------------------------------------------------------
-step "7/8  Configuración (.env, token, certificados)"
-if [ ! -f "$INSTALL_DIR/.env" ]; then
-    cp "$INSTALL_DIR/.env.example" "$INSTALL_DIR/.env"
+step "8/9  Configuración (.env, token, certificados)"
+ENV_FILE="$INSTALL_DIR/.env"
+if [ ! -f "$ENV_FILE" ]; then
+    cp "$INSTALL_DIR/.env.example" "$ENV_FILE"
     TOKEN="$(./venv/bin/python -c 'import secrets; print(secrets.token_urlsafe(24))')"
-    if grep -q '^API_TOKEN=' "$INSTALL_DIR/.env"; then
-        sed -i "s|^API_TOKEN=.*|API_TOKEN=$TOKEN|" "$INSTALL_DIR/.env"
-    else
-        printf 'API_TOKEN=%s\n' "$TOKEN" >> "$INSTALL_DIR/.env"
-    fi
+    ai_set_env_key "$ENV_FILE" API_TOKEN "$TOKEN"
     ok ".env creado con un API_TOKEN seguro."
 else
-    ok ".env ya existe (se respeta)."
+    ok ".env ya existe (se respetan token y ajustes personales)."
 fi
+# El backend y el modelo se ajustan siempre al hardware detectado en este equipo.
+ai_set_env_key "$ENV_FILE" LITERT_BACKEND "$LITERT_BACKEND"
+ai_set_env_key "$ENV_FILE" LITERT_MODEL_PATH "models/$GEMMA_FILE"
+ok "En .env: LITERT_BACKEND=$LITERT_BACKEND, LITERT_MODEL_PATH=models/$GEMMA_FILE."
 if [ ! -f "$INSTALL_DIR/config/certs/cert.pem" ]; then
     bash "$INSTALL_DIR/scripts/generate-certs.sh" >/dev/null 2>&1 && ok "Certificados SSL generados." \
         || warn "No se pudieron generar los certificados (la app usará HTTP)."
@@ -263,7 +334,7 @@ fi
 # -----------------------------------------------------------------------------
 # Lanzador `asistenteia` en ~/.local/bin
 # -----------------------------------------------------------------------------
-step "8/8  Lanzador, servicio y atajos"
+step "9/9  Lanzador, servicio y atajos"
 mkdir -p "$LOCAL_BIN"
 ln -sf "$INSTALL_DIR/scripts/asistenteia" "$LOCAL_BIN/asistenteia"
 chmod +x "$INSTALL_DIR/scripts/asistenteia" 2>/dev/null || true
@@ -296,6 +367,13 @@ else
     log "Modo bajo demanda: no se instala servicio. El asistente arranca con Super + Z."
 fi
 
+# Si el servicio ya estaba en marcha (reinstalación), reinícialo para que tome el
+# nuevo .env (modelo/backend recién detectados). Si no, arrancará con esa config.
+if systemctl --user is-active --quiet asistenteia.service 2>/dev/null; then
+    log "Servicio ya activo: reiniciando para aplicar el modelo/backend detectados..."
+    systemctl --user restart asistenteia.service || warn "No se pudo reiniciar el servicio."
+fi
+
 # -----------------------------------------------------------------------------
 # Atajos de teclado (Omarchy / Hyprland)
 # -----------------------------------------------------------------------------
@@ -311,6 +389,7 @@ fi
 step "Instalación completada"
 cat <<EOF
 ${C_GREEN}AsistenteIA está instalado en:${C_RESET} $INSTALL_DIR
+${C_B}Modelo:${C_RESET} Gemma 4 $MODEL_NAME    ${C_B}Backend LiteRT:${C_RESET} $LITERT_BACKEND
 
   ${C_B}Super + Z${C_RESET}  -> Arrancar / hablar con el asistente
   ${C_B}Super + X${C_RESET}  -> Detener el asistente
