@@ -32,6 +32,8 @@ AsistenteIA - uso: asistenteia <comando>
   restart      Reinicia el asistente
   toggle       Arranca/alterna la escucha (lo mismo que Super + Z)
   gui          Abre solo la interfaz visual (Spotlight)
+  web          Abre la interfaz web de chat en el navegador (arranca si hace falta)
+  api          Abre la documentación Swagger de la API (/docs) en el navegador
   status       Muestra el estado del asistente
   model [m]    Cambia el modelo (e2b/e4b): lo descarga si falta y reinicia.
                Sin argumento, muestra el actual y pregunta cuál usar.
@@ -73,6 +75,38 @@ case "$cmd" in
         ;;
     gui)
         exec "$SCRIPTS_DIR/start-gui.sh"
+        ;;
+    web)
+        # Asegura que el servidor está en marcha antes de abrir el navegador.
+        case "$(ai_ensure_running 60)" in
+            error) err "No se pudo iniciar el asistente. Revisa: asistenteia logs"; exit 1 ;;
+            *)     : ;;
+        esac
+        # El token va en la query: chat.html lo guarda y limpia la URL al cargar.
+        url="$BASE_URL/chat"
+        [ -n "$API_TOKEN" ] && url="$url?token=$API_TOKEN"
+        echo "Abriendo la interfaz web: $BASE_URL/chat"
+        if command -v xdg-open >/dev/null 2>&1; then
+            xdg-open "$url" >/dev/null 2>&1 &
+        else
+            warn "No se encontró 'xdg-open'. Abre esta URL manualmente:"
+            echo "  $url"
+        fi
+        ;;
+    api)
+        # Asegura que el servidor está en marcha antes de abrir Swagger.
+        case "$(ai_ensure_running 60)" in
+            error) err "No se pudo iniciar el asistente. Revisa: asistenteia logs"; exit 1 ;;
+            *)     : ;;
+        esac
+        url="$BASE_URL/docs"
+        echo "Abriendo la documentación Swagger de la API: $url"
+        if command -v xdg-open >/dev/null 2>&1; then
+            xdg-open "$url" >/dev/null 2>&1 &
+        else
+            warn "No se encontró 'xdg-open'. Abre esta URL manualmente:"
+            echo "  $url"
+        fi
         ;;
     status)
         if ai_server_up; then
