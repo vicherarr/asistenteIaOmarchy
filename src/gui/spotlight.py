@@ -1090,9 +1090,22 @@ class SpotlightWindow(QMainWindow):
         dlg.setMinimumWidth(440)
         dlg.setStyleSheet("""
             QDialog { background-color: #1e1e2e; }
-            QLabel { color: #cdd6f4; font-family: 'Inter'; }
-            QCheckBox { color: #cdd6f4; font-family: 'Inter'; font-size: 12px; padding: 4px; }
-            QCheckBox::indicator { width: 16px; height: 16px; }
+            QWidget { background-color: #1e1e2e; color: #cdd6f4; }
+            QScrollArea { background-color: #1e1e2e; border: none; }
+            QScrollArea > QWidget > QWidget { background-color: #1e1e2e; }
+            QLabel { color: #a6adc8; font-family: 'Inter'; background: transparent; }
+            QCheckBox {
+                color: #cdd6f4; font-family: 'Inter'; font-size: 12px;
+                padding: 6px; background: transparent;
+            }
+            QCheckBox:hover { color: #ffffff; background-color: #313244; border-radius: 6px; }
+            QCheckBox::indicator {
+                width: 16px; height: 16px; border-radius: 4px;
+                border: 1px solid #6c7086; background-color: #313244;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #b4befe; border: 1px solid #b4befe;
+            }
             QPushButton {
                 background-color: #313244; color: #cdd6f4; border: none;
                 border-radius: 8px; padding: 6px 14px; font-family: 'Inter'; font-size: 12px;
