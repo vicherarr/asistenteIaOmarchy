@@ -7,7 +7,8 @@ import math
 from src.config import settings
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLineEdit, QVBoxLayout, QHBoxLayout,
-    QWidget, QTextBrowser, QFrame, QPushButton
+    QWidget, QTextBrowser, QFrame, QPushButton,
+    QDialog, QCheckBox, QScrollArea, QLabel
 )
 from PySide6.QtCore import Qt, QTimer, Property, QPropertyAnimation, QEasingCurve, QPointF
 from PySide6.QtGui import QFont, QPalette, QColor, QKeyEvent, QIcon, QPainter, QPen, QBrush, QLinearGradient, QRadialGradient, QPainterPath
@@ -584,11 +585,30 @@ class SpotlightWindow(QMainWindow):
         """)
         self.bottom_layout.addWidget(self.accel_pill)
 
-        
+        # Pill para Herramientas (clicable: abre el selector). 🛠 Todas / 🛠 N
+        self.tools_pill = QPushButton("🛠 Todas")
+        self.tools_pill.setCursor(Qt.PointingHandCursor)
+        self.tools_pill.setToolTip("Selecciona en qué herramientas se centra el asistente (Ctrl+T)")
+        self.tools_pill.clicked.connect(self.open_tools_dialog)
+        self.tools_pill.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(250, 179, 135, 20);
+                border: 1px solid rgba(250, 179, 135, 80);
+                border-radius: 10px;
+                color: #fab387;
+                font-family: 'Inter';
+                font-size: 10px;
+                padding: 2px 8px;
+            }
+            QPushButton:hover { background-color: rgba(250, 179, 135, 45); }
+        """)
+        self.bottom_layout.addWidget(self.tools_pill)
+        self.tool_catalog = []  # [{name, description, active}]
+
         self.bottom_layout.addStretch()
         
         # Atajos Rápidos
-        self.shortcuts_label = QPushButton("ESC: Ocultar | Ctrl+R: Reset | Ctrl+H: Historial | Ctrl+L: Logs | Ctrl+G: Chat")
+        self.shortcuts_label = QPushButton("ESC: Ocultar | Ctrl+R: Reset | Ctrl+T: Tools | Ctrl+L: Logs | Ctrl+G: Chat")
         self.shortcuts_label.setEnabled(False)
         self.shortcuts_label.setStyleSheet("""
             QPushButton {
@@ -605,6 +625,8 @@ class SpotlightWindow(QMainWindow):
 
         # Iniciar escucha de eventos asíncronos en tiempo real (SSE) cuando el loop esté activo
         QTimer.singleShot(0, lambda: asyncio.create_task(self.start_event_listener()))
+        # Cargar el catálogo de herramientas para el selector
+        QTimer.singleShot(0, lambda: asyncio.create_task(self.load_tools()))
 
         # Animación de altura (Altura inicial 110px para acomodar barra inferior)
         self._height = 110
@@ -1021,6 +1043,107 @@ class SpotlightWindow(QMainWindow):
                     self.input_field.clear()
                 self.input_field.setFocus()
 
+    # ------------------------------------------------------------------
+    # Selección de herramientas (modo enfocado)
+    # ------------------------------------------------------------------
+    def _active_tool_count(self) -> int:
+        return sum(1 for t in self.tool_catalog if t.get("active"))
+
+    def update_tools_pill(self):
+        n = self._active_tool_count()
+        total = len(self.tool_catalog)
+        self.tools_pill.setText("🛠 Todas" if n == 0 else f"🛠 {n}/{total}")
+
+    async def load_tools(self):
+        """Pide el catálogo de herramientas al backend y refresca la pill."""
+        try:
+            async with self.get_http_client(timeout=8) as client:
+                resp = await client.get(f"{self.base_url}/tools")
+                if resp.status_code == 200:
+                    self.tool_catalog = resp.json().get("tools", [])
+                    self.update_tools_pill()
+        except Exception as e:
+            print(f"No se pudo cargar el catálogo de herramientas: {e}", flush=True)
+
+    async def apply_tools(self, names):
+        """Envía la selección al backend y actualiza el estado local."""
+        try:
+            async with self.get_http_client(timeout=8) as client:
+                resp = await client.post(f"{self.base_url}/tools/select", json={"names": names})
+                if resp.status_code == 200:
+                    active = set(resp.json().get("active", []))
+                    for t in self.tool_catalog:
+                        t["active"] = t["name"] in active
+                    self.update_tools_pill()
+        except Exception as e:
+            print(f"No se pudo aplicar la selección de herramientas: {e}", flush=True)
+
+    def open_tools_dialog(self):
+        """Diálogo con checkboxes para elegir las herramientas activas."""
+        if not self.tool_catalog:
+            # Intentar (re)cargar y avisar; el usuario puede reabrir.
+            asyncio.create_task(self.load_tools())
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Herramientas del asistente")
+        dlg.setMinimumWidth(440)
+        dlg.setStyleSheet("""
+            QDialog { background-color: #1e1e2e; }
+            QLabel { color: #cdd6f4; font-family: 'Inter'; }
+            QCheckBox { color: #cdd6f4; font-family: 'Inter'; font-size: 12px; padding: 4px; }
+            QCheckBox::indicator { width: 16px; height: 16px; }
+            QPushButton {
+                background-color: #313244; color: #cdd6f4; border: none;
+                border-radius: 8px; padding: 6px 14px; font-family: 'Inter'; font-size: 12px;
+            }
+            QPushButton:hover { background-color: #45475a; }
+            QPushButton#apply { background-color: #b4befe; color: #1e1e2e; font-weight: bold; }
+            QPushButton#apply:hover { background-color: #cba6f7; }
+        """)
+        layout = QVBoxLayout(dlg)
+
+        info = QLabel("Elige en qué se centra el asistente. Sin selección, usa todas.")
+        info.setStyleSheet("color:#a6adc8; font-size:11px;")
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setMaximumHeight(360)
+        inner = QWidget()
+        inner_layout = QVBoxLayout(inner)
+        inner_layout.setSpacing(2)
+        checks = {}
+        for t in self.tool_catalog:
+            cb = QCheckBox(f"{t['description']}")
+            cb.setChecked(bool(t.get("active")))
+            cb.setToolTip(t["name"])
+            checks[t["name"]] = cb
+            inner_layout.addWidget(cb)
+        inner_layout.addStretch()
+        scroll.setWidget(inner)
+        layout.addWidget(scroll)
+
+        btn_row = QHBoxLayout()
+        clear_btn = QPushButton("Quitar filtro (usar todas)")
+        clear_btn.clicked.connect(lambda: [cb.setChecked(False) for cb in checks.values()])
+        btn_row.addWidget(clear_btn)
+        btn_row.addStretch()
+        cancel_btn = QPushButton("Cancelar")
+        cancel_btn.clicked.connect(dlg.reject)
+        btn_row.addWidget(cancel_btn)
+        apply_btn = QPushButton("Aplicar")
+        apply_btn.setObjectName("apply")
+        apply_btn.clicked.connect(dlg.accept)
+        btn_row.addWidget(apply_btn)
+        layout.addLayout(btn_row)
+
+        if dlg.exec() == QDialog.Accepted:
+            names = [name for name, cb in checks.items() if cb.isChecked()]
+            asyncio.create_task(self.apply_tools(names))
+
     def keyPressEvent(self, event: QKeyEvent):
         # ESC para cerrar panel
         if event.key() == Qt.Key_Escape:
@@ -1041,6 +1164,12 @@ class SpotlightWindow(QMainWindow):
             event.accept()
             return
             
+        # Ctrl+T para abrir el selector de herramientas
+        elif event.key() == Qt.Key_T and event.modifiers() & Qt.ControlModifier:
+            self.open_tools_dialog()
+            event.accept()
+            return
+
         # Ctrl+L para abrir terminal de logs
         elif event.key() == Qt.Key_L and event.modifiers() & Qt.ControlModifier:
             self.open_logs_terminal()

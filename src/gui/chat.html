@@ -186,6 +186,10 @@
                 <span class="font-outfit font-bold text-sm tracking-wide text-text" id="top-status-text">AsistenteIA Listo</span>
             </div>
             <div class="flex items-center gap-3">
+                <button onclick="openToolsModal()" id="tools-button" class="relative flex items-center gap-1.5 text-subtext hover:text-lavender px-2 py-1.5 rounded-lg hover:bg-surface/60 transition-colors" title="Seleccionar herramientas">
+                    <i class="fa-solid fa-screwdriver-wrench text-base"></i>
+                    <span class="text-xs font-semibold hidden sm:inline" id="tools-button-label">Todas</span>
+                </button>
                 <button onclick="window.close()" class="text-subtext hover:text-red p-1.5 transition-colors" title="Cerrar ventana">
                     <i class="fa-solid fa-power-off text-lg"></i>
                 </button>
@@ -253,6 +257,28 @@
         </footer>
     </main>
 
+    <!-- MODAL DE SELECCIÓN DE HERRAMIENTAS -->
+    <div id="tools-modal" class="hidden fixed inset-0 z-50 bg-crust/70 backdrop-blur-sm flex items-center justify-center p-4" onclick="if(event.target===this)closeToolsModal()">
+        <div class="w-full max-w-lg bg-mantle border border-overlay/30 rounded-2xl shadow-2xl shadow-crust/60 flex flex-col max-h-[80vh]">
+            <div class="flex items-center justify-between px-5 py-4 border-b border-overlay/20">
+                <div>
+                    <h3 class="font-outfit font-bold text-lg text-text flex items-center gap-2"><i class="fa-solid fa-screwdriver-wrench text-lavender"></i> Herramientas</h3>
+                    <p class="text-xs text-subtext mt-0.5">Elige en qué se centra el asistente. Sin selección, usa todas.</p>
+                </div>
+                <button onclick="closeToolsModal()" class="text-subtext hover:text-text p-1.5"><i class="fa-solid fa-xmark text-lg"></i></button>
+            </div>
+            <div class="flex items-center gap-2 px-5 py-3 border-b border-overlay/10">
+                <button onclick="clearToolSelection()" class="text-xs px-3 py-1.5 rounded-lg bg-surface/50 hover:bg-surface text-subtext hover:text-text transition-colors"><i class="fa-solid fa-broom mr-1"></i>Quitar filtro (usar todas)</button>
+                <span id="tools-count" class="ml-auto text-xs text-subtext"></span>
+            </div>
+            <div id="tools-list" class="flex-1 overflow-y-auto px-3 py-2 space-y-1"></div>
+            <div class="flex items-center justify-end gap-2 px-5 py-4 border-t border-overlay/20">
+                <button onclick="closeToolsModal()" class="text-sm px-4 py-2 rounded-xl text-subtext hover:text-text transition-colors">Cancelar</button>
+                <button onclick="applyToolSelection()" class="text-sm px-4 py-2 rounded-xl bg-lavender hover:bg-mauve text-mantle font-semibold transition-all active:scale-[0.98]">Aplicar</button>
+            </div>
+        </div>
+    </div>
+
     <!-- PANTALLA DE ACCESO DENEGADO -->
     <div id="unauthorized-screen" class="hidden fixed inset-0 z-50 bg-base flex flex-col items-center justify-center text-center p-6 space-y-6">
         <div class="w-20 h-20 rounded-3xl bg-red/10 border border-red/20 flex items-center justify-center shadow-lg shadow-red/10">
@@ -312,8 +338,117 @@
         // Inicializar aplicación
         function initApp() {
             loadHistory();
+            loadTools();
             startSSEListener();
             document.getElementById('user-input').focus();
+        }
+
+        // ----- Selección de herramientas -----
+        let toolCatalog = [];   // [{name, description, active}]
+        let toolDraft = {};     // name -> bool (estado provisional en el modal)
+
+        function authHeaders(extra) {
+            const h = extra || {};
+            if (apiToken) h["X-API-Token"] = apiToken;
+            return h;
+        }
+
+        async function loadTools() {
+            try {
+                const res = await fetch("tools", { headers: authHeaders() });
+                if (!res.ok) return;
+                const data = await res.json();
+                toolCatalog = data.tools || [];
+                updateToolsBadge();
+            } catch (err) {
+                console.error("Error cargando herramientas:", err);
+            }
+        }
+
+        function activeCount() {
+            return toolCatalog.filter(t => t.active).length;
+        }
+
+        function updateToolsBadge() {
+            const label = document.getElementById('tools-button-label');
+            const total = toolCatalog.length;
+            const active = activeCount();
+            // Sin selección (0) = todas; si hay subconjunto, mostrar "N/total".
+            label.textContent = (active === 0) ? "Todas" : (active + "/" + total);
+            const btn = document.getElementById('tools-button');
+            if (active === 0) {
+                btn.classList.remove('text-lavender'); btn.classList.add('text-subtext');
+            } else {
+                btn.classList.add('text-lavender'); btn.classList.remove('text-subtext');
+            }
+        }
+
+        function openToolsModal() {
+            // Estado provisional a partir del catálogo actual
+            toolDraft = {};
+            toolCatalog.forEach(t => { toolDraft[t.name] = t.active; });
+            renderToolsList();
+            document.getElementById('tools-modal').classList.remove('hidden');
+        }
+
+        function closeToolsModal() {
+            document.getElementById('tools-modal').classList.add('hidden');
+        }
+
+        function clearToolSelection() {
+            // Sin casillas marcadas = sin filtro = todas las herramientas disponibles.
+            Object.keys(toolDraft).forEach(n => { toolDraft[n] = false; });
+            renderToolsList();
+        }
+
+        function renderToolsList() {
+            const list = document.getElementById('tools-list');
+            list.innerHTML = '';
+            toolCatalog.forEach(t => {
+                const checked = !!toolDraft[t.name];
+                const row = document.createElement('label');
+                row.className = "flex items-start gap-3 px-3 py-2.5 rounded-xl hover:bg-surface/50 cursor-pointer transition-colors";
+                row.innerHTML =
+                    '<input type="checkbox" ' + (checked ? 'checked' : '') + ' class="mt-0.5 accent-lavender w-4 h-4 shrink-0">' +
+                    '<span class="min-w-0"><span class="block text-sm text-text font-medium">' + escapeHtml(t.description) + '</span>' +
+                    '<span class="block text-[11px] text-subtext font-mono truncate">' + escapeHtml(t.name) + '</span></span>';
+                row.querySelector('input').addEventListener('change', (e) => {
+                    toolDraft[t.name] = e.target.checked;
+                    updateModalCount();
+                });
+                list.appendChild(row);
+            });
+            updateModalCount();
+        }
+
+        function updateModalCount() {
+            const sel = Object.values(toolDraft).filter(Boolean).length;
+            const el = document.getElementById('tools-count');
+            el.textContent = (sel === 0) ? "Todas las herramientas" : (sel + " seleccionada" + (sel === 1 ? "" : "s"));
+        }
+
+        function escapeHtml(s) {
+            return (s || "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        }
+
+        async function applyToolSelection() {
+            const names = Object.keys(toolDraft).filter(n => toolDraft[n]);
+            try {
+                const res = await fetch("tools/select", {
+                    method: "POST",
+                    headers: authHeaders({ "Content-Type": "application/json" }),
+                    body: JSON.stringify({ names })
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    const active = data.active || [];
+                    toolCatalog.forEach(t => { t.active = active.includes(t.name); });
+                    updateToolsBadge();
+                }
+            } catch (err) {
+                console.error("Error aplicando selección:", err);
+            }
+            closeToolsModal();
         }
 
         // Mostrar pantalla de no autorizado

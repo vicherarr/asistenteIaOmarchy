@@ -242,6 +242,11 @@ class TranscriptionRequest(BaseModel):
     text: str
 
 
+class ToolSelectRequest(BaseModel):
+    # Lista de nombres de tools a activar. Vacía => todas (sin restricción).
+    names: list[str] = []
+
+
 class TranscriptionResponse(BaseModel):
     status: str
     response_text: str
@@ -836,6 +841,27 @@ async def reset_conversation(state: AppState = Depends(get_app_state)):
         state.litert_client.reset_conversation()
     logger.info("Conversación y estado del backend completamente reiniciados.")
     return {"status": "reset", "message": "Historial de conversación y procesos del backend reiniciados"}
+
+
+@app.get("/tools", dependencies=[Depends(verify_token)])
+async def list_tools(state: AppState = Depends(get_app_state)):
+    """Catálogo de herramientas y cuáles están activas (vacío = todas)."""
+    return {
+        "active": state.assistant_service.get_active_tools(),
+        "tools": state.assistant_service.tool_catalog(),
+    }
+
+
+@app.post("/tools/select", dependencies=[Depends(verify_token)])
+async def select_tools(request: ToolSelectRequest, state: AppState = Depends(get_app_state)):
+    """Fija las herramientas activas. Lista vacía => todas (modo normal).
+
+    Al cambiar la selección se resetea la conversación persistente (si la hubiera),
+    porque las tools quedan fijadas al crear la conversación (KV-cache)."""
+    active = state.assistant_service.set_active_tools(request.names)
+    if state.litert_client and hasattr(state.litert_client, "reset_conversation"):
+        state.litert_client.reset_conversation()
+    return {"status": "ok", "active": active}
 
 
 @app.post("/audio/configure", dependencies=[Depends(verify_token)])

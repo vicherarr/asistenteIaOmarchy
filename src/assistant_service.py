@@ -1,6 +1,7 @@
 """Servicio principal del asistente, encapsula la lógica de negocio."""
 
 import asyncio
+import inspect
 import logging
 import re
 import subprocess
@@ -71,6 +72,31 @@ class AssistantService:
             take_screenshot,
             create_document,
         ]
+        # Selección activa de herramientas (vacío = todas → comportamiento normal).
+        # Si el usuario elige un subconjunto desde la web/GUI, el modelo solo recibe
+        # el contexto (esquemas) de esas tools y se le instruye a usar solo esas.
+        self.active_tool_names: set[str] = set()
+        # Etiquetas legibles para la UI (fallback: docstring / nombre).
+        self._tool_labels = {
+            "execute_system_command": "Ejecuta comandos en la terminal",
+            "read_log_file": "Lee logs de systemd",
+            "clipboard_manager": "Portapapeles (leer/escribir)",
+            "web_search": "Búsqueda en internet",
+            "system_diagnostics": "Diagnóstico del sistema",
+            "read_web_page": "Lee y extrae una página web",
+            "play_specific_music": "Reproduce música en Spotify",
+            "open_terminal_and_run_command": "Abre terminal y ejecuta",
+            "read_terminal_screen": "Lee la pantalla de la terminal",
+            "control_local_browser": "Controla el navegador (Chromium)",
+            "send_input_to_terminal": "Responde prompts de la terminal",
+            "interrupt_terminal_command": "Interrumpe la terminal (Ctrl+C)",
+            "launch_application": "Lanza una aplicación",
+            "close_application": "Cierra una aplicación",
+            "analyze_screen": "Analiza la pantalla (visión)",
+            "analyze_clipboard_image": "Analiza imagen del portapapeles",
+            "take_screenshot": "Captura de pantalla",
+            "create_document": "Genera un documento ODT",
+        }
         # Para suprimir tool calls que el modelo a veces emite como TEXTO plano (sintaxis
         # Python: nombre(args)) en lugar del formato del motor. Nunca deben llegar al TTS.
         self._tool_names = {t.__name__ for t in self.tools}
@@ -82,6 +108,62 @@ class AssistantService:
         self._tool_call_re = re.compile(r'\b(?:' + _names + r')\s*\([^)]*\)?')
         # Llamada genérica que ocupa todo el fragmento: "algo(arg=...)" / "algo(".
         self._generic_call_re = re.compile(r'^\s*[A-Za-z_]\w*\s*\([^)]*\)?\s*$')
+
+    # ------------------------------------------------------------------
+    # Selección de herramientas (modo enfocado)
+    # ------------------------------------------------------------------
+    def tool_catalog(self) -> list[dict]:
+        """Devuelve [{name, description, active}] para que la UI pinte el selector."""
+        catalog = []
+        for t in self.tools:
+            name = t.__name__
+            desc = self._tool_labels.get(name)
+            if not desc:
+                doc = (inspect.getdoc(t) or "").strip()
+                desc = doc.split("\n", 1)[0] if doc else name
+            catalog.append({
+                "name": name,
+                "description": desc,
+                "active": name in self.active_tool_names,
+            })
+        return catalog
+
+    def get_active_tools(self) -> list[str]:
+        """Lista de nombres activos (vacía = todas)."""
+        return sorted(self.active_tool_names)
+
+    def set_active_tools(self, names) -> list[str]:
+        """Fija la selección activa, ignorando nombres desconocidos.
+
+        Lista vacía (o None) => sin restricción (todas las tools, comportamiento normal).
+        Devuelve la selección efectiva resultante.
+        """
+        valid = {n for n in (names or []) if n in self._tool_names}
+        self.active_tool_names = valid
+        if valid:
+            logger.info(f"Modo enfocado: tools activas = {sorted(valid)}")
+        else:
+            logger.info("Selección de tools limpiada: todas disponibles.")
+        return self.get_active_tools()
+
+    def _selected_tools(self):
+        """Lista de funciones tool a pasar al motor según la selección activa."""
+        if not self.active_tool_names:
+            return self.tools
+        return [t for t in self.tools if t.__name__ in self.active_tool_names]
+
+    def _focused_system_prompt(self, base_prompt: str) -> str:
+        """Si hay selección activa, añade una instrucción de modo enfocado al prompt."""
+        if not self.active_tool_names:
+            return base_prompt
+        allowed = ", ".join(sorted(self.active_tool_names))
+        nota = (
+            "\n\n[MODO ENFOCADO] El usuario ha limitado las herramientas disponibles a: "
+            f"{allowed}. Usa EXCLUSIVAMENTE estas herramientas y céntrate en esa tarea. "
+            "No menciones ni intentes usar otras capacidades; si la petición no encaja "
+            "con ellas, dilo con claridad y brevedad."
+        )
+        return base_prompt + nota
 
     def _extract_sentences(self, text_buffer: str) -> tuple[List[str], str]:
         """
@@ -308,6 +390,8 @@ class AssistantService:
         except Exception as e:
             logger.error(f"Error cargando system prompt: {e}")
             system_prompt = "Eres un asistente de voz para Linux llamado AsistenteIA."
+        # Modo enfocado: si hay tools seleccionadas, instruir al modelo a usar solo esas.
+        system_prompt = self._focused_system_prompt(system_prompt)
 
         accumulated_text = ""
         sentence_buffer = ""
@@ -318,7 +402,7 @@ class AssistantService:
             # Primera llamada al modelo
             async for chunk in self.litert.chat_stream(
                 prompt=text,
-                tools=self.tools,
+                tools=self._selected_tools(),
                 system_prompt=system_prompt,
                 history=conversation_history[:-1] # Pasamos el historial previo
             ):
@@ -613,10 +697,10 @@ class AssistantService:
             logger.info("Respuesta sin espacios, obteniendo versión limpia via chat()...")
             try:
                 prompt_path = settings.PROJECT_ROOT / "config" / "system_prompt.txt"
-                system_prompt = prompt_path.read_text(encoding="utf-8")
+                system_prompt = self._focused_system_prompt(prompt_path.read_text(encoding="utf-8"))
                 clean_response = await self.litert.chat(
                     prompt=text,
-                    tools=self.tools,
+                    tools=self._selected_tools(),
                     system_prompt=system_prompt,
                     history=conversation_history[:-1]
                 )
