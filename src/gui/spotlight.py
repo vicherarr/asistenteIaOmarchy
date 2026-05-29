@@ -603,7 +603,7 @@ class SpotlightWindow(QMainWindow):
             QPushButton:hover { background-color: rgba(250, 179, 135, 45); }
         """)
         self.bottom_layout.addWidget(self.tools_pill)
-        self.tool_catalog = []  # [{name, description, active}]
+        self.tool_groups = []  # [{key,label,icon,tools,members,active}]
 
         self.bottom_layout.addStretch()
         
@@ -1046,42 +1046,42 @@ class SpotlightWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Selección de herramientas (modo enfocado)
     # ------------------------------------------------------------------
-    def _active_tool_count(self) -> int:
-        return sum(1 for t in self.tool_catalog if t.get("active"))
+    def _active_group_count(self) -> int:
+        return sum(1 for g in self.tool_groups if g.get("active"))
 
     def update_tools_pill(self):
-        n = self._active_tool_count()
-        total = len(self.tool_catalog)
+        n = self._active_group_count()
+        total = len(self.tool_groups)
         self.tools_pill.setText("🛠 Todas" if n == 0 else f"🛠 {n}/{total}")
 
     async def load_tools(self):
-        """Pide el catálogo de herramientas al backend y refresca la pill."""
+        """Pide los grupos de herramientas al backend y refresca la pill."""
         try:
             async with self.get_http_client(timeout=8) as client:
                 resp = await client.get(f"{self.base_url}/tools")
                 if resp.status_code == 200:
-                    self.tool_catalog = resp.json().get("tools", [])
+                    self.tool_groups = resp.json().get("groups", [])
                     self.update_tools_pill()
         except Exception as e:
             print(f"No se pudo cargar el catálogo de herramientas: {e}", flush=True)
 
     async def apply_tools(self, names):
-        """Envía la selección al backend y actualiza el estado local."""
+        """Envía la selección (lista de tools) al backend y actualiza el estado local."""
         try:
             async with self.get_http_client(timeout=8) as client:
                 resp = await client.post(f"{self.base_url}/tools/select", json={"names": names})
                 if resp.status_code == 200:
                     active = set(resp.json().get("active", []))
-                    for t in self.tool_catalog:
-                        t["active"] = t["name"] in active
+                    for g in self.tool_groups:
+                        g["active"] = bool(g["tools"]) and all(n in active for n in g["tools"])
                     self.update_tools_pill()
         except Exception as e:
             print(f"No se pudo aplicar la selección de herramientas: {e}", flush=True)
 
     def open_tools_dialog(self):
-        """Diálogo con checkboxes para elegir las herramientas activas."""
-        if not self.tool_catalog:
-            # Intentar (re)cargar y avisar; el usuario puede reabrir.
+        """Diálogo con un checkbox por grupo funcional de herramientas."""
+        if not self.tool_groups:
+            # Intentar (re)cargar; el usuario puede reabrir.
             asyncio.create_task(self.load_tools())
             return
 
@@ -1128,20 +1128,25 @@ class SpotlightWindow(QMainWindow):
         inner = QWidget()
         inner_layout = QVBoxLayout(inner)
         inner_layout.setSpacing(2)
-        checks = {}
-        for t in self.tool_catalog:
-            cb = QCheckBox(f"{t['description']}")
-            cb.setChecked(bool(t.get("active")))
-            cb.setToolTip(t["name"])
-            checks[t["name"]] = cb
+        checks = {}   # key -> (checkbox, [tool names])
+        for g in self.tool_groups:
+            members = ", ".join(m["description"] for m in g["members"])
+            cb = QCheckBox(f"{g['icon']} {g['label']}  ({len(g['members'])})")
+            cb.setChecked(bool(g.get("active")))
+            cb.setToolTip(members)
+            checks[g["key"]] = (cb, g["tools"])
             inner_layout.addWidget(cb)
+            sub = QLabel(members)
+            sub.setStyleSheet("color:#6c7086; font-size:10px; padding-left:26px;")
+            sub.setWordWrap(True)
+            inner_layout.addWidget(sub)
         inner_layout.addStretch()
         scroll.setWidget(inner)
         layout.addWidget(scroll)
 
         btn_row = QHBoxLayout()
         clear_btn = QPushButton("Quitar filtro (usar todas)")
-        clear_btn.clicked.connect(lambda: [cb.setChecked(False) for cb in checks.values()])
+        clear_btn.clicked.connect(lambda: [cb.setChecked(False) for cb, _ in checks.values()])
         btn_row.addWidget(clear_btn)
         btn_row.addStretch()
         cancel_btn = QPushButton("Cancelar")
@@ -1154,7 +1159,10 @@ class SpotlightWindow(QMainWindow):
         layout.addLayout(btn_row)
 
         if dlg.exec() == QDialog.Accepted:
-            names = [name for name, cb in checks.items() if cb.isChecked()]
+            names = []
+            for cb, tools in checks.values():
+                if cb.isChecked():
+                    names.extend(tools)
             asyncio.create_task(self.apply_tools(names))
 
     def keyPressEvent(self, event: QKeyEvent):

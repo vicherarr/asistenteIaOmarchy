@@ -343,9 +343,9 @@
             document.getElementById('user-input').focus();
         }
 
-        // ----- Selección de herramientas -----
-        let toolCatalog = [];   // [{name, description, active}]
-        let toolDraft = {};     // name -> bool (estado provisional en el modal)
+        // ----- Selección de herramientas (por grupos) -----
+        let toolGroups = [];    // [{key,label,icon,tools:[names],members:[{name,description}],active}]
+        let groupDraft = {};    // key -> bool (estado provisional en el modal)
 
         function authHeaders(extra) {
             const h = extra || {};
@@ -358,22 +358,22 @@
                 const res = await fetch("tools", { headers: authHeaders() });
                 if (!res.ok) return;
                 const data = await res.json();
-                toolCatalog = data.tools || [];
+                toolGroups = data.groups || [];
                 updateToolsBadge();
             } catch (err) {
                 console.error("Error cargando herramientas:", err);
             }
         }
 
-        function activeCount() {
-            return toolCatalog.filter(t => t.active).length;
+        function activeGroupCount() {
+            return toolGroups.filter(g => g.active).length;
         }
 
         function updateToolsBadge() {
             const label = document.getElementById('tools-button-label');
-            const total = toolCatalog.length;
-            const active = activeCount();
-            // Sin selección (0) = todas; si hay subconjunto, mostrar "N/total".
+            const total = toolGroups.length;
+            const active = activeGroupCount();
+            // Sin grupos activos = todas; si hay subconjunto, "N/total".
             label.textContent = (active === 0) ? "Todas" : (active + "/" + total);
             const btn = document.getElementById('tools-button');
             if (active === 0) {
@@ -384,9 +384,8 @@
         }
 
         function openToolsModal() {
-            // Estado provisional a partir del catálogo actual
-            toolDraft = {};
-            toolCatalog.forEach(t => { toolDraft[t.name] = t.active; });
+            groupDraft = {};
+            toolGroups.forEach(g => { groupDraft[g.key] = g.active; });
             renderToolsList();
             document.getElementById('tools-modal').classList.remove('hidden');
         }
@@ -396,24 +395,28 @@
         }
 
         function clearToolSelection() {
-            // Sin casillas marcadas = sin filtro = todas las herramientas disponibles.
-            Object.keys(toolDraft).forEach(n => { toolDraft[n] = false; });
+            // Ningún grupo marcado = sin filtro = todas las herramientas disponibles.
+            Object.keys(groupDraft).forEach(k => { groupDraft[k] = false; });
             renderToolsList();
         }
 
         function renderToolsList() {
             const list = document.getElementById('tools-list');
             list.innerHTML = '';
-            toolCatalog.forEach(t => {
-                const checked = !!toolDraft[t.name];
+            toolGroups.forEach(g => {
+                const checked = !!groupDraft[g.key];
+                const memberText = g.members.map(m => m.description).join(' · ');
                 const row = document.createElement('label');
-                row.className = "flex items-start gap-3 px-3 py-2.5 rounded-xl hover:bg-surface/50 cursor-pointer transition-colors";
+                row.className = "flex items-start gap-3 px-3 py-3 rounded-xl hover:bg-surface/50 cursor-pointer transition-colors";
                 row.innerHTML =
                     '<input type="checkbox" ' + (checked ? 'checked' : '') + ' class="mt-0.5 accent-lavender w-4 h-4 shrink-0">' +
-                    '<span class="min-w-0"><span class="block text-sm text-text font-medium">' + escapeHtml(t.description) + '</span>' +
-                    '<span class="block text-[11px] text-subtext font-mono truncate">' + escapeHtml(t.name) + '</span></span>';
+                    '<span class="min-w-0">' +
+                        '<span class="block text-sm text-text font-semibold">' + escapeHtml(g.icon + ' ' + g.label) +
+                        ' <span class="text-[10px] text-overlay font-normal">(' + g.members.length + ')</span></span>' +
+                        '<span class="block text-[11px] text-subtext leading-relaxed">' + escapeHtml(memberText) + '</span>' +
+                    '</span>';
                 row.querySelector('input').addEventListener('change', (e) => {
-                    toolDraft[t.name] = e.target.checked;
+                    groupDraft[g.key] = e.target.checked;
                     updateModalCount();
                 });
                 list.appendChild(row);
@@ -422,9 +425,9 @@
         }
 
         function updateModalCount() {
-            const sel = Object.values(toolDraft).filter(Boolean).length;
+            const sel = Object.keys(groupDraft).filter(k => groupDraft[k]).length;
             const el = document.getElementById('tools-count');
-            el.textContent = (sel === 0) ? "Todas las herramientas" : (sel + " seleccionada" + (sel === 1 ? "" : "s"));
+            el.textContent = (sel === 0) ? "Todas las herramientas" : (sel + " grupo" + (sel === 1 ? "" : "s"));
         }
 
         function escapeHtml(s) {
@@ -432,7 +435,9 @@
         }
 
         async function applyToolSelection() {
-            const names = Object.keys(toolDraft).filter(n => toolDraft[n]);
+            // Expandir grupos seleccionados a la unión de sus tools.
+            const names = [];
+            toolGroups.forEach(g => { if (groupDraft[g.key]) names.push(...g.tools); });
             try {
                 const res = await fetch("tools/select", {
                     method: "POST",
@@ -441,8 +446,8 @@
                 });
                 if (res.ok) {
                     const data = await res.json();
-                    const active = data.active || [];
-                    toolCatalog.forEach(t => { t.active = active.includes(t.name); });
+                    const active = new Set(data.active || []);
+                    toolGroups.forEach(g => { g.active = g.tools.length > 0 && g.tools.every(n => active.has(n)); });
                     updateToolsBadge();
                 }
             } catch (err) {

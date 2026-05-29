@@ -845,9 +845,10 @@ async def reset_conversation(state: AppState = Depends(get_app_state)):
 
 @app.get("/tools", dependencies=[Depends(verify_token)])
 async def list_tools(state: AppState = Depends(get_app_state)):
-    """Catálogo de herramientas y cuáles están activas (vacío = todas)."""
+    """Catálogo de herramientas agrupadas y cuáles están activas (vacío = todas)."""
     return {
         "active": state.assistant_service.get_active_tools(),
+        "groups": state.assistant_service.tool_groups(),
         "tools": state.assistant_service.tool_catalog(),
     }
 

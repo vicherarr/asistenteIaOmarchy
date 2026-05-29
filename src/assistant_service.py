@@ -97,6 +97,24 @@ class AssistantService:
             "take_screenshot": "Captura de pantalla",
             "create_document": "Genera un documento ODT",
         }
+        # Grupos funcionales para el selector de la UI (menos opciones que 18 tools).
+        # La selección efectiva sigue siendo por nombre de tool; los grupos solo agrupan.
+        self._tool_groups = [
+            {"key": "sistema", "label": "Terminal y sistema", "icon": "🖥️",
+             "tools": ["execute_system_command", "open_terminal_and_run_command",
+                       "read_terminal_screen", "send_input_to_terminal",
+                       "interrupt_terminal_command", "read_log_file", "system_diagnostics"]},
+            {"key": "web", "label": "Web e internet", "icon": "🌐",
+             "tools": ["web_search", "read_web_page", "control_local_browser"]},
+            {"key": "apps", "label": "Aplicaciones", "icon": "🚀",
+             "tools": ["launch_application", "close_application"]},
+            {"key": "vision", "label": "Pantalla y visión", "icon": "🖼️",
+             "tools": ["analyze_screen", "analyze_clipboard_image", "take_screenshot"]},
+            {"key": "docs", "label": "Documentos y portapapeles", "icon": "📄",
+             "tools": ["create_document", "clipboard_manager"]},
+            {"key": "musica", "label": "Música", "icon": "🎵",
+             "tools": ["play_specific_music"]},
+        ]
         # Para suprimir tool calls que el modelo a veces emite como TEXTO plano (sintaxis
         # Python: nombre(args)) en lugar del formato del motor. Nunca deben llegar al TTS.
         self._tool_names = {t.__name__ for t in self.tools}
@@ -127,6 +145,23 @@ class AssistantService:
                 "active": name in self.active_tool_names,
             })
         return catalog
+
+    def tool_groups(self) -> list[dict]:
+        """Grupos funcionales para el selector. Un grupo está 'active' si TODAS sus
+        tools están en la selección activa (vacío global = ninguno marcado = todas)."""
+        groups = []
+        for g in self._tool_groups:
+            members = [
+                {"name": n, "description": self._tool_labels.get(n, n)}
+                for n in g["tools"] if n in self._tool_names
+            ]
+            names = [m["name"] for m in members]
+            active = bool(names) and all(n in self.active_tool_names for n in names)
+            groups.append({
+                "key": g["key"], "label": g["label"], "icon": g["icon"],
+                "tools": names, "members": members, "active": active,
+            })
+        return groups
 
     def get_active_tools(self) -> list[str]:
         """Lista de nombres activos (vacía = todas)."""
