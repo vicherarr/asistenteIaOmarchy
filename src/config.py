@@ -36,13 +36,16 @@ class Settings(BaseSettings):
     LITERT_PROMPT_HINT: bool = True
 
     # --- Fase 2: muestreo (SamplerConfig) ---
-    # Perfil "charla": más natural/creativo.
+    # IMPORTANTE: el .litertlm de Gemma viene afinado en GREEDY (top_k=1), que es lo
+    # más fiable para tool-calling y para la fidelidad de visión. Imponer un sampler
+    # con top_k alto degrada las llamadas a herramientas. Por eso, por defecto NO se
+    # impone sampler (se usa el del motor). Actívalo solo para experimentar con
+    # respuestas de texto más variadas; puede volver menos fiables los tool-calls.
+    LITERT_SAMPLER_ENABLED: bool = False
+    # Perfil "charla": más natural/creativo (solo si LITERT_SAMPLER_ENABLED=True).
     LITERT_TEMPERATURE: float = 0.6
     LITERT_TOP_K: int = 64          # -1 => no fijar (usa default del modelo)
     LITERT_TOP_P: float = 0.95
-    # Perfil "agéntico" (cuando hay herramientas): algo más contenido que la charla
-    # para que los tool-calls salgan bien, pero sin caer en rigidez (no greedy).
-    LITERT_AGENTIC_TEMPERATURE: float = 0.3
     LITERT_SEED: int = -1           # -1 => aleatorio; >=0 => reproducible
 
     # --- Fase 3: contexto y conversación persistente ---

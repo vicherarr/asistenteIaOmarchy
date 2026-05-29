@@ -90,23 +90,22 @@ class LiteRTClient:
                 pass
         return len(text) // 3
 
-    def _sampler_config(self, agentic: bool):
-        """Construye un SamplerConfig (Fase 2) según el perfil.
+    def _sampler_config(self):
+        """Construye un SamplerConfig de 'charla' (solo texto libre, sin tools/imagen).
 
-        agentic=True (hay herramientas): temperatura baja + seed → tool-calls fiables.
-        agentic=False (charla/redacción): más natural.
+        No se usa en el camino agéntico ni en visión: ahí conviene el greedy por
+        defecto del modelo (más fiable para tool-calls y más fiel en visión).
         """
         SamplerConfig = getattr(litert_lm, "SamplerConfig", None)
         if SamplerConfig is None:
             return None
         top_k = settings.LITERT_TOP_K if settings.LITERT_TOP_K >= 0 else None
         seed = settings.LITERT_SEED if settings.LITERT_SEED >= 0 else None
-        temperature = settings.LITERT_AGENTIC_TEMPERATURE if agentic else settings.LITERT_TEMPERATURE
         try:
             return SamplerConfig(
                 top_k=top_k,
                 top_p=settings.LITERT_TOP_P,
-                temperature=temperature,
+                temperature=settings.LITERT_TEMPERATURE,
                 seed=seed,
             )
         except Exception as e:  # noqa: BLE001
@@ -118,12 +117,15 @@ class LiteRTClient:
 
         Filtra kwargs no soportados por la build instalada para no romper.
 
-        Con imagen (visión) NO imponemos sampler: la descripción visual exige
-        fidelidad, y una temperatura alta hace alucinar. Dejamos el muestreo por
-        defecto del motor (comportamiento previo, que funcionaba).
+        Solo se impone sampler en texto libre (sin tools y sin imagen) y si está
+        habilitado por config. En el camino agéntico (tools) y en visión (imagen)
+        se usa el muestreo por defecto del motor —greedy—, mucho más fiable para
+        las llamadas a herramientas y más fiel en la descripción de imágenes.
         """
         kwargs = {"messages": messages, "tools": tools}
-        sampler = None if image else self._sampler_config(agentic=bool(tools))
+        sampler = None
+        if settings.LITERT_SAMPLER_ENABLED and not tools and not image:
+            sampler = self._sampler_config()
         if sampler is not None:
             kwargs["sampler_config"] = sampler
         if settings.LITERT_TOOL_EVENTS and tools:
