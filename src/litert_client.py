@@ -113,13 +113,17 @@ class LiteRTClient:
             logger.warning(f"No se pudo construir SamplerConfig: {e}")
             return None
 
-    def _create_conversation(self, messages, tools):
+    def _create_conversation(self, messages, tools, image=False):
         """Crea una conversación pasando sampler_config (y tool_event_handler si procede).
 
         Filtra kwargs no soportados por la build instalada para no romper.
+
+        Con imagen (visión) NO imponemos sampler: la descripción visual exige
+        fidelidad, y una temperatura alta hace alucinar. Dejamos el muestreo por
+        defecto del motor (comportamiento previo, que funcionaba).
         """
         kwargs = {"messages": messages, "tools": tools}
-        sampler = self._sampler_config(agentic=bool(tools))
+        sampler = None if image else self._sampler_config(agentic=bool(tools))
         if sampler is not None:
             kwargs["sampler_config"] = sampler
         if settings.LITERT_TOOL_EVENTS and tools:
@@ -171,17 +175,20 @@ class LiteRTClient:
         self._invalidate_persistent()
 
     @contextlib.contextmanager
-    def _conversation_ctx(self, system_prompt, formatted_messages, tools):
+    def _conversation_ctx(self, system_prompt, formatted_messages, tools, image=False):
         """Context manager unificado: en modo persistente reutiliza la conversación
-        (sin cerrarla); en modo normal crea una efímera con `with`."""
-        if settings.LITERT_PERSISTENT_CONVERSATION:
+        (sin cerrarla); en modo normal crea una efímera con `with`.
+
+        `image=True` (visión) fuerza muestreo por defecto del motor y evita la
+        conversación persistente (la imagen no debe quedar fijada en la KV-cache)."""
+        if settings.LITERT_PERSISTENT_CONVERSATION and not image:
             try:
                 yield self._get_persistent_conversation(system_prompt, tools)
             except Exception:
                 self._invalidate_persistent()
                 raise
         else:
-            with self._create_conversation(formatted_messages, tools) as conv:
+            with self._create_conversation(formatted_messages, tools, image=image) as conv:
                 yield conv
 
     def _engine_kwargs(self) -> dict:
@@ -396,7 +403,7 @@ class LiteRTClient:
                 tools_to_use = sync_tools
                 for attempt in range(2):
                     try:
-                        with self._conversation_ctx(system_prompt, formatted_messages, tools_to_use) as conversation:
+                        with self._conversation_ctx(system_prompt, formatted_messages, tools_to_use, image=bool(image_path)) as conversation:
                             stream = conversation.send_message_async(current_message)
                             for chunk in stream:
                                 text_parts = []
@@ -658,7 +665,7 @@ class LiteRTClient:
             tools_to_use = tools
             for attempt in range(2):
                 try:
-                    with self._conversation_ctx(system_prompt, formatted_messages, tools_to_use) as conversation:
+                    with self._conversation_ctx(system_prompt, formatted_messages, tools_to_use, image=bool(image_path)) as conversation:
                         
                         # 3. Construir mensaje actual (con truncamiento del prompt)
                         content_parts = [{"type": "text", "text": _smart_trunc(prompt, MAX_PROMPT_CHARS)}]
