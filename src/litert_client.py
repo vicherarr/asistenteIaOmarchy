@@ -1,6 +1,7 @@
 """Cliente para LiteRT-LM (Google AI Edge) con soporte para Tool Calling nativo."""
 
 import asyncio
+import contextlib
 import logging
 from typing import List, Callable, Optional, Any, Union, Dict
 from pathlib import Path
@@ -10,6 +11,35 @@ from src.config import settings
 from src.schema import ChatMessage
 
 logger = logging.getLogger(__name__)
+
+
+# Comandos que, por seguridad, no auto-ejecutamos sin que el usuario los vea.
+# (gating opcional vía ToolEventHandler — Fase 4)
+_DANGEROUS_TOOLS: set = set()
+
+
+class _LoggingToolEventHandler(litert_lm.ToolEventHandler):
+    """Observa el ciclo de tool-calling del motor (Fase 4).
+
+    - approve_tool_call: punto de control para aprobar/denegar una llamada
+      (devolver False la bloquea). Por defecto aprueba todo salvo lo que esté
+      en _DANGEROUS_TOOLS.
+    - process_tool_response: punto para inspeccionar/transformar la salida.
+    Sirve para emitir al GUI "ejecutando herramienta X" y para seguridad.
+    """
+
+    def approve_tool_call(self, tool_call: dict) -> bool:
+        name = (tool_call or {}).get("name", "?")
+        logger.info(f"[tool] → llamada: {name}  args={(tool_call or {}).get('arguments', {})}")
+        if name in _DANGEROUS_TOOLS:
+            logger.warning(f"[tool] denegada por política: {name}")
+            return False
+        return True
+
+    def process_tool_response(self, tool_response: dict) -> dict:
+        logger.info(f"[tool] ← respuesta de {(tool_response or {}).get('name', '?')}")
+        return tool_response
+
 
 class LiteRTClient:
     """
@@ -21,7 +51,138 @@ class LiteRTClient:
         self.model_path = model_path
         self.engine: Optional[litert_lm.Engine] = None
         self._lock = asyncio.Lock()  # Bloqueo para evitar sesiones concurrentes
+        self.max_num_tokens: Optional[int] = None
+        # Fase 3: conversación persistente (KV-cache reutilizable entre turnos)
+        self._persistent_conv = None
+        self._persistent_sig = None  # (system_prompt, tuple(tool_names)) para invalidar
         self._load_engine()
+        self._log_capabilities()
+
+    def _log_capabilities(self):
+        """Loguea las capacidades reales del motor (Fase 0): ventana de contexto, EOS…"""
+        if not self.engine:
+            return
+        try:
+            self.max_num_tokens = getattr(self.engine, "max_num_tokens", None)
+            eos = getattr(self.engine, "eos_token_ids", None)
+            bos = getattr(self.engine, "bos_token_id", None)
+            logger.info(
+                f"Capacidades del motor: max_num_tokens={self.max_num_tokens}, "
+                f"bos={bos}, eos={eos}"
+            )
+            # Footprint real del system prompt frente a la ventana (Fase 3).
+            try:
+                sp = (settings.PROJECT_ROOT / "config" / "system_prompt.txt").read_text(encoding="utf-8")
+                sp_tokens = self._count_tokens(sp)
+                pct = f"{100*sp_tokens/self.max_num_tokens:.0f}%" if self.max_num_tokens else "?"
+                logger.info(f"System prompt: {sp_tokens} tokens ({pct} de la ventana)")
+            except OSError:
+                pass
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"No se pudieron leer las capacidades del motor: {e}")
+
+    def _count_tokens(self, text: str) -> int:
+        """Cuenta tokens reales con el tokenizador del motor (fallback: aprox. por chars)."""
+        if self.engine and text:
+            try:
+                return len(self.engine.tokenize(text))
+            except Exception:  # noqa: BLE001
+                pass
+        return len(text) // 3
+
+    def _sampler_config(self, agentic: bool):
+        """Construye un SamplerConfig (Fase 2) según el perfil.
+
+        agentic=True (hay herramientas): temperatura baja + seed → tool-calls fiables.
+        agentic=False (charla/redacción): más natural.
+        """
+        SamplerConfig = getattr(litert_lm, "SamplerConfig", None)
+        if SamplerConfig is None:
+            return None
+        top_k = settings.LITERT_TOP_K if settings.LITERT_TOP_K >= 0 else None
+        seed = settings.LITERT_SEED if settings.LITERT_SEED >= 0 else None
+        temperature = settings.LITERT_AGENTIC_TEMPERATURE if agentic else settings.LITERT_TEMPERATURE
+        try:
+            return SamplerConfig(
+                top_k=top_k,
+                top_p=settings.LITERT_TOP_P,
+                temperature=temperature,
+                seed=seed,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"No se pudo construir SamplerConfig: {e}")
+            return None
+
+    def _create_conversation(self, messages, tools):
+        """Crea una conversación pasando sampler_config (y tool_event_handler si procede).
+
+        Filtra kwargs no soportados por la build instalada para no romper.
+        """
+        kwargs = {"messages": messages, "tools": tools}
+        sampler = self._sampler_config(agentic=bool(tools))
+        if sampler is not None:
+            kwargs["sampler_config"] = sampler
+        if settings.LITERT_TOOL_EVENTS and tools:
+            handler = _LoggingToolEventHandler()
+            kwargs["tool_event_handler"] = handler
+        try:
+            import inspect
+            params = inspect.signature(self.engine.create_conversation).parameters
+            kwargs = {k: v for k, v in kwargs.items() if k in params}
+        except (ValueError, TypeError):
+            pass
+        return self.engine.create_conversation(**kwargs)
+
+    def _get_persistent_conversation(self, system_prompt, tools):
+        """Devuelve una Conversation viva reutilizable (Fase 3, KV-cache).
+
+        Se recrea solo si cambia el system prompt o el conjunto de herramientas.
+        """
+        sig = (
+            system_prompt or "",
+            tuple(getattr(t, "__name__", "?") for t in (tools or [])),
+        )
+        if self._persistent_conv is not None and self._persistent_sig == sig:
+            return self._persistent_conv
+        self._invalidate_persistent()
+        system_messages = []
+        if system_prompt:
+            system_messages.append({
+                "role": "system",
+                "content": [{"type": "text", "text": system_prompt}],
+            })
+        self._persistent_conv = self._create_conversation(system_messages, tools)
+        self._persistent_sig = sig
+        logger.info("Conversación persistente (KV-cache) creada/reseteada.")
+        return self._persistent_conv
+
+    def _invalidate_persistent(self):
+        """Cierra y olvida la conversación persistente (al resetear o ante error)."""
+        if self._persistent_conv is not None:
+            try:
+                self._persistent_conv.close()
+            except Exception:  # noqa: BLE001
+                pass
+        self._persistent_conv = None
+        self._persistent_sig = None
+
+    def reset_conversation(self):
+        """Resetea el estado conversacional persistente (lo llama /reset)."""
+        self._invalidate_persistent()
+
+    @contextlib.contextmanager
+    def _conversation_ctx(self, system_prompt, formatted_messages, tools):
+        """Context manager unificado: en modo persistente reutiliza la conversación
+        (sin cerrarla); en modo normal crea una efímera con `with`."""
+        if settings.LITERT_PERSISTENT_CONVERSATION:
+            try:
+                yield self._get_persistent_conversation(system_prompt, tools)
+            except Exception:
+                self._invalidate_persistent()
+                raise
+        else:
+            with self._create_conversation(formatted_messages, tools) as conv:
+                yield conv
 
     def _engine_kwargs(self) -> dict:
         """Kwargs comunes para optimizar el motor (Fase 1): MTP, caché y hint.
@@ -235,7 +396,7 @@ class LiteRTClient:
                 tools_to_use = sync_tools
                 for attempt in range(2):
                     try:
-                        with self.engine.create_conversation(messages=formatted_messages, tools=tools_to_use) as conversation:
+                        with self._conversation_ctx(system_prompt, formatted_messages, tools_to_use) as conversation:
                             stream = conversation.send_message_async(current_message)
                             for chunk in stream:
                                 text_parts = []
@@ -497,7 +658,7 @@ class LiteRTClient:
             tools_to_use = tools
             for attempt in range(2):
                 try:
-                    with self.engine.create_conversation(messages=formatted_messages, tools=tools_to_use) as conversation:
+                    with self._conversation_ctx(system_prompt, formatted_messages, tools_to_use) as conversation:
                         
                         # 3. Construir mensaje actual (con truncamiento del prompt)
                         content_parts = [{"type": "text", "text": _smart_trunc(prompt, MAX_PROMPT_CHARS)}]
@@ -543,6 +704,7 @@ class LiteRTClient:
 
     def close(self):
         """Libera recursos del motor."""
+        self._invalidate_persistent()
         if self.engine:
             self.engine = None
             logger.info("Motor LiteRT liberado.")

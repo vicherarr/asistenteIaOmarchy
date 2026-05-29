@@ -831,6 +831,9 @@ async def reset_conversation(state: AppState = Depends(get_app_state)):
         state.paused_players = []
 
     state.conversation_history.clear()
+    # Fase 3: si la conversación persistente (KV-cache) está activa, resetearla también.
+    if state.litert_client and hasattr(state.litert_client, "reset_conversation"):
+        state.litert_client.reset_conversation()
     logger.info("Conversación y estado del backend completamente reiniciados.")
     return {"status": "reset", "message": "Historial de conversación y procesos del backend reiniciados"}
 

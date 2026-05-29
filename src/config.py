@@ -35,6 +35,30 @@ class Settings(BaseSettings):
     # del primer turno (prefijo estable conocido por el motor).
     LITERT_PROMPT_HINT: bool = True
 
+    # --- Fase 2: muestreo (SamplerConfig) ---
+    # Perfil "charla": más natural/creativo.
+    LITERT_TEMPERATURE: float = 0.6
+    LITERT_TOP_K: int = 64          # -1 => no fijar (usa default del modelo)
+    LITERT_TOP_P: float = 0.95
+    # Perfil "agéntico" (cuando hay herramientas): determinista para tool-calls fiables.
+    LITERT_AGENTIC_TEMPERATURE: float = 0.1
+    LITERT_SEED: int = -1           # -1 => aleatorio; >=0 => reproducible
+
+    # --- Fase 3: contexto y conversación persistente ---
+    # Mantener una Conversation viva por sesión para reutilizar la KV-cache
+    # (no re-prefillar el historial cada turno). EXPERIMENTAL: por defecto off.
+    LITERT_PERSISTENT_CONVERSATION: bool = False
+
+    # --- Fase 4: tools nativas y event handler ---
+    # Emite eventos de tool (inicio/fin) al log y permite gating de comandos.
+    # EXPERIMENTAL: por defecto off (automatic_tool_calling ya funciona sin él).
+    LITERT_TOOL_EVENTS: bool = False
+
+    # Nota Fase 5: la visión en "una sola pasada" para analyze_screen es inviable por
+    # reentrancia del motor (no se puede invocar inferencia desde dentro de un tool);
+    # el flujo de 2 pasadas es correcto. El single-pass ya funciona cuando la imagen
+    # se conoce antes de inferir (image_path en la 1ª llamada).
+
     # Assistant
     MAX_HISTORY: int = 10
     
