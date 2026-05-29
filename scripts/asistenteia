@@ -115,9 +115,49 @@ case "$cmd" in
             err "No se pudo averiguar la IP de la red local. ¿Estás conectado a la red?"
             exit 1
         fi
+
+        # 1) ¿Permitir conexión externa? Solo es accesible desde la red si el
+        #    servidor escucha en 0.0.0.0 (no en 127.0.0.1).
+        host="$(ai_read_env HOST 127.0.0.1)"
+        restart_needed=0
+        if [ "$host" = "127.0.0.1" ] || [ "$host" = "localhost" ]; then
+            warn "Ahora el asistente solo escucha en local (HOST=$host): nadie de la red puede conectar."
+            if ai_confirm "¿Quieres permitir el acceso desde otros dispositivos de tu red?"; then
+                ai_set_env_key HOST 0.0.0.0
+                ok "Guardado HOST=0.0.0.0 en el .env."
+                restart_needed=1
+            else
+                echo "De acuerdo: la URL solo funcionará en este mismo equipo."
+            fi
+        else
+            ok "El asistente ya escucha en HOST=$host (accesible desde la red)."
+        fi
+
+        # 2) Firewall: comprobar y, si procede, abrir el puerto que usa el .env.
+        ai_firewall_open "$PORT"
+
+        # 3) Aplicar el cambio de HOST reiniciando (si hizo falta y está en marcha).
+        if [ "$restart_needed" = 1 ]; then
+            if ai_server_up; then
+                if ai_confirm "¿Reiniciar ahora para aplicar el acceso externo?"; then
+                    "$SCRIPTS_DIR/stop-assistant.sh" >/dev/null 2>&1 || true
+                    sleep 1
+                    case "$(ai_ensure_running 90)" in
+                        error) err "No se pudo reiniciar. Revisa: asistenteia logs"; exit 1 ;;
+                        *)     ok "Reiniciado: ya acepta conexiones externas." ;;
+                    esac
+                else
+                    warn "Recuerda: 'asistenteia restart' para que el acceso externo surta efecto."
+                fi
+            else
+                echo "Se aplicará al arrancar (asistenteia start o Super + Z)."
+            fi
+        fi
+
+        # 4) URL + QR para compartir.
         url="$PROTO://$ip:$PORT/chat"
         [ -n "$API_TOKEN" ] && url="$url?token=$API_TOKEN"
-
+        echo
         echo "Comparte esta URL con quien esté en tu misma red local:"
         echo
         printf '  %s%s%s\n' "$C_CYAN" "$url" "$C_RESET"
@@ -126,13 +166,8 @@ case "$cmd" in
         if command -v qrencode >/dev/null 2>&1; then
             qrencode -t ANSIUTF8 "$url"
             echo
-        fi
-
-        host="$(ai_read_env HOST 127.0.0.1)"
-        if [ "$host" = "127.0.0.1" ] || [ "$host" = "localhost" ]; then
-            warn "Ahora mismo el asistente solo escucha en local (HOST=$host),"
-            warn "así que esa URL no funcionará desde otro dispositivo."
-            warn "Pon HOST=0.0.0.0 en el .env y reinicia: asistenteia restart"
+        else
+            warn "Instala 'qrencode' para mostrar un código QR (sudo pacman -S qrencode)."
         fi
         if [ "$PROTO" = "https" ]; then
             echo "Nota: el certificado es autofirmado; el navegador avisará (acepta el riesgo)."

@@ -82,6 +82,60 @@ ai_lan_ip() {
     echo "$ip"
 }
 
+# Pregunta sí/no por la terminal. Devuelve 0 (sí) solo ante respuesta afirmativa.
+# Sin TTY devuelve 1 (no) para no bloquear ejecuciones no interactivas.
+ai_confirm() {
+    local prompt="$1" ans=""
+    [ -r /dev/tty ] || return 1
+    read -r -p "$prompt [s/N]: " ans </dev/tty || return 1
+    case "$ans" in [sSyY]*) return 0 ;; *) return 1 ;; esac
+}
+
+# Detecta un firewall ACTIVO sin requerir sudo (vía systemctl is-active).
+# Imprime el nombre (firewalld|ufw|nftables|iptables) o vacío si no hay ninguno.
+ai_active_firewall() {
+    local s
+    for s in firewalld ufw nftables iptables; do
+        systemctl is-active --quiet "$s" 2>/dev/null && { echo "$s"; return 0; }
+    done
+    echo ""; return 1
+}
+
+# Comprueba el firewall y, si está activo, ofrece abrir el puerto TCP $1
+# (interactivo, usa sudo). Informa cuando no hay nada que abrir.
+ai_firewall_open() {
+    local port="$1" fw
+    fw="$(ai_active_firewall)"
+    if [ -z "$fw" ]; then
+        log "No hay firewall gestionado activo: no hace falta abrir el puerto $port/tcp."
+        return 0
+    fi
+    case "$fw" in
+        ufw)
+            warn "Firewall ufw activo: para el acceso externo debe permitir el puerto $port/tcp."
+            if ai_confirm "¿Abrir $port/tcp en ufw ahora (sudo)?"; then
+                sudo ufw allow "$port/tcp" && ok "Puerto $port/tcp permitido en ufw." \
+                    || err "No se pudo modificar ufw."
+            fi
+            ;;
+        firewalld)
+            warn "Firewall firewalld activo: para el acceso externo debe permitir el puerto $port/tcp."
+            if ai_confirm "¿Abrir $port/tcp en firewalld ahora (sudo, runtime + permanente)?"; then
+                if sudo firewall-cmd --add-port="$port/tcp" >/dev/null \
+                   && sudo firewall-cmd --permanent --add-port="$port/tcp" >/dev/null; then
+                    ok "Puerto $port/tcp permitido en firewalld."
+                else
+                    err "No se pudo modificar firewalld."
+                fi
+            fi
+            ;;
+        nftables|iptables)
+            warn "Firewall $fw activo (sin gestor amistoso para automatizarlo)."
+            warn "Si la conexión externa falla, abre manualmente el puerto $port/tcp en $fw."
+            ;;
+    esac
+}
+
 # ---- Estado del servidor ----------------------------------------------------
 ai_server_up() { curl -sk -o /dev/null --max-time 2 "$BASE_URL/status" 2>/dev/null; }
 
