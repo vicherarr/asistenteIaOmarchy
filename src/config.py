@@ -24,6 +24,16 @@ class Settings(BaseSettings):
     LITERT_MODEL_PATH: str = "models/gemma-4-E4B-it.litertlm"
     LITERT_BACKEND: str = "gpu"
     LITERT_TIMEOUT: float = 35.0
+    # Fase 1 — exprimir el motor:
+    # Multi-Token Prediction (MTP / speculative decoding): hasta 2.2x decode en GPU
+    # y recomendado para Gemma E4B. Desactívalo (False) solo si en CPU notas penalti.
+    LITERT_SPECULATIVE_DECODING: bool = True
+    # Directorio de caché de artefactos compilados (acelera el arranque en frío).
+    # Vacío => se usa ~/.cache/asistenteia/litert
+    LITERT_CACHE_DIR: str = ""
+    # Si True, se pasa el system prompt como input_prompt_as_hint para mejorar el TTFT
+    # del primer turno (prefijo estable conocido por el motor).
+    LITERT_PROMPT_HINT: bool = True
 
     # Assistant
     MAX_HISTORY: int = 10

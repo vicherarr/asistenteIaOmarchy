@@ -23,13 +23,61 @@ class LiteRTClient:
         self._lock = asyncio.Lock()  # Bloqueo para evitar sesiones concurrentes
         self._load_engine()
 
+    def _engine_kwargs(self) -> dict:
+        """Kwargs comunes para optimizar el motor (Fase 1): MTP, caché y hint.
+
+        Se aplican a cualquier backend. Cada uno es opcional/configurable por .env
+        para poder revertir sin tocar código.
+        """
+        kwargs: dict = {}
+
+        # Multi-Token Prediction (speculative decoding): hasta 2.2x decode en GPU,
+        # recomendado para Gemma E4B. Universalmente recomendado en GPU.
+        if settings.LITERT_SPECULATIVE_DECODING:
+            kwargs["enable_speculative_decoding"] = True
+
+        # Caché de artefactos compilados → arranque en frío más rápido.
+        cache_dir = settings.LITERT_CACHE_DIR.strip() if settings.LITERT_CACHE_DIR else ""
+        if not cache_dir:
+            cache_dir = str(Path.home() / ".cache" / "asistenteia" / "litert")
+        try:
+            Path(cache_dir).mkdir(parents=True, exist_ok=True)
+            kwargs["cache_dir"] = cache_dir
+        except OSError as e:
+            logger.warning(f"No se pudo preparar cache_dir '{cache_dir}': {e}")
+
+        # input_prompt_as_hint: prefijo estable (system prompt) → mejor TTFT del 1er turno.
+        if settings.LITERT_PROMPT_HINT:
+            try:
+                prompt_path = settings.PROJECT_ROOT / "config" / "system_prompt.txt"
+                hint = prompt_path.read_text(encoding="utf-8").strip()
+                if hint:
+                    kwargs["input_prompt_as_hint"] = hint
+            except OSError as e:
+                logger.warning(f"No se pudo leer system_prompt.txt para el hint: {e}")
+
+        # Filtrar contra la firma real del Engine instalado: si esta build no soporta
+        # algún parámetro, lo descartamos en vez de tumbar la carga del motor.
+        try:
+            import inspect
+            params = inspect.signature(litert_lm.Engine).parameters
+            unsupported = [k for k in kwargs if k not in params]
+            for k in unsupported:
+                logger.warning(f"litert_lm.Engine no soporta '{k}' en esta versión; se omite.")
+                kwargs.pop(k)
+        except (ValueError, TypeError):
+            # Si no se puede introspeccionar la firma, seguimos con los kwargs tal cual.
+            pass
+
+        return kwargs
+
     def _load_engine(self):
         """Carga el motor LiteRT con estrategia de backend flexible y robusta."""
         try:
             path = Path(self.model_path)
             if not path.is_absolute():
                 path = settings.PROJECT_ROOT / path
-            
+
             if not path.exists():
                 logger.error(f"Modelo LiteRT no encontrado en: {path}")
                 return
@@ -37,12 +85,14 @@ class LiteRTClient:
             logger.info(f"Cargando motor LiteRT desde {path}...")
             backend_mode = settings.LITERT_BACKEND.lower()
             logger.info(f"Modo de backend configurado: {backend_mode}")
+            opt_kwargs = self._engine_kwargs()
+            logger.info(f"Optimizaciones del motor (Fase 1): {list(opt_kwargs.keys())}")
 
             # Estrategia 1: Carga automática (Recomendada y 100% estable)
             if backend_mode == "auto":
                 try:
                     logger.info("Cargando motor LiteRT de forma automática (segura e interna)...")
-                    self.engine = litert_lm.Engine(str(path))
+                    self.engine = litert_lm.Engine(str(path), **opt_kwargs)
                     logger.info("Motor LiteRT cargado exitosamente (Backend automático).")
                     return
                 except Exception as auto_err:
@@ -60,7 +110,8 @@ class LiteRTClient:
                         str(path),
                         backend=litert_lm.Backend.GPU,
                         vision_backend=litert_lm.Backend.CPU,
-                        audio_backend=litert_lm.Backend.CPU
+                        audio_backend=litert_lm.Backend.CPU,
+                        **opt_kwargs
                     )
                     logger.info("Motor LiteRT cargado exitosamente (LLM en GPU, visión en CPU).")
                     return
@@ -77,10 +128,11 @@ class LiteRTClient:
                         str(path),
                         backend=litert_lm.Backend.CPU,
                         vision_backend=litert_lm.Backend.CPU,
-                        audio_backend=litert_lm.Backend.CPU
+                        audio_backend=litert_lm.Backend.CPU,
+                        **opt_kwargs
                     )
                 else:
-                    self.engine = litert_lm.Engine(str(path))
+                    self.engine = litert_lm.Engine(str(path), **opt_kwargs)
                 logger.info("Motor LiteRT cargado exitosamente (Backend CPU / Fallback).")
                 
         except Exception as e:
