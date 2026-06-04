@@ -28,6 +28,23 @@ ai_model_meta() {
     esac
 }
 
+# Backend recomendado para cada modelo según la VRAM disponible. El backend es
+# una propiedad del modelo+hardware, no global: así, cambiar de modelo restaura
+# el backend correcto (p.ej. volver a E4B reactiva GPU) sin que el ajuste del
+# 12B "contamine" a E2B/E4B. Mismo criterio de holgura que el instalador.
+#   12B: siempre CPU (no cabe en GPU de consumo; ~6.5 GB de pesos + KV-cache).
+#   E4B: GPU si VRAM >= 7 GiB, si no CPU.
+#   E2B: GPU si VRAM >= 5 GiB, si no CPU.
+ai_model_backend() {
+    local vram; vram="$(detect_vram_mib)"
+    case "$1" in
+        12b) echo cpu ;;
+        e4b) [ "$vram" -ge 7168 ] && echo gpu || echo cpu ;;
+        e2b) [ "$vram" -ge 5120 ] && echo gpu || echo cpu ;;
+        *)   echo gpu ;;
+    esac
+}
+
 usage() {
     cat <<EOF
 AsistenteIA - uso: asistenteia <comando>
@@ -248,8 +265,12 @@ case "$cmd" in
         IFS='|' read -r repo file size caps <<<"$meta"
         target="$PROJECT_DIR/models/$file"
 
-        if [ "$sub" = "$cur_key" ] && [ -f "$target" ]; then
-            echo "Ya estás usando Gemma 4 ${sub^^} ($file). Nada que hacer."
+        # Backend que toca para este modelo+hardware y el que hay ahora en el .env.
+        new_backend="$(ai_model_backend "$sub")"
+        cur_backend="$(ai_read_env LITERT_BACKEND gpu)"
+
+        if [ "$sub" = "$cur_key" ] && [ -f "$target" ] && [ "$new_backend" = "$cur_backend" ]; then
+            echo "Ya estás usando Gemma 4 ${sub^^} ($file) en backend $new_backend. Nada que hacer."
             exit 0
         fi
 
@@ -281,6 +302,14 @@ PY
 
         ai_set_env_key LITERT_MODEL_PATH "models/$file"
         echo "Modelo activo: $file"
+
+        # Ajusta el backend al recomendado para este modelo (CPU para 12B, GPU para
+        # E2B/E4B si hay VRAM). Solo se escribe si cambia, para no tocar el .env sin
+        # motivo. Así E2B/E4B vuelven a GPU aunque el 12B haya dejado el backend en CPU.
+        if [ "$new_backend" != "$cur_backend" ]; then
+            ai_set_env_key LITERT_BACKEND "$new_backend"
+            echo "Backend ajustado: $cur_backend -> $new_backend (recomendado para ${sub^^})."
+        fi
 
         if ai_server_up; then
             echo "Reiniciando para cargar el nuevo modelo..."

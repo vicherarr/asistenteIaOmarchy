@@ -44,6 +44,24 @@ ai_set_env_key() {
     fi
 }
 
+# VRAM de la GPU dedicada más grande, en MiB (0 si no hay). Misma lógica que el
+# instalador: NVIDIA vía nvidia-smi y AMD vía /sys. Sirve para elegir backend.
+detect_vram_mib() {
+    local mib=0 v f bytes amd
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        v="$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | sort -nr | head -n1 || true)"
+        case "$v" in ''|*[!0-9]*) : ;; *) mib="$v" ;; esac
+    fi
+    for f in /sys/class/drm/card*/device/mem_info_vram_total; do
+        [ -r "$f" ] || continue
+        bytes="$(cat "$f" 2>/dev/null || echo 0)"
+        case "$bytes" in ''|*[!0-9]*) continue ;; esac
+        amd=$(( bytes / 1048576 ))
+        [ "$amd" -gt "$mib" ] && mib="$amd"
+    done
+    echo "$mib"
+}
+
 PORT="$(ai_read_env PORT 8765)"
 API_TOKEN="$(ai_read_env API_TOKEN "")"
 
