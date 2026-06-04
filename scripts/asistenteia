@@ -30,15 +30,17 @@ ai_model_meta() {
 
 # Backend recomendado para cada modelo según la VRAM disponible. El backend es
 # una propiedad del modelo+hardware, no global: así, cambiar de modelo restaura
-# el backend correcto (p.ej. volver a E4B reactiva GPU) sin que el ajuste del
-# 12B "contamine" a E2B/E4B. Mismo criterio de holgura que el instalador.
-#   12B: siempre CPU (no cabe en GPU de consumo; ~6.5 GB de pesos + KV-cache).
+# el backend correcto (p.ej. volver a E4B reactiva GPU) sin que el ajuste de un
+# modelo "contamine" a los demás. Mismo criterio de holgura que el instalador.
+#   12B: SIEMPRE GPU. El .litertlm trae el decoder principal con restricción
+#        "section_backend_constraint: gpu", así que en CPU el motor se niega a
+#        cargar. Necesita una GPU holgada (~12 GiB+); en 8 GiB no entra.
 #   E4B: GPU si VRAM >= 7 GiB, si no CPU.
 #   E2B: GPU si VRAM >= 5 GiB, si no CPU.
 ai_model_backend() {
     local vram; vram="$(detect_vram_mib)"
     case "$1" in
-        12b) echo cpu ;;
+        12b) echo gpu ;;
         e4b) [ "$vram" -ge 7168 ] && echo gpu || echo cpu ;;
         e2b) [ "$vram" -ge 5120 ] && echo gpu || echo cpu ;;
         *)   echo gpu ;;
@@ -276,9 +278,16 @@ case "$cmd" in
 
         # El 12B aún no procesa imágenes en LiteRT-LM: el análisis de pantalla y
         # las tools de visión quedarán inoperativas hasta que Google lo añada.
+        # Además es GPU-only y pesado: en GPUs pequeñas el motor no llega a cargar.
         if [ "$sub" = 12b ]; then
             warn "Gemma 4 12B no soporta imágenes todavía: las herramientas de visión"
             warn "(análisis de pantalla) no funcionarán. El resto (audio, texto, tools) sí."
+            warn "Requiere GPU holgada (~12 GiB+ de VRAM). Es GPU-only: no carga en CPU,"
+            warn "y en tarjetas pequeñas (p.ej. 8 GiB) el motor fallará al inicializar."
+            cur_vram="$(detect_vram_mib)"
+            if [ "$cur_vram" -gt 0 ] && [ "$cur_vram" -lt 12288 ]; then
+                warn "Tu GPU tiene ~$(( cur_vram / 1024 )) GiB: probablemente NO arranque."
+            fi
         fi
 
         if [ -f "$target" ]; then
