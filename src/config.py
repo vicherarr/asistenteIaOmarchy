@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     SSL_KEYFILE: Optional[str] = None
     SSL_CERTFILE: Optional[str] = None
     
+    # Motor de inferencia: "litert" (por defecto) o "exllama" (Fase 2).
+    # Selecciona qué backend de LLM construye la factoría (src/engines/factory.py).
+    AI_ENGINE: str = "litert"
+
     # LiteRT (motor único: LLM en GPU, visión y audio en CPU)
     LITERT_MODEL_PATH: str = "models/gemma-4-E4B-it.litertlm"
     LITERT_BACKEND: str = "gpu"
