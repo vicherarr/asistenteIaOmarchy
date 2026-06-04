@@ -13,12 +13,17 @@ SCRIPTS_DIR="$(dirname "$SELF")"
 # shellcheck source=_common.sh
 source "$SCRIPTS_DIR/_common.sh"
 
-# Modelos Gemma 4 disponibles (solo E2B/E4B: los únicos con audio nativo).
-# Devuelve "REPO|FICHERO|TAMAÑO" para la clave dada (e2b/e4b).
+# Modelos Gemma 4 disponibles.
+#   E2B/E4B: audio + visión nativos (recomendados para uso general).
+#   12B:     más capaz y con 32k de contexto, audio nativo, pero AÚN NO soporta
+#            imágenes (el análisis de pantalla no funcionará hasta que LiteRT-LM
+#            añada soporte de imagen para este modelo).
+# Devuelve "REPO|FICHERO|TAMAÑO|CAPACIDADES" para la clave dada (e2b/e4b/12b).
 ai_model_meta() {
     case "$1" in
-        e2b) echo "litert-community/gemma-4-E2B-it-litert-lm|gemma-4-E2B-it.litertlm|2.6 GB" ;;
-        e4b) echo "litert-community/gemma-4-E4B-it-litert-lm|gemma-4-E4B-it.litertlm|3.7 GB" ;;
+        e2b) echo "litert-community/gemma-4-E2B-it-litert-lm|gemma-4-E2B-it.litertlm|2.6 GB|audio+visión" ;;
+        e4b) echo "litert-community/gemma-4-E4B-it-litert-lm|gemma-4-E4B-it.litertlm|3.7 GB|audio+visión" ;;
+        12b) echo "litert-community/gemma-4-12B-it-litert-lm|gemma-4-12B-it.litertlm|6.6 GB|audio, sin imagen aún" ;;
         *)   return 1 ;;
     esac
 }
@@ -36,8 +41,9 @@ AsistenteIA - uso: asistenteia <comando>
   api          Abre la documentación Swagger de la API (/docs) en el navegador
   invite       Genera la URL para que alguien se conecte desde la red local
   status       Muestra el estado del asistente
-  model [m]    Cambia el modelo (e2b/e4b): lo descarga si falta y reinicia.
+  model [m]    Cambia el modelo (e2b/e4b/12b): lo descarga si falta y reinicia.
                Sin argumento, muestra el actual y pregunta cuál usar.
+               12b es más capaz (32k contexto) pero aún no soporta imágenes.
   logs         Muestra los logs en tiempo real
   service ...  Gestiona el servicio systemd: install | enable | disable | status | uninstall
   keybindings  (Re)configura los atajos Super+Z / Super+X
@@ -214,37 +220,44 @@ case "$cmd" in
     model)
         sub="${1:-}"
         cur_file="$(basename "$(ai_read_env LITERT_MODEL_PATH "models/gemma-4-E4B-it.litertlm")")"
-        case "$cur_file" in *E2B*) cur_key=e2b ;; *E4B*) cur_key=e4b ;; *) cur_key="?" ;; esac
+        case "$cur_file" in *E2B*) cur_key=e2b ;; *E4B*) cur_key=e4b ;; *12B*) cur_key=12b ;; *) cur_key="?" ;; esac
 
         # Sin argumento (o list/status): mostrar el actual y los disponibles.
         if [ -z "$sub" ] || [ "$sub" = list ] || [ "$sub" = status ]; then
             echo "Modelo actual: $cur_file"
             echo
-            echo "Disponibles (ambos con audio nativo):"
-            for k in e2b e4b; do
-                IFS='|' read -r _repo file size _ < <(ai_model_meta "$k")
+            echo "Disponibles:"
+            for k in e2b e4b 12b; do
+                IFS='|' read -r _repo file size caps < <(ai_model_meta "$k")
                 estado="no descargado"; [ -f "$PROJECT_DIR/models/$file" ] && estado="descargado"
                 marca=" "; [ "$k" = "$cur_key" ] && marca="*"
-                printf "  %s %-3s  Gemma 4 %s (~%s)  [%s]\n" "$marca" "$k" "${k^^}" "$size" "$estado"
+                printf "  %s %-3s  Gemma 4 %-3s (~%s, %s)  [%s]\n" "$marca" "$k" "${k^^}" "$size" "$caps" "$estado"
             done
             echo
             [ "$sub" = list ] || [ "$sub" = status ] && exit 0
             if [ -r /dev/tty ]; then
-                read -r -p "¿A qué modelo cambiar? [e2b/e4b] (Enter = cancelar): " sub </dev/tty || sub=""
+                read -r -p "¿A qué modelo cambiar? [e2b/e4b/12b] (Enter = cancelar): " sub </dev/tty || sub=""
             fi
             [ -z "$sub" ] && { echo "Sin cambios."; exit 0; }
         fi
 
         sub="$(printf '%s' "$sub" | tr 'A-Z' 'a-z')"
         if ! meta="$(ai_model_meta "$sub")"; then
-            err "Modelo no válido: '$sub'. Usa e2b o e4b."; exit 1
+            err "Modelo no válido: '$sub'. Usa e2b, e4b o 12b."; exit 1
         fi
-        IFS='|' read -r repo file size _ <<<"$meta"
+        IFS='|' read -r repo file size caps <<<"$meta"
         target="$PROJECT_DIR/models/$file"
 
         if [ "$sub" = "$cur_key" ] && [ -f "$target" ]; then
             echo "Ya estás usando Gemma 4 ${sub^^} ($file). Nada que hacer."
             exit 0
+        fi
+
+        # El 12B aún no procesa imágenes en LiteRT-LM: el análisis de pantalla y
+        # las tools de visión quedarán inoperativas hasta que Google lo añada.
+        if [ "$sub" = 12b ]; then
+            warn "Gemma 4 12B no soporta imágenes todavía: las herramientas de visión"
+            warn "(análisis de pantalla) no funcionarán. El resto (audio, texto, tools) sí."
         fi
 
         if [ -f "$target" ]; then
