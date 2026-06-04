@@ -67,6 +67,22 @@ class Settings(BaseSettings):
     # el flujo de 2 pasadas es correcto. El single-pass ya funciona cuando la imagen
     # se conoce antes de inferir (image_path en la 1ª llamada).
 
+    # --- Motor ExLlamaV3 vía TabbyAPI (AI_ENGINE="exllama") ---
+    # Sidecar OpenAI-compatible. Solo se usa si AI_ENGINE="exllama".
+    EXLLAMA_BASE_URL: str = "http://127.0.0.1:5000"
+    EXLLAMA_MODEL: str = "Qwen3-8B-exl3-4bpw"
+    EXLLAMA_API_KEY: str = ""            # vacío si TabbyAPI corre con disable_auth
+    EXLLAMA_TIMEOUT: float = 120.0
+    EXLLAMA_MAX_TOKENS: int = 1024
+    EXLLAMA_TEMPERATURE: float = 0.6
+    # Razonamiento de Qwen3: CONFIGURABLE pero desactivado por defecto (latencia/tokens
+    # en un asistente de voz). True => el modelo "piensa" antes de responder.
+    EXLLAMA_THINKING: bool = False
+    # True si el modelo es multimodal (p.ej. Qwen3-VL): habilita enviar imágenes.
+    EXLLAMA_VISION: bool = False
+    # Tope de iteraciones del bucle agéntico (modelo→tool→modelo→…).
+    EXLLAMA_MAX_TOOL_ROUNDS: int = 6
+
     # Assistant
     MAX_HISTORY: int = 10
     

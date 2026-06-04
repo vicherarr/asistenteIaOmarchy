@@ -29,9 +29,10 @@ def create_engine(settings=_settings) -> InferenceEngine:
         return LiteRTClient()
 
     if name == "exllama":
-        raise NotImplementedError(
-            "El motor 'exllama' (ExLlamaV3 vía TabbyAPI) llega en la Fase 2."
-        )
+        from src.engines.exllama_engine import ExLlamaEngine
+
+        logger.info("Motor de inferencia: ExLlama (TabbyAPI)")
+        return ExLlamaEngine()
 
     raise ValueError(
         f"AI_ENGINE no válido: {name!r}. Valores válidos: 'litert', 'exllama'."
