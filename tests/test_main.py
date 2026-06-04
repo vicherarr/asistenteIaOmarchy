@@ -11,8 +11,11 @@ from src.main import app, AppState, get_app_state, verify_token
 def mock_app_state():
     """Crea un mock completo del AppState para inyectar en los tests."""
     state = MagicMock(spec=AppState)
-    state.litert_client = MagicMock()
-    state.litert_client.engine = MagicMock()
+    state.engine = MagicMock()
+    state.engine.is_ready = True
+    state.engine.backend_label.return_value = "GPU"
+    state.engine.capabilities.gpu = True
+    state.litert_client = state.engine  # alias de compatibilidad
     state.tts_engine = MagicMock()
     state.vision_tool = MagicMock()
     
@@ -49,14 +52,17 @@ def client(mock_app_state):
     app.dependency_overrides[get_app_state] = lambda: mock_app_state
     app.dependency_overrides[verify_token] = lambda: None
     # Parcheamos los motores pesados para que el lifespan no cargue modelos reales ni acceda a hardware
-    with patch("src.main.LiteRTClient") as mock_litert_class, \
+    with patch("src.main.create_engine") as mock_create_engine, \
          patch("src.main.TTSEngine"), \
          patch("src.main.STTEngine"), \
          patch("src.main.AudioRecorder"), \
          patch("src.main.AudioManager") as mock_audio_class:
-        
-        # Simular que el motor se cargó correctamente en el mock de la clase
-        mock_litert_class.return_value.engine = MagicMock()
+
+        # Simular que la factoría devuelve un motor ya cargado y listo
+        mock_engine = mock_create_engine.return_value
+        mock_engine.is_ready = True
+        mock_engine.backend_label.return_value = "GPU"
+        mock_engine.capabilities.gpu = True
         
         # Simular que auto_configure_bluetooth es asíncrono
         mock_audio_instance = mock_audio_class.return_value
@@ -182,7 +188,7 @@ def test_health_endpoint_components_down(client, mock_app_state):
     with patch("src.main.asyncio.create_subprocess_exec", side_effect=FileNotFoundError), \
          patch("src.main.asyncio.open_connection", side_effect=ConnectionRefusedError):
         
-        mock_app_state.litert_client.engine = None
+        mock_app_state.engine.is_ready = False
         mock_app_state.tts_engine._kokoro_pipeline = None
         
         response = client.get("/health")
