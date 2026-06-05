@@ -13,6 +13,7 @@ def mock_app_state():
     state = MagicMock(spec=AppState)
     state.engine = MagicMock()
     state.engine.name = "LiteRT"
+    state.engine.model_label = "gemma-4-E4B-it"
     state.engine.is_ready = True
     state.engine.backend_label.return_value = "GPU"
     state.engine.capabilities.gpu = True
@@ -62,6 +63,7 @@ def client(mock_app_state):
         # Simular que la factoría devuelve un motor ya cargado y listo
         mock_engine = mock_create_engine.return_value
         mock_engine.name = "LiteRT"
+        mock_engine.model_label = "gemma-4-E4B-it"
         mock_engine.is_ready = True
         mock_engine.backend_label.return_value = "GPU"
         mock_engine.capabilities.gpu = True
@@ -82,6 +84,7 @@ def test_status_endpoint(client, mock_app_state):
     assert data["litert_connected"] is True       # espejo deprecado
     assert data["engine_connected"] is True        # campo neutral
     assert data["engine_name"] == "LiteRT"
+    assert data["engine_model"] == "gemma-4-E4B-it"
     assert data["engine_backend"] == "GPU"
     assert data["bluetooth_audio"] == "Bluetooth OK"
     assert data["conversation_length"] == 0

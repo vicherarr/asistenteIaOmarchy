@@ -754,7 +754,12 @@ class SpotlightWindow(QMainWindow):
     async def update_ui_with_status(self, data):
         """Actualiza los elementos visuales de la UI con la información de estado recibida."""
         try:
-            litert_connected = data.get("litert_connected", False)
+            # Campos neutrales de motor, con caída a los `litert_*` (compat).
+            engine_connected = data.get("engine_connected", data.get("litert_connected", False))
+            engine_name = data.get("engine_name", "LiteRT")
+            engine_model = data.get("engine_model", "")
+            engine_backend = data.get("engine_backend", data.get("litert_backend", "CPU"))
+            gpu_active = data.get("gpu_active", str(engine_backend).startswith("GPU"))
             bluetooth_audio = data.get("bluetooth_audio", "Desconocido")
             conversation_length = data.get("conversation_length", 0)
             is_processing = data.get("processing", False)
@@ -791,10 +796,11 @@ class SpotlightWindow(QMainWindow):
                 self.stop_button.set_state("inactive")
             
             # Actualizar píldoras (Status Pills)
-            if litert_connected:
-                litert_backend = data.get("litert_backend", "CPU")
-                self.model_pill.setText(f"🧠 LiteRT: {litert_backend}")
-                if litert_backend == "GPU":
+            if engine_connected:
+                # Muestra el MODELO cargado (con el motor + backend en el tooltip).
+                self.model_pill.setText(f"🧠 {engine_model}" if engine_model else f"🧠 {engine_name}")
+                self.model_pill.setToolTip(f"{engine_name} · {engine_backend}")
+                if gpu_active:
                     self.model_pill.setStyleSheet("""
                         QPushButton {
                             background-color: rgba(203, 166, 247, 20);
@@ -819,7 +825,7 @@ class SpotlightWindow(QMainWindow):
                         }
                     """)
             else:
-                self.model_pill.setText("🧠 LiteRT: Inactivo")
+                self.model_pill.setText(f"🧠 {engine_name}: Inactivo")
                 self.model_pill.setStyleSheet("""
                     QPushButton {
                         background-color: rgba(108, 112, 134, 20);

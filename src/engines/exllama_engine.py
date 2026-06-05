@@ -191,6 +191,10 @@ class ExLlamaEngine:
         return "ExLlama"
 
     @property
+    def model_label(self) -> str:
+        return self.model  # p.ej. "Qwen3-VL-8B-Instruct-3.5bpw"
+
+    @property
     def streams_clean_text(self) -> bool:
         # chat_stream ejecuta el bucle de tools internamente y emite SOLO texto
         # final limpio (las tool calls van estructuradas, nunca fugadas como texto).

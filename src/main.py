@@ -260,6 +260,7 @@ class StatusResponse(BaseModel):
     # Campos neutrales de motor (preferidos). Los `litert_*` se mantienen como
     # espejo deprecado por retrocompatibilidad (consumidores externos antiguos).
     engine_name: str = "LiteRT"
+    engine_model: str = ""
     engine_connected: bool = False
     engine_backend: str = "Desconectado"
     litert_connected: bool
@@ -682,10 +683,12 @@ async def get_status(state: AppState = Depends(get_app_state)):
     # Metadatos del motor por el contrato (neutral, sin depender de litert_lm).
     engine_backend = state.engine.backend_label()
     engine_name = getattr(state.engine, "name", "Motor")
+    engine_model = getattr(state.engine, "model_label", "")
     gpu_active = state.engine.capabilities.gpu
 
     return StatusResponse(
         engine_name=engine_name,
+        engine_model=engine_model,
         engine_connected=engine_ok,
         engine_backend=engine_backend,
         litert_connected=engine_ok,       # espejo deprecado

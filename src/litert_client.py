@@ -718,6 +718,12 @@ class LiteRTClient:
         return "LiteRT"
 
     @property
+    def model_label(self) -> str:
+        # Nombre del .litertlm sin ruta ni extensión, p.ej. "gemma-4-E4B-it".
+        from pathlib import Path
+        return Path(self.model_path).name.split(".litertlm")[0]
+
+    @property
     def streams_clean_text(self) -> bool:
         # LiteRT fuga las tool calls como texto (<|tool_call|>...); assistant_service
         # las limpia y aplica su heurística de fallback. NO es stream limpio.

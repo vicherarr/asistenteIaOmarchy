@@ -139,6 +139,14 @@
                     </span>
                 </div>
 
+                <!-- Model Pill -->
+                <div class="flex items-center justify-between">
+                    <span class="text-xs text-subtext">Modelo:</span>
+                    <span id="model-status-pill" class="text-xs font-medium text-text max-w-[140px] truncate text-right">
+                        --
+                    </span>
+                </div>
+
                 <!-- Accel Pill -->
                 <div class="flex items-center justify-between">
                     <span class="text-xs text-subtext">Aceleración:</span>
@@ -551,10 +559,18 @@
             const engineConnected = data.engine_connected ?? data.litert_connected;
             const engineBackend = data.engine_backend || data.litert_backend || "CPU";
             const engineName = data.engine_name || "LiteRT";
+            const engineModel = data.engine_model || "—";
             const isProcessingBackend = data.processing;
             const isSpeaking = data.speaking;
             const bluetoothAudio = data.bluetooth_audio || "Desconectado";
             const conversationLength = data.conversation_length || 0;
+
+            // Modelo cargado (siempre, conectado o no)
+            const modelPill = document.getElementById('model-status-pill');
+            if (modelPill) {
+                modelPill.innerText = engineConnected ? engineModel : "—";
+                modelPill.title = engineModel;
+            }
 
             if (engineConnected) {
                 // Backend Conectado
@@ -608,6 +624,9 @@
 
             accelPill.className = "py-1 px-2.5 rounded-full text-[10px] font-bold bg-overlay/20 text-subtext border border-overlay/30";
             accelPill.innerText = "--";
+
+            const modelPill = document.getElementById('model-status-pill');
+            if (modelPill) modelPill.innerText = "--";
 
             audioPill.innerText = "Desconectado";
         }
