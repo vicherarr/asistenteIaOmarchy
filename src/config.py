@@ -82,6 +82,14 @@ class Settings(BaseSettings):
     EXLLAMA_VISION: bool = False
     # Tope de iteraciones del bucle agéntico (modelo→tool→modelo→…).
     EXLLAMA_MAX_TOOL_ROUNDS: int = 6
+    # --- Lifecycle del sidecar (lo gestiona la CLI/shell, no la app Python) ---
+    # Si True, "asistenteia start" arranca/para TabbyAPI automáticamente cuando
+    # AI_ENGINE="exllama" (igual que LiteRT se carga solo dentro del proceso).
+    # Ponlo en False para gestionar TabbyAPI a mano. Solo un motor activo a la vez.
+    EXLLAMA_AUTOSTART: bool = True
+    # Carpeta de la instalación de TabbyAPI (su propio venv py3.11 + main.py + modelo).
+    # Vacío => <raíz del proyecto>/exllama/tabbyAPI. La crea el instalador.
+    EXLLAMA_TABBY_DIR: str = ""
 
     # Assistant
     MAX_HISTORY: int = 10

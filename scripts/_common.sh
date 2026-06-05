@@ -154,6 +154,86 @@ ai_firewall_open() {
     esac
 }
 
+# ---- Motor de inferencia y sidecar TabbyAPI (ExLlama) -----------------------
+# El motor se elige con AI_ENGINE (litert por defecto, en proceso). Cuando es
+# "exllama", el LLM corre en un sidecar TabbyAPI (proceso aparte, su propio venv)
+# y la app le habla por HTTP. Aquí va su ciclo de vida (arranque/parada), de modo
+# que TabbyAPI se levante junto al asistente —como LiteRT se carga solo— y se pare
+# con él. Mutua exclusión: solo un motor activo a la vez.
+TABBY_PID_FILE="/tmp/asistenteia-tabby.pid"
+TABBY_LOG_FILE="/tmp/asistenteia-tabby.log"
+
+EXLLAMA_BASE_URL="$(ai_read_env EXLLAMA_BASE_URL http://127.0.0.1:5000)"
+EXLLAMA_API_KEY="$(ai_read_env EXLLAMA_API_KEY "")"
+EXLLAMA_AUTOSTART="$(ai_read_env EXLLAMA_AUTOSTART true)"
+EXLLAMA_TABBY_DIR="$(ai_read_env EXLLAMA_TABBY_DIR "$PROJECT_DIR/exllama/tabbyAPI")"
+
+ai_engine()         { ai_read_env AI_ENGINE litert; }
+ai_using_exllama()  { [ "$(ai_engine)" = "exllama" ]; }
+ai_tabby_autostart(){ case "$(printf '%s' "$EXLLAMA_AUTOSTART" | tr 'A-Z' 'a-z')" in 1|true|yes|on) return 0 ;; *) return 1 ;; esac; }
+
+# El backend ExLlama está "instalado" si existe su venv y el main.py de TabbyAPI.
+ai_tabby_installed() { [ -x "$EXLLAMA_TABBY_DIR/venv/bin/python" ] && [ -f "$EXLLAMA_TABBY_DIR/main.py" ]; }
+
+# ¿Responde TabbyAPI? (endpoint OpenAI /v1/models, con token si lo hay).
+ai_tabby_up() {
+    if [ -n "$EXLLAMA_API_KEY" ]; then
+        curl -sk -o /dev/null --max-time 2 -H "Authorization: Bearer $EXLLAMA_API_KEY" "$EXLLAMA_BASE_URL/v1/models" 2>/dev/null
+    else
+        curl -sk -o /dev/null --max-time 2 "$EXLLAMA_BASE_URL/v1/models" 2>/dev/null
+    fi
+}
+
+# Espera a que TabbyAPI responda. $1 = segundos de timeout (def. 180; carga el modelo).
+ai_tabby_wait() {
+    local timeout="${1:-180}" count=0
+    until ai_tabby_up; do
+        sleep 1; count=$((count + 1))
+        [ "$count" -ge "$timeout" ] && return 1
+    done
+    return 0
+}
+
+# Arranca el sidecar TabbyAPI desde su propio venv y espera a que esté listo.
+# Devuelve 0 si ya estaba arriba o si arrancó a tiempo. $1 = timeout (def. 180).
+ai_tabby_start() {
+    ai_tabby_up && return 0
+    if ! ai_tabby_installed; then
+        warn "Backend ExLlama no instalado en $EXLLAMA_TABBY_DIR."
+        warn "Instálalo con: asistenteia engine install"
+        return 1
+    fi
+    log "Arrancando el sidecar TabbyAPI (ExLlama)..."
+    # setsid => el proceso es líder de su grupo (PGID == PID), así matamos a TODA
+    # su descendencia de una (TabbyAPI lanza un hijo que es quien retiene la VRAM;
+    # matar solo al padre dejaría el modelo cargado). main.py con ruta absoluta para
+    # que el pkill de respaldo (por ruta) sea fiable; cwd en el dir (config/modelo).
+    ( cd "$EXLLAMA_TABBY_DIR" \
+        && setsid nohup "$EXLLAMA_TABBY_DIR/venv/bin/python" "$EXLLAMA_TABBY_DIR/main.py" \
+            >"$TABBY_LOG_FILE" 2>&1 </dev/null & echo $! >"$TABBY_PID_FILE" )
+    if ai_tabby_wait "${1:-180}"; then
+        ok "TabbyAPI listo ($EXLLAMA_BASE_URL)."
+        return 0
+    fi
+    err "TabbyAPI no respondió a tiempo. Revisa: tail -f $TABBY_LOG_FILE"
+    return 1
+}
+
+# Detiene el sidecar TabbyAPI. Solo mata procesos de NUESTRA instalación
+# (PID file + main.py bajo EXLLAMA_TABBY_DIR): no toca otros servicios del puerto.
+ai_tabby_stop() {
+    if [ -f "$TABBY_PID_FILE" ]; then
+        local pid; pid="$(cat "$TABBY_PID_FILE")"
+        # Mata el grupo entero (-pid): el padre y el hijo que retiene la VRAM.
+        # Si el grupo ya no existe, cae al PID suelto como cortesía.
+        kill -- "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+        rm -f "$TABBY_PID_FILE"
+    fi
+    # Red de seguridad: cualquier proceso de NUESTRO main.py (ruta absoluta), por si
+    # el grupo no cubrió algún huérfano. Acotado a este dir: no toca otros servicios.
+    pkill -f "$EXLLAMA_TABBY_DIR/main.py" 2>/dev/null || true
+}
+
 # ---- Estado del servidor ----------------------------------------------------
 ai_server_up() { curl -sk -o /dev/null --max-time 2 "$BASE_URL/status" 2>/dev/null; }
 
@@ -198,6 +278,12 @@ ai_ensure_running() {
     if ai_server_up; then
         echo "already"
         return 0
+    fi
+    # Motor exllama: levanta el sidecar TabbyAPI antes que la app (todo su stdout
+    # va a stderr para no contaminar el "started/already/error" que devolvemos).
+    if ai_using_exllama && ai_tabby_autostart; then
+        ai_tabby_start 180 1>&2 \
+            || warn "Arrancando el asistente sin motor listo (ExLlama no disponible)."
     fi
     if ai_service_installed; then
         ai_import_graphical_env

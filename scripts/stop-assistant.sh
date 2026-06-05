@@ -17,6 +17,10 @@ fi
 # 2. Detener cualquier proceso directo y liberar el puerto.
 ai_stop_process
 
+# 2b. Detener el sidecar TabbyAPI (ExLlama) si lo habíamos arrancado nosotros.
+#     Es seguro llamarlo siempre: solo afecta a nuestra instalación.
+ai_tabby_stop
+
 # 3. Cerrar la interfaz visual.
 ai_stop_gui
 
