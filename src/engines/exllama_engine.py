@@ -190,6 +190,14 @@ class ExLlamaEngine:
     def name(self) -> str:
         return "ExLlama"
 
+    @property
+    def streams_clean_text(self) -> bool:
+        # chat_stream ejecuta el bucle de tools internamente y emite SOLO texto
+        # final limpio (las tool calls van estructuradas, nunca fugadas como texto).
+        # assistant_service usa esto para no aplicar la heurística de fallback de
+        # LiteRT (que confunde respuestas cortas válidas con residuos de tool call).
+        return True
+
     def _ping(self) -> bool:
         try:
             r = httpx.get(f"{self.base_url}/v1/models", headers=self._headers, timeout=3)

@@ -718,6 +718,12 @@ class LiteRTClient:
         return "LiteRT"
 
     @property
+    def streams_clean_text(self) -> bool:
+        # LiteRT fuga las tool calls como texto (<|tool_call|>...); assistant_service
+        # las limpia y aplica su heurística de fallback. NO es stream limpio.
+        return False
+
+    @property
     def is_ready(self) -> bool:
         """True si el motor cargó el modelo y puede inferir."""
         return self.engine is not None
