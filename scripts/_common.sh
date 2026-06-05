@@ -237,12 +237,13 @@ ai_tabby_stop() {
 # Catálogo de modelos EXL3 del motor exllama. Devuelve, para la clave dada:
 #   "REPO|REVISION|DIRNAME|VISION(yes/no)|MAX_SEQ|DESCRIPCIÓN"
 # DIRNAME es el directorio bajo models/ y el model_name que usa TabbyAPI.
-# MAX_SEQ = ventana/cache: 8192 (el VL también lo necesita: system prompt + imagen
-# superan 4096; el modelo cabe de sobra en 8 GiB, ~2.7 GB libres tras cargar).
+# MAX_SEQ = ventana/cache. En 8 GiB: texto 8192; el VL (encoder de visión + pesos
+# 3.5bpw) solo cabe a 6144 (8192 da "Insufficient VRAM"; 4096 es poco para el
+# system prompt + imagen). 6144 carga (~6.3 GB) y sirve texto+visión.
 exllama_model_meta() {
     case "$1" in
         qwen3-8b) echo "turboderp/Qwen3-8B-exl3|4.0bpw|Qwen3-8B-exl3-4bpw|no|8192|texto+tools (rápido)" ;;
-        qwen3-vl) echo "ArtusDev/Qwen_Qwen3-VL-8B-Instruct-EXL3|3.5bpw_H6|Qwen3-VL-8B-Instruct-3.5bpw|yes|8192|texto+tools+VISIÓN" ;;
+        qwen3-vl) echo "ArtusDev/Qwen_Qwen3-VL-8B-Instruct-EXL3|3.5bpw_H6|Qwen3-VL-8B-Instruct-3.5bpw|yes|6144|texto+tools+VISIÓN" ;;
         *)        return 1 ;;
     esac
 }

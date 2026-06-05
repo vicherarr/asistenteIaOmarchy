@@ -323,7 +323,7 @@ asistenteia engine start|stop   # control manual del sidecar TabbyAPI
 **Modelos exllama** (catálogo): `qwen3-8b` (texto + tools, rápido) y `qwen3-vl`
 (Qwen3-VL-8B multimodal: texto + tools + **visión**, para `analyze_screen`). El
 comando descarga el modelo si falta, ajusta `EXLLAMA_VISION` automáticamente y la
-config de TabbyAPI, y reinicia. En 8 GiB el VL cabe a 3.5bpw con contexto 8192
+config de TabbyAPI, y reinicia. En 8 GiB el VL cabe a 3.5bpw con contexto 6144
 (~2.7 GB libres tras cargar); si en tu GPU no entra, baja a un bpw menor.
 
 <details>
