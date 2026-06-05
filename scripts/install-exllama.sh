@@ -16,19 +16,27 @@ set -uo pipefail
 # shellcheck source=_common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
-# -y/--yes: no preguntar (para automatización o ejecución no interactiva).
+# Args: [-y|--yes] [clave-de-modelo]. La clave sale del catálogo (exllama_model_meta);
+# por defecto qwen3-8b (texto+tools). Ej: ./install-exllama.sh --yes qwen3-vl
 ASSUME_YES=0
-case "${1:-}" in -y|--yes) ASSUME_YES=1 ;; esac
+MODEL_KEY="qwen3-8b"
+for a in "$@"; do
+    case "$a" in
+        -y|--yes) ASSUME_YES=1 ;;
+        -*)       err "Opción desconocida: $a"; exit 1 ;;
+        *)        MODEL_KEY="$a" ;;
+    esac
+done
 confirm() { [ "$ASSUME_YES" = 1 ] && return 0; ai_confirm "$1"; }
 
 TABBY_REPO="https://github.com/theroyallab/tabbyAPI.git"
 DEST="$EXLLAMA_TABBY_DIR"
 
-# Modelo EXL3 por defecto (texto + tools). Se baja de HuggingFace a un directorio
-# cuyo nombre es el model_name que usa TabbyAPI (= EXLLAMA_MODEL del .env).
-EXL_REPO="turboderp/Qwen3-8B-exl3"
-EXL_REV="4.0bpw"
-EXL_NAME="$(ai_read_env EXLLAMA_MODEL Qwen3-8B-exl3-4bpw)"
+# Modelo a instalar (del catálogo). DIRNAME es el model_name de TabbyAPI.
+if ! META="$(exllama_model_meta "$MODEL_KEY")"; then
+    err "Modelo exllama no válido: '$MODEL_KEY'. Disponibles: $EXLLAMA_MODEL_KEYS"; exit 1
+fi
+IFS='|' read -r EXL_REPO EXL_REV EXL_NAME EXL_VISION EXL_SEQ EXL_DESC <<<"$META"
 
 # Elige un intérprete Python compatible con los wheels de exllamav3 (cp310-cp313).
 pick_python() {
@@ -44,7 +52,8 @@ pick_python() {
 # --- 0. Pre-vuelo -----------------------------------------------------------
 log "Instalación del backend ExLlama (TabbyAPI + ExLlamaV3)"
 echo "    Destino:  $DEST"
-echo "    Modelo:   $EXL_REPO@$EXL_REV  ->  models/$EXL_NAME"
+echo "    Modelo:   $MODEL_KEY ($EXL_DESC)"
+echo "              $EXL_REPO@$EXL_REV  ->  models/$EXL_NAME"
 echo
 
 if ! command -v git >/dev/null 2>&1; then
@@ -109,61 +118,25 @@ if ! ( cd "$DEST" && "$VPIP" install -U ".[$EXTRA]" ); then
     err "Falló la instalación de dependencias de TabbyAPI."; exit 1
 fi
 
-# --- 4. config.yml de producción --------------------------------------------
-# host/port salen de EXLLAMA_BASE_URL; sin tool_format (ExLlamaEngine parsea
-# <tool_call> del contenido). Sin token => disable_auth (sidecar local).
-_hp="${EXLLAMA_BASE_URL#*://}"; _hp="${_hp%%/*}"
-THOST="${_hp%%:*}"; TPORT="${_hp##*:}"
-case "$TPORT" in ''|*[!0-9]*) TPORT=5000 ;; esac
-[ -n "$THOST" ] || THOST="127.0.0.1"
-if [ -n "$EXLLAMA_API_KEY" ]; then DISABLE_AUTH=false; else DISABLE_AUTH=true; fi
-
-log "Escribiendo config.yml..."
-cat > "$DEST/config.yml" <<EOF
-# Generado por asistenteia (install-exllama.sh). Edita .env, no este archivo:
-# se regenera al reinstalar. Sin tool_format a propósito (lo parsea ExLlamaEngine).
-network:
-  host: $THOST
-  port: $TPORT
-  disable_auth: $DISABLE_AUTH
-  disable_request_streaming: false
-
-logging:
-  log_prompt: false
-  log_generation_params: false
-  log_requests: false
-
-model:
-  model_dir: models
-  model_name: $EXL_NAME
-  max_seq_len: 8192
-  cache_size: 8192
-  gpu_split_auto: true
-  inline_model_loading: false
-
-developer:
-  unsafe_launch: false
-EOF
+# --- 4. config.yml ----------------------------------------------------------
+log "Escribiendo config.yml ($MODEL_KEY, visión: $EXL_VISION)..."
+ai_tabby_write_config "$EXL_NAME" "$EXL_SEQ" "$EXL_VISION"
 
 # --- 5. Modelo EXL3 ---------------------------------------------------------
-MODEL_DIR="$DEST/models/$EXL_NAME"
-if [ -d "$MODEL_DIR" ] && [ -n "$(ls -A "$MODEL_DIR" 2>/dev/null)" ]; then
+if ai_tabby_model_present "$EXL_NAME"; then
     ok "El modelo ya está en models/$EXL_NAME."
 else
-    log "Descargando el modelo $EXL_REPO@$EXL_REV (~5 GB)..."
-    "$DEST/venv/bin/python" - "$EXL_REPO" "$EXL_REV" "$MODEL_DIR" <<'PY'
-import sys
-from huggingface_hub import snapshot_download
-repo, rev, dest = sys.argv[1], sys.argv[2], sys.argv[3]
-snapshot_download(repo_id=repo, revision=rev, local_dir=dest)
-print("Modelo descargado en:", dest)
-PY
-    if [ ! -d "$MODEL_DIR" ] || [ -z "$(ls -A "$MODEL_DIR" 2>/dev/null)" ]; then
-        err "La descarga del modelo falló. Reintenta: asistenteia engine install"
+    log "Descargando el modelo $EXL_REPO@$EXL_REV..."
+    if ! ai_tabby_download_model "$EXL_REPO" "$EXL_REV" "$EXL_NAME"; then
+        err "La descarga del modelo falló. Reintenta: asistenteia engine install $MODEL_KEY"
         exit 1
     fi
 fi
 
+# --- 6. Dejar el .env coherente con el modelo instalado ---------------------
+ai_set_env_key EXLLAMA_MODEL "$EXL_NAME"
+[ "$EXL_VISION" = yes ] && ai_set_env_key EXLLAMA_VISION True || ai_set_env_key EXLLAMA_VISION False
+
 echo
-ok "Backend ExLlama instalado en $DEST."
+ok "Backend ExLlama instalado en $DEST (modelo $MODEL_KEY, visión: $EXL_VISION)."
 echo "    Actívalo con:  asistenteia engine exllama"

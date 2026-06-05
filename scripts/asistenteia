@@ -65,7 +65,8 @@ AsistenteIA - uso: asistenteia <comando>
                12b es más capaz (32k contexto) pero aún no soporta imágenes.
   engine [e]   Cambia el motor de inferencia (litert/exllama) y reinicia.
                Sin argumento, muestra el actual y los disponibles.
-               engine install      Instala el backend exllama (TabbyAPI + modelo).
+               engine install [m]  Instala el backend exllama (TabbyAPI + modelo).
+               engine model [m]    Modelo exllama: qwen3-8b (texto) / qwen3-vl (visión).
                engine start|stop   Control manual del sidecar TabbyAPI.
   logs         Muestra los logs en tiempo real
   service ...  Gestiona el servicio systemd: install | enable | disable | status | uninstall
@@ -362,6 +363,56 @@ PY
                 exit 0 ;;
             stop)
                 ai_tabby_stop; echo "Sidecar TabbyAPI detenido."; exit 0 ;;
+            model)
+                # Gestiona el MODELO del motor exllama (catálogo qwen3-8b / qwen3-vl):
+                # lo descarga si falta, ajusta .env (EXLLAMA_MODEL/VISION) y config.yml,
+                # y reinicia. Análogo a 'asistenteia model' para LiteRT.
+                key="${2:-}"
+                cur_model="$(ai_read_env EXLLAMA_MODEL Qwen3-8B-exl3-4bpw)"
+                if [ -z "$key" ] || [ "$key" = list ] || [ "$key" = status ]; then
+                    echo "Modelo exllama actual: $cur_model"
+                    echo; echo "Disponibles:"
+                    for k in $EXLLAMA_MODEL_KEYS; do
+                        IFS='|' read -r _r _v dir vis _s desc < <(exllama_model_meta "$k")
+                        est="no descargado"; ai_tabby_model_present "$dir" && est="descargado"
+                        mark=" "; [ "$dir" = "$cur_model" ] && mark="*"
+                        printf "  %s %-9s %-26s [%s]\n" "$mark" "$k" "$desc" "$est"
+                    done
+                    exit 0
+                fi
+                if ! meta="$(exllama_model_meta "$key")"; then
+                    err "Modelo exllama no válido: '$key'. Usa: $EXLLAMA_MODEL_KEYS"; exit 1
+                fi
+                IFS='|' read -r repo rev dir vis seq desc <<<"$meta"
+                if ! ai_tabby_installed; then
+                    err "El backend exllama no está instalado. Ejecuta: asistenteia engine install"; exit 1
+                fi
+                if ai_tabby_model_present "$dir"; then
+                    echo "Modelo '$key' ya descargado."
+                else
+                    echo "Descargando '$key' ($repo@$rev)... (varios GB)"
+                    ai_tabby_download_model "$repo" "$rev" "$dir" || { err "La descarga falló."; exit 1; }
+                fi
+                ai_set_env_key EXLLAMA_MODEL "$dir"
+                [ "$vis" = yes ] && ai_set_env_key EXLLAMA_VISION True || ai_set_env_key EXLLAMA_VISION False
+                ai_tabby_write_config "$dir" "$seq" "$vis"
+                echo "Modelo exllama activo: $dir (visión: $vis)"
+                if [ "$(ai_engine)" != exllama ]; then
+                    warn "El motor activo es '$(ai_engine)'. Úsalo con: asistenteia engine exllama"
+                    exit 0
+                fi
+                if ai_server_up; then
+                    echo "Reiniciando para cargar '$key'..."
+                    "$SCRIPTS_DIR/stop-assistant.sh" >/dev/null 2>&1 || true
+                    sleep 1
+                    case "$(ai_ensure_running 240)" in
+                        error) err "No arrancó con '$key'. Revisa: asistenteia logs"; exit 1 ;;
+                        *)     echo "Listo: '$key' cargado." ;;
+                    esac
+                else
+                    echo "Hecho. Se cargará al arrancar (asistenteia start o Super + Z)."
+                fi
+                exit 0 ;;
         esac
 
         # Sin argumento (o list/status): mostrar el motor actual y los disponibles.

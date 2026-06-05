@@ -315,8 +315,16 @@ asistenteia engine              # motor actual + disponibles (estado del sidecar
 asistenteia engine install      # instala el backend exllama (TabbyAPI + modelo EXL3, ~15 GB)
 asistenteia engine exllama      # conmuta a ExLlamaV3 y reinicia
 asistenteia engine litert       # vuelve a LiteRT (para el sidecar, libera VRAM)
+asistenteia engine model        # modelo exllama: qwen3-8b (texto) / qwen3-vl (visión)
+asistenteia engine model qwen3-vl   # descarga/activa Qwen3-VL (multimodal) y reinicia
 asistenteia engine start|stop   # control manual del sidecar TabbyAPI
 ```
+
+**Modelos exllama** (catálogo): `qwen3-8b` (texto + tools, rápido) y `qwen3-vl`
+(Qwen3-VL-8B multimodal: texto + tools + **visión**, para `analyze_screen`). El
+comando descarga el modelo si falta, ajusta `EXLLAMA_VISION` automáticamente y la
+config de TabbyAPI, y reinicia. En 8 GiB el VL va justo (se usa 3.5bpw y contexto
+reducido); si no entra en VRAM, baja a un bpw menor.
 
 <details>
 <summary><b>⚙️ Opciones avanzadas, instalación manual y desinstalación</b></summary>

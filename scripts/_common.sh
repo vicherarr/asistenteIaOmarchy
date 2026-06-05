@@ -234,6 +234,78 @@ ai_tabby_stop() {
     pkill -f "$EXLLAMA_TABBY_DIR/main.py" 2>/dev/null || true
 }
 
+# Catálogo de modelos EXL3 del motor exllama. Devuelve, para la clave dada:
+#   "REPO|REVISION|DIRNAME|VISION(yes/no)|MAX_SEQ|DESCRIPCIÓN"
+# DIRNAME es el directorio bajo models/ y el model_name que usa TabbyAPI.
+# MAX_SEQ se baja en los VL para dejar VRAM al encoder de visión (8 GiB justos).
+exllama_model_meta() {
+    case "$1" in
+        qwen3-8b) echo "turboderp/Qwen3-8B-exl3|4.0bpw|Qwen3-8B-exl3-4bpw|no|8192|texto+tools (rápido)" ;;
+        qwen3-vl) echo "ArtusDev/Qwen_Qwen3-VL-8B-Instruct-EXL3|3.5bpw_H6|Qwen3-VL-8B-Instruct-3.5bpw|yes|4096|texto+tools+VISIÓN" ;;
+        *)        return 1 ;;
+    esac
+}
+EXLLAMA_MODEL_KEYS="qwen3-8b qwen3-vl"
+
+# ¿Está descargado el modelo cuyo DIRNAME es $1? (dir no vacío bajo models/)
+ai_tabby_model_present() {
+    local d="$EXLLAMA_TABBY_DIR/models/$1"
+    [ -d "$d" ] && [ -n "$(ls -A "$d" 2>/dev/null)" ]
+}
+
+# Descarga un modelo EXL3 a models/<dirname>. $1=repo $2=revision $3=dirname.
+# Devuelve 0 si quedó presente (ya estaba o se bajó bien). Usa el venv de TabbyAPI.
+ai_tabby_download_model() {
+    local repo="$1" rev="$2" name="$3"
+    ai_tabby_model_present "$name" && return 0
+    "$EXLLAMA_TABBY_DIR/venv/bin/python" - "$repo" "$rev" "$EXLLAMA_TABBY_DIR/models/$name" <<'PY'
+import sys
+from huggingface_hub import snapshot_download
+snapshot_download(repo_id=sys.argv[1], revision=sys.argv[2], local_dir=sys.argv[3])
+print("Modelo descargado en:", sys.argv[3])
+PY
+    ai_tabby_model_present "$name"
+}
+
+# Escribe el config.yml de TabbyAPI. $1=model_name $2=max_seq_len $3=vision(yes/no).
+# host/port salen de EXLLAMA_BASE_URL; sin tokens => disable_auth. No usa formato de
+# herramientas del servidor: el bucle de tools lo hace ExLlamaEngine.
+ai_tabby_write_config() {
+    local model_name="$1" max_seq="${2:-8192}" vision="${3:-no}"
+    local hp host port disable_auth vbool
+    hp="${EXLLAMA_BASE_URL#*://}"; hp="${hp%%/*}"
+    host="${hp%%:*}"; port="${hp##*:}"
+    case "$port" in ''|*[!0-9]*) port=5000 ;; esac
+    [ -n "$host" ] || host="127.0.0.1"
+    if [ -n "$EXLLAMA_API_KEY" ]; then disable_auth=false; else disable_auth=true; fi
+    [ "$vision" = yes ] && vbool=true || vbool=false
+    cat > "$EXLLAMA_TABBY_DIR/config.yml" <<YML
+# Generado por asistenteia (no editar a mano: se regenera). Config del motor exllama.
+network:
+  host: $host
+  port: $port
+  disable_auth: $disable_auth
+  disable_request_streaming: false
+
+logging:
+  log_prompt: false
+  log_generation_params: false
+  log_requests: false
+
+model:
+  model_dir: models
+  model_name: $model_name
+  max_seq_len: $max_seq
+  cache_size: $max_seq
+  gpu_split_auto: true
+  inline_model_loading: false
+  vision: $vbool
+
+developer:
+  unsafe_launch: false
+YML
+}
+
 # ---- Estado del servidor ----------------------------------------------------
 ai_server_up() { curl -sk -o /dev/null --max-time 2 "$BASE_URL/status" 2>/dev/null; }
 
