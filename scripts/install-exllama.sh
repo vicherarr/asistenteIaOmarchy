@@ -16,6 +16,11 @@ set -uo pipefail
 # shellcheck source=_common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
+# -y/--yes: no preguntar (para automatización o ejecución no interactiva).
+ASSUME_YES=0
+case "${1:-}" in -y|--yes) ASSUME_YES=1 ;; esac
+confirm() { [ "$ASSUME_YES" = 1 ] && return 0; ai_confirm "$1"; }
+
 TABBY_REPO="https://github.com/theroyallab/tabbyAPI.git"
 DEST="$EXLLAMA_TABBY_DIR"
 
@@ -66,14 +71,14 @@ fi
 
 if ai_tabby_installed; then
     warn "Ya hay una instalación de TabbyAPI en $DEST."
-    if ! ai_confirm "¿Reinstalar/actualizar de todos modos?"; then
+    if ! confirm "¿Reinstalar/actualizar de todos modos?"; then
         echo "Sin cambios."; exit 0
     fi
 fi
 
 echo
 warn "Esto descargará varios GB (dependencias ~5-6 GB + modelo ~5 GB)."
-if ! ai_confirm "¿Continuar con la instalación?"; then
+if ! confirm "¿Continuar con la instalación?"; then
     echo "Cancelado."; exit 0
 fi
 

@@ -356,7 +356,7 @@ PY
         # Subcomandos auxiliares del sidecar TabbyAPI (instalación / control manual).
         case "$sub" in
             install)
-                exec bash "$SCRIPTS_DIR/install-exllama.sh" ;;
+                exec bash "$SCRIPTS_DIR/install-exllama.sh" "${@:2}" ;;
             start)
                 ai_tabby_start 180 || { err "No se pudo arrancar TabbyAPI."; exit 1; }
                 exit 0 ;;
