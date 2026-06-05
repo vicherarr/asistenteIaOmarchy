@@ -76,12 +76,21 @@ Todo (inferencia de texto, tool calling, visión multimodal, audio nativo) corre
 
 **Retry automático:** si LiteRT falla al parsear tool calls, reintenta sin herramientas.
 
+### Motor intercambiable: LiteRT ⇄ ExLlamaV3 (opcional)
+
+El motor de inferencia es **conmutable** y 100% retrocompatible: LiteRT es el de por defecto y nada cambia si no tocas nada. La factoría `src/engines/factory.py` construye el motor según `AI_ENGINE` y todo el sistema lo consume por un contrato común (`src/engines/base.py`: `InferenceEngine` + `EngineCapabilities`), de modo que el resto actúa **por capacidades**, no por nombre de motor.
+
+- **`litert` (defecto):** Gemma 4 en proceso; texto, tools, visión y audio nativos.
+- **`exllama`:** Qwen3 cuantizado EXL3 sobre un **sidecar [TabbyAPI](https://github.com/theroyallab/tabbyAPI)** (servidor OpenAI-compatible en GPU). El bucle agéntico de tool-calling es propio (`src/engines/exllama_engine.py`); no hace audio (el STT cae a Whisper por capacidades). Aislado en su propio venv para no mezclar las dependencias de torch/CUDA con las del asistente.
+
+**Solo un motor activo a la vez** (en una GPU de 8 GiB no coexisten): al usar LiteRT no corre TabbyAPI y viceversa. El sidecar se instala, arranca/para y se conmuta con `asistenteia engine` (ver abajo); con `AI_ENGINE=exllama` el asistente levanta TabbyAPI al arrancar (como LiteRT se carga solo) y lo para al detenerse.
+
 ### STT: configurable (faster-whisper o Gemma audio nativo)
 
 `src/stt_engine.py` soporta dos backends seleccionables con `STT_USE_GEMMA_AUDIO`:
 
 - **`False` (defecto) — faster-whisper:** delega en `src/stt_worker.py`, un proceso Python separado que mantiene el modelo `large-v3-turbo` residente en memoria. Comunica por JSON sobre `stdin/stdout` para aislar CTranslate2 de LiteRT y evitar contención de hilos.
-- **`True` — Gemma audio nativo:** usa el soporte de audio del propio motor LiteRT, sin proceso externo.
+- **`True` — Gemma audio nativo:** usa el soporte de audio del propio motor LiteRT, sin proceso externo. Si el motor activo no soporta audio (p.ej. ExLlama), el STT **cae automáticamente a Whisper** (decisión por `capabilities.audio`, no por configuración manual).
 
 En ambos casos el audio se pre-procesa primero con FFmpeg (`loudnorm` + resampleo a 16 kHz mono).
 
@@ -295,8 +304,27 @@ asistenteia start      # arranca            asistenteia status     # estado actu
 asistenteia stop       # detiene            asistenteia logs       # logs en vivo
 asistenteia toggle     # = Super + Z        asistenteia gui        # solo la GUI
 asistenteia restart    # reinicia           asistenteia update     # actualiza
+asistenteia model …    # cambia el modelo   asistenteia engine …   # cambia el motor
 asistenteia uninstall  # desinstala         asistenteia service …  # gestiona el servicio
 ```
+
+**Cambiar de motor de inferencia** (LiteRT ⇄ ExLlamaV3):
+
+```bash
+asistenteia engine              # motor actual + disponibles (estado del sidecar)
+asistenteia engine install      # instala el backend exllama (TabbyAPI + modelo EXL3, ~15 GB)
+asistenteia engine exllama      # conmuta a ExLlamaV3 y reinicia
+asistenteia engine litert       # vuelve a LiteRT (para el sidecar, libera VRAM)
+asistenteia engine model        # modelo exllama: qwen3-8b (texto) / qwen3-vl (visión)
+asistenteia engine model qwen3-vl   # descarga/activa Qwen3-VL (multimodal) y reinicia
+asistenteia engine start|stop   # control manual del sidecar TabbyAPI
+```
+
+**Modelos exllama** (catálogo): `qwen3-8b` (texto + tools, rápido) y `qwen3-vl`
+(Qwen3-VL-8B multimodal: texto + tools + **visión**, para `analyze_screen`). El
+comando descarga el modelo si falta, ajusta `EXLLAMA_VISION` automáticamente y la
+config de TabbyAPI, y reinicia. En 8 GiB el VL cabe a 3.5bpw con contexto 6144
+(~2.7 GB libres tras cargar); si en tu GPU no entra, baja a un bpw menor.
 
 <details>
 <summary><b>⚙️ Opciones avanzadas, instalación manual y desinstalación</b></summary>

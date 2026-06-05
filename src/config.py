@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     SSL_KEYFILE: Optional[str] = None
     SSL_CERTFILE: Optional[str] = None
     
+    # Motor de inferencia: "litert" (por defecto) o "exllama" (Fase 2).
+    # Selecciona qué backend de LLM construye la factoría (src/engines/factory.py).
+    AI_ENGINE: str = "litert"
+
     # LiteRT (motor único: LLM en GPU, visión y audio en CPU)
     LITERT_MODEL_PATH: str = "models/gemma-4-E4B-it.litertlm"
     LITERT_BACKEND: str = "gpu"
@@ -62,6 +66,30 @@ class Settings(BaseSettings):
     # reentrancia del motor (no se puede invocar inferencia desde dentro de un tool);
     # el flujo de 2 pasadas es correcto. El single-pass ya funciona cuando la imagen
     # se conoce antes de inferir (image_path en la 1ª llamada).
+
+    # --- Motor ExLlamaV3 vía TabbyAPI (AI_ENGINE="exllama") ---
+    # Sidecar OpenAI-compatible. Solo se usa si AI_ENGINE="exllama".
+    EXLLAMA_BASE_URL: str = "http://127.0.0.1:5000"
+    EXLLAMA_MODEL: str = "Qwen3-8B-exl3-4bpw"
+    EXLLAMA_API_KEY: str = ""            # vacío si TabbyAPI corre con disable_auth
+    EXLLAMA_TIMEOUT: float = 120.0
+    EXLLAMA_MAX_TOKENS: int = 1024
+    EXLLAMA_TEMPERATURE: float = 0.6
+    # Razonamiento de Qwen3: CONFIGURABLE pero desactivado por defecto (latencia/tokens
+    # en un asistente de voz). True => el modelo "piensa" antes de responder.
+    EXLLAMA_THINKING: bool = False
+    # True si el modelo es multimodal (p.ej. Qwen3-VL): habilita enviar imágenes.
+    EXLLAMA_VISION: bool = False
+    # Tope de iteraciones del bucle agéntico (modelo→tool→modelo→…).
+    EXLLAMA_MAX_TOOL_ROUNDS: int = 6
+    # --- Lifecycle del sidecar (lo gestiona la CLI/shell, no la app Python) ---
+    # Si True, "asistenteia start" arranca/para TabbyAPI automáticamente cuando
+    # AI_ENGINE="exllama" (igual que LiteRT se carga solo dentro del proceso).
+    # Ponlo en False para gestionar TabbyAPI a mano. Solo un motor activo a la vez.
+    EXLLAMA_AUTOSTART: bool = True
+    # Carpeta de la instalación de TabbyAPI (su propio venv py3.11 + main.py + modelo).
+    # Vacío => <raíz del proyecto>/exllama/tabbyAPI. La crea el instalador.
+    EXLLAMA_TABBY_DIR: str = ""
 
     # Assistant
     MAX_HISTORY: int = 10

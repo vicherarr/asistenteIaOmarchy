@@ -22,7 +22,7 @@ from fastapi.security import APIKeyHeader, APIKeyQuery
 from pydantic import BaseModel
 
 from src.audio_manager import AudioManager
-from src.litert_client import LiteRTClient
+from src.engines import create_engine
 from src.tts_engine import TTSEngine
 from src.assistant_service import AssistantService
 from src.config import settings, resolve_path
@@ -187,12 +187,14 @@ class AppState:
     """Clase para mantener el estado de la aplicación sin variables globales."""
     def __init__(self):
         self.audio_manager = AudioManager()
-        self.litert_client = LiteRTClient()
+        self.engine = create_engine()
+        # Alias de compatibilidad: código y tests existentes usan `litert_client`.
+        self.litert_client = self.engine
         self.tts_engine = TTSEngine()
         self.audio_recorder = AudioRecorder()
-        self.stt_engine = STTEngine(litert_client=self.litert_client)
+        self.stt_engine = STTEngine(litert_client=self.engine)
         self.assistant_service = AssistantService(
-            litert_client=self.litert_client,
+            litert_client=self.engine,
             tts_engine=self.tts_engine,
             stt_engine=self.stt_engine,
         )
@@ -255,6 +257,11 @@ class TranscriptionResponse(BaseModel):
 
 
 class StatusResponse(BaseModel):
+    # Campos neutrales de motor (preferidos). Los `litert_*` se mantienen como
+    # espejo deprecado por retrocompatibilidad (consumidores externos antiguos).
+    engine_name: str = "LiteRT"
+    engine_connected: bool = False
+    engine_backend: str = "Desconectado"
     litert_connected: bool
     bluetooth_audio: str
     conversation_length: int
@@ -267,6 +274,7 @@ class StatusResponse(BaseModel):
 
 
 class HealthResponse(BaseModel):
+    engine: bool = False        # neutral; `litert` queda como espejo deprecado
     litert: bool = False
     whisper: bool = False
     kokoro: bool = False
@@ -294,8 +302,8 @@ async def lifespan(app: FastAPI):
     # Configurar audio al inicio
     await state.audio_manager.auto_configure_bluetooth()
 
-    if not state.litert_client.engine:
-        logger.warning(f"LiteRT no pudo cargar el modelo en {settings.LITERT_MODEL_PATH}")
+    if not state.engine.is_ready:
+        logger.warning(f"El motor no pudo cargar el modelo en {settings.LITERT_MODEL_PATH}")
 
     # Configurar e iniciar el WakeWordListener si está habilitado
     if settings.WAKE_WORD_ENABLED:
@@ -444,10 +452,10 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"Error cerrando worker STT: {e}")
 
-        # 5. Cerrar LiteRT client
-        if state.litert_client:
-            logger.info("Cerrando cliente LiteRT...")
-            state.litert_client.close()
+        # 5. Cerrar el motor de inferencia
+        if state.engine:
+            logger.info("Cerrando el motor de inferencia...")
+            state.engine.close()
 
     logger.info("AsistenteIA detenido correctamente")
 
@@ -667,35 +675,26 @@ async def cancel_processing(state: AppState = Depends(get_app_state)):
 @app.get("/status", response_model=StatusResponse, dependencies=[Depends(verify_token)])
 async def get_status(state: AppState = Depends(get_app_state)):
     """Estado actual del asistente."""
-    litert_ok = state.litert_client.engine is not None
+    engine_ok = state.engine.is_ready
     bt_status = await state.audio_manager.get_status_summary() if state.audio_manager else "No inicializado"
     is_speaking = state.tts_engine._is_playing if state.tts_engine else False
 
-    # Detección verídica del backend de hardware de LiteRT
-    litert_backend = "Desconectado"
-    gpu_active = False
-    if litert_ok and state.litert_client.engine:
-        try:
-            import litert_lm
-            backend_enum = state.litert_client.engine.backend
-            if backend_enum == litert_lm.Backend.GPU:
-                litert_backend = "GPU"
-                gpu_active = True
-            elif backend_enum == litert_lm.Backend.CPU:
-                litert_backend = "CPU"
-            else:
-                litert_backend = "Auto"
-        except Exception:
-            litert_backend = "CPU"
+    # Metadatos del motor por el contrato (neutral, sin depender de litert_lm).
+    engine_backend = state.engine.backend_label()
+    engine_name = getattr(state.engine, "name", "Motor")
+    gpu_active = state.engine.capabilities.gpu
 
     return StatusResponse(
-        litert_connected=litert_ok,
+        engine_name=engine_name,
+        engine_connected=engine_ok,
+        engine_backend=engine_backend,
+        litert_connected=engine_ok,       # espejo deprecado
         bluetooth_audio=bt_status,
         conversation_length=len(state.conversation_history),
         processing=state.processing or state.is_recording,
         speaking=is_speaking,
         gpu_active=gpu_active,
-        litert_backend=litert_backend,
+        litert_backend=engine_backend,    # espejo deprecado
         last_user_transcription=state.last_user_transcription,
         last_transcription_timestamp=state.last_transcription_timestamp
     )
@@ -750,8 +749,8 @@ async def get_chat_interface():
 @app.get("/health", response_model=HealthResponse)
 async def health_check(state: AppState = Depends(get_app_state)):
     """Verificación rápida de todos los componentes del sistema."""
-    # LiteRT
-    litert_ok = state.litert_client.engine is not None
+    # Motor de inferencia
+    engine_ok = state.engine.is_ready
 
     # Whisper (verificar que whisper-cli está en PATH)
     whisper_ok = False
@@ -796,7 +795,8 @@ async def health_check(state: AppState = Depends(get_app_state)):
         pass
 
     return HealthResponse(
-        litert=litert_ok,
+        engine=engine_ok,
+        litert=engine_ok,        # espejo deprecado
         whisper=whisper_ok,
         kokoro=kokoro_ok,
         tmux=tmux_ok,
@@ -837,8 +837,8 @@ async def reset_conversation(state: AppState = Depends(get_app_state)):
 
     state.conversation_history.clear()
     # Fase 3: si la conversación persistente (KV-cache) está activa, resetearla también.
-    if state.litert_client and hasattr(state.litert_client, "reset_conversation"):
-        state.litert_client.reset_conversation()
+    if state.engine and hasattr(state.engine, "reset_conversation"):
+        state.engine.reset_conversation()
     logger.info("Conversación y estado del backend completamente reiniciados.")
     return {"status": "reset", "message": "Historial de conversación y procesos del backend reiniciados"}
 
@@ -860,8 +860,8 @@ async def select_tools(request: ToolSelectRequest, state: AppState = Depends(get
     Al cambiar la selección se resetea la conversación persistente (si la hubiera),
     porque las tools quedan fijadas al crear la conversación (KV-cache)."""
     active = state.assistant_service.set_active_tools(request.names)
-    if state.litert_client and hasattr(state.litert_client, "reset_conversation"):
-        state.litert_client.reset_conversation()
+    if state.engine and hasattr(state.engine, "reset_conversation"):
+        state.engine.reset_conversation()
     return {"status": "ok", "active": active}
 
 

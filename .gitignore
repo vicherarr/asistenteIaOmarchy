@@ -16,6 +16,10 @@ models/*
 *.litertlm*
 *.xnnpack_cache*
 
+# Backend ExLlama: instalación aislada de TabbyAPI (clon + venv + modelo EXL3,
+# ~15 GB). La crea 'asistenteia engine install'; nunca se versiona.
+exllama/
+
 # Excepción: el modelo de wake word (Sherpa-ONNX KWS, ~5.5MB) SÍ se versiona
 # para que venga incluido en el clon sin descarga extra.
 !models/sherpa-kws/

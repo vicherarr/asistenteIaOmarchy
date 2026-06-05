@@ -381,6 +381,24 @@ class AssistantService:
             return False
         return True
 
+    @staticmethod
+    def _is_meaningful_response(cleaned_text: str, clean_stream: bool) -> bool:
+        """¿El texto del modelo es una respuesta real (no residuo de tool call)?
+
+        Con un motor de stream limpio (ExLlama: ejecuta las tools internamente y
+        emite solo el texto final) cualquier respuesta no vacía vale. Con LiteRT,
+        que fuga las tool calls como texto, tras limpiarlas puede quedar un residuo
+        corto; por eso se exige longitud mínima para no hablar basura. Ese umbral NO
+        debe aplicarse a ExLlama: confundiría respuestas cortas válidas ("42", "París")
+        con residuos y dispararía un fallback espurio.
+        """
+        t = (cleaned_text or "").strip()
+        if not t:
+            return False
+        if clean_stream:
+            return True
+        return len(t) > 15
+
     async def process_transcription_stream(
         self,
         text: str,
@@ -537,7 +555,8 @@ class AssistantService:
             else:
                 # Verificar si la respuesta es significativa. Si no, generar fallback.
                 accumulated_clean = self._clean_tool_calls(accumulated_text)
-                has_meaningful_response = accumulated_clean.strip() and len(accumulated_clean.strip()) > 15
+                clean_stream = getattr(self.litert, "streams_clean_text", False)
+                has_meaningful_response = self._is_meaningful_response(accumulated_clean, clean_stream)
 
             if not has_meaningful_response:
                 used_fallback = True

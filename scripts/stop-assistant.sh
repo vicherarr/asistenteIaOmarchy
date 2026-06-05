@@ -17,6 +17,11 @@ fi
 # 2. Detener cualquier proceso directo y liberar el puerto.
 ai_stop_process
 
+# 2b. Detener el sidecar TabbyAPI (ExLlama). Con servicio systemd, el stop de
+#     arriba ya lo paró (PartOf); esto cubre el modo sin servicio. Seguro siempre:
+#     solo afecta a NUESTRA instalación.
+ai_tabby_stop
+
 # 3. Cerrar la interfaz visual.
 ai_stop_gui
 

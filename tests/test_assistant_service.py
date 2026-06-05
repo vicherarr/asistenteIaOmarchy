@@ -210,3 +210,28 @@ async def test_process_transcription_stream_multimodal_second_pass(service, mock
     """VER: Loop multimodal desactivado según CONTEXT.md sección 10.1 y 15.20.
     Este test se mantiene como referencia histórica pero está desactivado."""
     pass
+
+
+# --- Fase 4.1: fallback "significativo" según el tipo de stream del motor --------
+
+def test_meaningful_response_clean_stream_accepts_short():
+    """Motor de stream limpio (ExLlama): respuestas cortas válidas se aceptan."""
+    f = AssistantService._is_meaningful_response
+    assert f("42", clean_stream=True) is True
+    assert f("París", clean_stream=True) is True
+    assert f("   ", clean_stream=True) is False   # vacío sigue sin valer
+    assert f("", clean_stream=True) is False
+
+
+def test_meaningful_response_litert_requires_length():
+    """LiteRT (fuga tool calls): se exige longitud mínima para descartar residuos."""
+    f = AssistantService._is_meaningful_response
+    assert f("42", clean_stream=False) is False           # corto -> fallback (como antes)
+    assert f("Una respuesta más larga y real.", clean_stream=False) is True
+
+
+def test_engine_streams_clean_text_flags(monkeypatch):
+    """ExLlama declara stream limpio; LiteRT no."""
+    from src.engines import exllama_engine as ee
+    monkeypatch.setattr(ee.ExLlamaEngine, "_ping", lambda self: False)
+    assert ee.ExLlamaEngine().streams_clean_text is True

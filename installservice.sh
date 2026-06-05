@@ -41,11 +41,17 @@ Environment=WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-wayland-1}
 Environment=DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/%U/bus}"
 fi
 
+TABBY_SERVICE_NAME="asistenteia-tabby.service"
+
 mkdir -p "$SYSTEMD_USER_DIR"
 cat > "$SYSTEMD_USER_DIR/$SERVICE_NAME" <<EOF
 [Unit]
 Description=AsistenteIA - Voice Assistant Orchestrator
 After=network.target
+# Sidecar del motor exllama: se arranca antes (y para junto) con el asistente.
+# Con litert, la unit companion sale sola sin consumir VRAM (ver tabby-run.sh).
+Wants=$TABBY_SERVICE_NAME
+After=$TABBY_SERVICE_NAME
 
 [Service]
 Type=simple
@@ -63,6 +69,26 @@ WantedBy=default.target
 EOF
 
 echo "-> Servicio escrito en $SYSTEMD_USER_DIR/$SERVICE_NAME"
+
+# Unit companion del sidecar TabbyAPI (motor exllama). systemd la supervisa en
+# foreground: en stop mata el cgroup (padre+hijo, libera VRAM). PartOf => parar
+# o reiniciar el asistente la propaga. No tiene [Install]: la "tira" el Wants del
+# asistente. tabby-run.sh decide si arrancar (solo si AI_ENGINE=exllama).
+cat > "$SYSTEMD_USER_DIR/$TABBY_SERVICE_NAME" <<EOF
+[Unit]
+Description=AsistenteIA - Sidecar TabbyAPI (ExLlamaV3)
+After=network.target
+PartOf=$SERVICE_NAME
+
+[Service]
+Type=simple
+ExecStart=$PROJECT_DIR/scripts/tabby-run.sh
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+EOF
+
+echo "-> Sidecar escrito en $SYSTEMD_USER_DIR/$TABBY_SERVICE_NAME"
 echo "-> Recargando systemd..."
 systemctl --user daemon-reload
 

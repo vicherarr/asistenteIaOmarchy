@@ -63,6 +63,11 @@ AsistenteIA - uso: asistenteia <comando>
   model [m]    Cambia el modelo (e2b/e4b/12b): lo descarga si falta y reinicia.
                Sin argumento, muestra el actual y pregunta cuál usar.
                12b es más capaz (32k contexto) pero aún no soporta imágenes.
+  engine [e]   Cambia el motor de inferencia (litert/exllama) y reinicia.
+               Sin argumento, muestra el actual y los disponibles.
+               engine install [m]  Instala el backend exllama (TabbyAPI + modelo).
+               engine model [m]    Modelo exllama: qwen3-8b (texto) / qwen3-vl (visión).
+               engine start|stop   Control manual del sidecar TabbyAPI.
   logs         Muestra los logs en tiempo real
   service ...  Gestiona el servicio systemd: install | enable | disable | status | uninstall
   keybindings  (Re)configura los atajos Super+Z / Super+X
@@ -241,6 +246,15 @@ case "$cmd" in
         cur_file="$(basename "$(ai_read_env LITERT_MODEL_PATH "models/gemma-4-E4B-it.litertlm")")"
         case "$cur_file" in *E2B*) cur_key=e2b ;; *E4B*) cur_key=e4b ;; *12B*) cur_key=12b ;; *) cur_key="?" ;; esac
 
+        # 'model' gestiona los modelos de LiteRT. Con el motor exllama activo, el
+        # modelo lo decide EXLLAMA_MODEL (+ el instalador): avisamos para no confundir.
+        if ai_using_exllama; then
+            warn "Motor activo: exllama. 'model' solo afecta a LiteRT (Gemma)."
+            warn "Para el modelo EXL3: ajusta EXLLAMA_MODEL en .env y 'asistenteia engine install'."
+            warn "Para usar Gemma, cambia de motor: 'asistenteia engine litert'."
+            echo
+        fi
+
         # Sin argumento (o list/status): mostrar el actual y los disponibles.
         if [ -z "$sub" ] || [ "$sub" = list ] || [ "$sub" = status ]; then
             echo "Modelo actual: $cur_file"
@@ -320,7 +334,11 @@ PY
             echo "Backend ajustado: $cur_backend -> $new_backend (recomendado para ${sub^^})."
         fi
 
-        if ai_server_up; then
+        if ai_using_exllama; then
+            # No reiniciamos: con exllama activo, reiniciar cargaría el sidecar, no
+            # este modelo Gemma. Surtirá efecto al volver a LiteRT.
+            echo "Guardado. Se aplicará cuando cambies a LiteRT ('asistenteia engine litert')."
+        elif ai_server_up; then
             echo "Reiniciando para cargar el nuevo modelo..."
             "$SCRIPTS_DIR/stop-assistant.sh" >/dev/null 2>&1 || true
             sleep 1
@@ -330,6 +348,134 @@ PY
             esac
         else
             echo "Hecho. Se cargará al arrancar (asistenteia start o Super + Z)."
+        fi
+        ;;
+    engine)
+        sub="${1:-}"
+        cur="$(ai_read_env AI_ENGINE litert)"
+
+        # Subcomandos auxiliares del sidecar TabbyAPI (instalación / control manual).
+        case "$sub" in
+            install)
+                exec bash "$SCRIPTS_DIR/install-exllama.sh" "${@:2}" ;;
+            start)
+                ai_tabby_start 180 || { err "No se pudo arrancar TabbyAPI."; exit 1; }
+                exit 0 ;;
+            stop)
+                ai_tabby_stop; echo "Sidecar TabbyAPI detenido."; exit 0 ;;
+            model)
+                # Gestiona el MODELO del motor exllama (catálogo qwen3-8b / qwen3-vl):
+                # lo descarga si falta, ajusta .env (EXLLAMA_MODEL/VISION) y config.yml,
+                # y reinicia. Análogo a 'asistenteia model' para LiteRT.
+                key="${2:-}"
+                cur_model="$(ai_read_env EXLLAMA_MODEL Qwen3-8B-exl3-4bpw)"
+                if [ -z "$key" ] || [ "$key" = list ] || [ "$key" = status ]; then
+                    echo "Modelo exllama actual: $cur_model"
+                    echo; echo "Disponibles:"
+                    for k in $EXLLAMA_MODEL_KEYS; do
+                        IFS='|' read -r _r _v dir vis _s desc < <(exllama_model_meta "$k")
+                        est="no descargado"; ai_tabby_model_present "$dir" && est="descargado"
+                        mark=" "; [ "$dir" = "$cur_model" ] && mark="*"
+                        printf "  %s %-9s %-26s [%s]\n" "$mark" "$k" "$desc" "$est"
+                    done
+                    exit 0
+                fi
+                if ! meta="$(exllama_model_meta "$key")"; then
+                    err "Modelo exllama no válido: '$key'. Usa: $EXLLAMA_MODEL_KEYS"; exit 1
+                fi
+                IFS='|' read -r repo rev dir vis seq desc <<<"$meta"
+                if ! ai_tabby_installed; then
+                    err "El backend exllama no está instalado. Ejecuta: asistenteia engine install"; exit 1
+                fi
+                if ai_tabby_model_present "$dir"; then
+                    echo "Modelo '$key' ya descargado."
+                else
+                    echo "Descargando '$key' ($repo@$rev)... (varios GB)"
+                    ai_tabby_download_model "$repo" "$rev" "$dir" || { err "La descarga falló."; exit 1; }
+                fi
+                ai_set_env_key EXLLAMA_MODEL "$dir"
+                [ "$vis" = yes ] && ai_set_env_key EXLLAMA_VISION True || ai_set_env_key EXLLAMA_VISION False
+                ai_tabby_write_config "$dir" "$seq" "$vis"
+                echo "Modelo exllama activo: $dir (visión: $vis)"
+                if [ "$(ai_engine)" != exllama ]; then
+                    warn "El motor activo es '$(ai_engine)'. Úsalo con: asistenteia engine exllama"
+                    exit 0
+                fi
+                if ai_server_up; then
+                    echo "Reiniciando para cargar '$key'..."
+                    "$SCRIPTS_DIR/stop-assistant.sh" >/dev/null 2>&1 || true
+                    sleep 1
+                    case "$(ai_ensure_running 240)" in
+                        error) err "No arrancó con '$key'. Revisa: asistenteia logs"; exit 1 ;;
+                        *)     echo "Listo: '$key' cargado." ;;
+                    esac
+                else
+                    echo "Hecho. Se cargará al arrancar (asistenteia start o Super + Z)."
+                fi
+                exit 0 ;;
+        esac
+
+        # Sin argumento (o list/status): mostrar el motor actual y los disponibles.
+        if [ -z "$sub" ] || [ "$sub" = list ] || [ "$sub" = status ]; then
+            echo "Motor actual: $cur"
+            echo
+            echo "Disponibles:"
+            m=" "; [ "$cur" = litert ] && m="*"
+            printf "  %s litert   LiteRT-LM (Gemma, en proceso, audio+visión)  [%s]\n" "$m" "instalado"
+            m=" "; [ "$cur" = exllama ] && m="*"
+            est="no instalado"; ai_tabby_installed && est="instalado"
+            printf "  %s exllama  ExLlamaV3 vía TabbyAPI (Qwen3, sidecar GPU)  [%s]\n" "$m" "$est"
+            echo
+            if ai_using_exllama; then
+                ai_tabby_up && echo "Sidecar TabbyAPI: EN MARCHA ($EXLLAMA_BASE_URL)" \
+                            || echo "Sidecar TabbyAPI: detenido"
+            fi
+            [ "$sub" = list ] || [ "$sub" = status ] && exit 0
+            echo
+            if [ -r /dev/tty ]; then
+                read -r -p "¿A qué motor cambiar? [litert/exllama] (Enter = cancelar): " sub </dev/tty || sub=""
+            fi
+            [ -z "$sub" ] && { echo "Sin cambios."; exit 0; }
+        fi
+
+        sub="$(printf '%s' "$sub" | tr 'A-Z' 'a-z')"
+        case "$sub" in
+            litert|exllama) : ;;
+            *) err "Motor no válido: '$sub'. Usa litert o exllama."; exit 1 ;;
+        esac
+
+        if [ "$sub" = "$cur" ]; then
+            echo "Ya estás usando el motor '$sub'. Nada que hacer."
+            exit 0
+        fi
+
+        # exllama necesita su backend instalado (venv + TabbyAPI + modelo EXL3).
+        if [ "$sub" = exllama ] && ! ai_tabby_installed; then
+            warn "El backend ExLlama no está instalado en $EXLLAMA_TABBY_DIR."
+            warn "Instálalo primero con: asistenteia engine install"
+            if ! ai_confirm "¿Cambiar a 'exllama' igualmente (no arrancará hasta instalarlo)?"; then
+                echo "Sin cambios."; exit 0
+            fi
+        fi
+
+        ai_set_env_key AI_ENGINE "$sub"
+        echo "Motor activo: $sub"
+
+        # Mutua exclusión: al volver a litert, parar el sidecar y liberar VRAM.
+        [ "$sub" = litert ] && ai_tabby_stop
+
+        # Aplicar reiniciando (igual que 'model'); ai_ensure_running levanta el
+        # sidecar si toca. Timeout amplio: TabbyAPI carga el modelo al arrancar.
+        if ai_server_up; then
+            echo "Reiniciando para aplicar el motor '$sub'..."
+            "$SCRIPTS_DIR/stop-assistant.sh" >/dev/null 2>&1 || true
+            sleep 1
+            case "$(ai_ensure_running 180)" in
+                error) err "No arrancó con el motor '$sub'. Revisa: asistenteia logs"; exit 1 ;;
+                *)     echo "Listo: asistente en marcha con el motor '$sub'." ;;
+            esac
+        else
+            echo "Hecho. Se aplicará al arrancar (asistenteia start o Super + Z)."
         fi
         ;;
     update)

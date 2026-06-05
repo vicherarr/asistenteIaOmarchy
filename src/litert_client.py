@@ -8,6 +8,7 @@ from pathlib import Path
 
 import litert_lm
 from src.config import settings
+from src.engines.base import EngineCapabilities
 from src.schema import ChatMessage
 
 logger = logging.getLogger(__name__)
@@ -710,6 +711,46 @@ class LiteRTClient:
         except Exception as e:
             logger.error(f"Error en inferencia LiteRT (API 2026): {e}")
             return f"Error en la generación: {e}"
+
+    # --- Contrato InferenceEngine (aditivo: sella fugas LiteRT-específicas) ---
+    @property
+    def name(self) -> str:
+        return "LiteRT"
+
+    @property
+    def streams_clean_text(self) -> bool:
+        # LiteRT fuga las tool calls como texto (<|tool_call|>...); assistant_service
+        # las limpia y aplica su heurística de fallback. NO es stream limpio.
+        return False
+
+    @property
+    def is_ready(self) -> bool:
+        """True si el motor cargó el modelo y puede inferir."""
+        return self.engine is not None
+
+    def backend_label(self) -> str:
+        """Backend de hardware real: 'GPU' | 'CPU' | 'Auto' | 'Desconectado'.
+
+        Encapsula la detección que antes vivía en main.py (/status), para que el
+        resto del sistema no tenga que importar litert_lm."""
+        if not self.engine:
+            return "Desconectado"
+        try:
+            backend_enum = self.engine.backend
+            if backend_enum == litert_lm.Backend.GPU:
+                return "GPU"
+            elif backend_enum == litert_lm.Backend.CPU:
+                return "CPU"
+            return "Auto"
+        except Exception:  # noqa: BLE001
+            return "CPU"
+
+    @property
+    def capabilities(self) -> EngineCapabilities:
+        """LiteRT (Gemma) hace texto, tools, visión y audio de forma nativa."""
+        return EngineCapabilities(
+            tools=True, vision=True, audio=True, gpu=(self.backend_label() == "GPU")
+        )
 
     def close(self):
         """Libera recursos del motor."""
