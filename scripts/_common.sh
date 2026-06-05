@@ -279,9 +279,11 @@ ai_ensure_running() {
         echo "already"
         return 0
     fi
-    # Motor exllama: levanta el sidecar TabbyAPI antes que la app (todo su stdout
-    # va a stderr para no contaminar el "started/already/error" que devolvemos).
-    if ai_using_exllama && ai_tabby_autostart; then
+    # Motor exllama: levanta el sidecar TabbyAPI antes que la app. SOLO en modo sin
+    # servicio: con systemd lo gestiona la unit companion `asistenteia-tabby.service`
+    # (Wants/After), así no se arranca dos veces (colisión de puerto). Todo su stdout
+    # va a stderr para no contaminar el "started/already/error" que devolvemos.
+    if ai_using_exllama && ai_tabby_autostart && ! ai_service_installed; then
         ai_tabby_start 180 1>&2 \
             || warn "Arrancando el asistente sin motor listo (ExLlama no disponible)."
     fi

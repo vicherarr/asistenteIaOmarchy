@@ -8,6 +8,7 @@
 set -euo pipefail
 
 SERVICE_NAME="asistenteia.service"
+TABBY_SERVICE_NAME="asistenteia-tabby.service"
 SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
 
 echo "=== AsistenteIA: Desinstalando Servicio Systemd ==="
@@ -31,9 +32,14 @@ if systemctl --user is-enabled "$SERVICE_NAME" > /dev/null 2>&1; then
     systemctl --user disable "$SERVICE_NAME"
 fi
 
-# 4. Eliminar el archivo del servicio
+# 4. Eliminar el archivo del servicio (y el del sidecar TabbyAPI si existe)
 echo "-> Eliminando archivo de servicio..."
 rm "$SYSTEMD_USER_DIR/$SERVICE_NAME"
+if [ -f "$SYSTEMD_USER_DIR/$TABBY_SERVICE_NAME" ]; then
+    systemctl --user stop "$TABBY_SERVICE_NAME" 2>/dev/null || true
+    rm -f "$SYSTEMD_USER_DIR/$TABBY_SERVICE_NAME"
+    echo "-> Sidecar TabbyAPI eliminado."
+fi
 
 # 5. Recargar systemd
 echo "-> Recargando demonio de systemd..."
