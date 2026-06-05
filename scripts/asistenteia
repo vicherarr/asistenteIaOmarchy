@@ -67,6 +67,7 @@ AsistenteIA - uso: asistenteia <comando>
                Sin argumento, muestra el actual y los disponibles.
                engine install [m]  Instala el backend exllama (TabbyAPI + modelo).
                engine model [m]    Modelo exllama: qwen3-8b (texto) / qwen3-vl (visión).
+               engine thinking on|off  Razonamiento <think> de Qwen3 (solo exllama).
                engine start|stop   Control manual del sidecar TabbyAPI.
   logs         Muestra los logs en tiempo real
   service ...  Gestiona el servicio systemd: install | enable | disable | status | uninstall
@@ -411,6 +412,51 @@ PY
                     esac
                 else
                     echo "Hecho. Se cargará al arrancar (asistenteia start o Super + Z)."
+                fi
+                exit 0 ;;
+            thinking)
+                # Activa/desactiva el razonamiento <think> de Qwen3 (solo exllama):
+                # mejores respuestas a costa de latencia y tokens. Ajusta EXLLAMA_THINKING.
+                val="${2:-}"
+                case "$(printf '%s' "$(ai_read_env EXLLAMA_THINKING False)" | tr 'A-Z' 'a-z')" in
+                    true|1|yes|on) cur_on=1 ;; *) cur_on=0 ;;
+                esac
+                if [ -z "$val" ] || [ "$val" = status ]; then
+                    [ "$cur_on" = 1 ] && echo "Razonamiento (exllama): ACTIVADO" \
+                                      || echo "Razonamiento (exllama): desactivado"
+                    echo "Uso: asistenteia engine thinking on|off"
+                    exit 0
+                fi
+                case "$(printf '%s' "$val" | tr 'A-Z' 'a-z')" in
+                    on|true|1|yes|si|sí) new_on=1; new_val=True ;;
+                    off|false|0|no)      new_on=0; new_val=False ;;
+                    *) err "Valor no válido: '$val'. Usa on u off."; exit 1 ;;
+                esac
+                if [ "$new_on" = "$cur_on" ]; then
+                    echo "El razonamiento ya está $([ "$new_on" = 1 ] && echo activado || echo desactivado). Nada que hacer."
+                    exit 0
+                fi
+                ai_set_env_key EXLLAMA_THINKING "$new_val"
+                [ "$new_on" = 1 ] && echo "Razonamiento activado." || echo "Razonamiento desactivado."
+                if [ "$new_on" = 1 ]; then
+                    warn "Subirá la latencia y el consumo de tokens. Si las respuestas se cortan,"
+                    warn "sube EXLLAMA_MAX_TOKENS en el .env (ahora $(ai_read_env EXLLAMA_MAX_TOKENS 1024))."
+                fi
+                if [ "$(ai_engine)" != exllama ]; then
+                    warn "El motor activo es '$(ai_engine)': el razonamiento solo aplica a exllama."
+                    echo "Se aplicará al cambiar de motor: asistenteia engine exllama"
+                    exit 0
+                fi
+                if ai_server_up; then
+                    echo "Reiniciando para aplicar..."
+                    "$SCRIPTS_DIR/stop-assistant.sh" >/dev/null 2>&1 || true
+                    sleep 1
+                    case "$(ai_ensure_running 240)" in
+                        error) err "No arrancó. Revisa: asistenteia logs"; exit 1 ;;
+                        *)     echo "Listo." ;;
+                    esac
+                else
+                    echo "Hecho. Se aplicará al arrancar (asistenteia start o Super + Z)."
                 fi
                 exit 0 ;;
         esac
