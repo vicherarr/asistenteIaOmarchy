@@ -186,6 +186,10 @@ class ExLlamaEngine:
         self._ready = self._ping()
 
     # ---- contrato: salud / metadatos ----
+    @property
+    def name(self) -> str:
+        return "ExLlama"
+
     def _ping(self) -> bool:
         try:
             r = httpx.get(f"{self.base_url}/v1/models", headers=self._headers, timeout=3)

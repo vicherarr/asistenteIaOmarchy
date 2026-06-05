@@ -29,6 +29,7 @@ def test_factory_default_is_litert(monkeypatch):
     import src.litert_client as lc
 
     class FakeLiteRT:
+        name = "LiteRT"
         is_ready = True
         capabilities = EngineCapabilities(tools=True, vision=True, audio=True, gpu=True)
 
@@ -157,3 +158,41 @@ async def test_agentic_loop_executes_tool(monkeypatch):
     assert "".join(chunks) == "Resultado: listo"  # tool_call suprimido del output
     assert state["tool_args"] == [5]               # la tool se ejecutó con a=5
     assert state["n"] == 2                          # 1 ronda de tool + respuesta final
+
+
+# --- Fase 4: nombre de motor y fallback de STT por capacidades ------------------
+
+def test_engine_names(monkeypatch):
+    from src.engines import exllama_engine as ee
+
+    # No queremos pingar a TabbyAPI en el test.
+    monkeypatch.setattr(ee.ExLlamaEngine, "_ping", lambda self: False)
+    assert ee.ExLlamaEngine().name == "ExLlama"
+
+
+def test_stt_falls_back_to_whisper_without_engine_audio(monkeypatch):
+    """STT_USE_GEMMA_AUDIO=True pero el motor no hace audio (ExLlama) -> Whisper."""
+    from src import stt_engine as se
+
+    monkeypatch.setattr(se.settings, "STT_USE_GEMMA_AUDIO", True)
+
+    class NoAudioEngine:
+        name = "ExLlama"
+        capabilities = EngineCapabilities(tools=True, vision=False, audio=False, gpu=True)
+
+    stt = se.STTEngine(litert_client=NoAudioEngine())
+    assert stt._use_gemma is False
+
+
+def test_stt_uses_engine_audio_when_supported(monkeypatch):
+    """STT_USE_GEMMA_AUDIO=True y el motor sí hace audio (LiteRT) -> audio nativo."""
+    from src import stt_engine as se
+
+    monkeypatch.setattr(se.settings, "STT_USE_GEMMA_AUDIO", True)
+
+    class AudioEngine:
+        name = "LiteRT"
+        capabilities = EngineCapabilities(tools=True, vision=True, audio=True, gpu=True)
+
+    stt = se.STTEngine(litert_client=AudioEngine())
+    assert stt._use_gemma is True

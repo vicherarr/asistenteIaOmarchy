@@ -46,6 +46,11 @@ class InferenceEngine(Protocol):
     """
 
     @property
+    def name(self) -> str:
+        """Nombre legible del motor para la UI/estado: 'LiteRT' | 'ExLlama'."""
+        ...
+
+    @property
     def is_ready(self) -> bool:
         """True si el motor cargó y puede inferir."""
         ...

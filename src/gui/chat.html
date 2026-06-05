@@ -547,17 +547,19 @@
             const accelPill = document.getElementById('accel-status-pill');
             const audioPill = document.getElementById('audio-status-pill');
 
-            const litertConnected = data.litert_connected;
-            const litertBackend = data.litert_backend || "CPU";
+            // Campos neutrales de motor, con caída a los `litert_*` (compat).
+            const engineConnected = data.engine_connected ?? data.litert_connected;
+            const engineBackend = data.engine_backend || data.litert_backend || "CPU";
+            const engineName = data.engine_name || "LiteRT";
             const isProcessingBackend = data.processing;
             const isSpeaking = data.speaking;
             const bluetoothAudio = data.bluetooth_audio || "Desconectado";
             const conversationLength = data.conversation_length || 0;
 
-            if (litertConnected) {
+            if (engineConnected) {
                 // Backend Conectado
                 statusPill.className = "py-1 px-2.5 rounded-full text-[10px] font-bold bg-green/10 text-green border border-green/20 flex items-center gap-1.5";
-                statusPill.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-green"></span>LiteRT: ${litertBackend}`;
+                statusPill.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-green"></span>${engineName}: ${engineBackend}`;
                 
                 // Accel Pill
                 const gpuActive = data.gpu_active;

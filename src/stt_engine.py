@@ -27,7 +27,19 @@ class STTEngine:
         self._language = settings.STT_LANGUAGE
         self._prompt = settings.STT_PROMPT
         self._vad = settings.STT_VAD
-        self._use_gemma = settings.STT_USE_GEMMA_AUDIO
+        # Audio nativo del motor solo si está configurado Y el motor activo lo
+        # soporta (capabilities.audio). Con un motor sin audio (p.ej. ExLlama),
+        # cae a Whisper en vez de transcribir vacío.
+        use_gemma = settings.STT_USE_GEMMA_AUDIO
+        if use_gemma and litert_client is not None:
+            caps = getattr(litert_client, "capabilities", None)
+            if caps is not None and not caps.audio:
+                logger.warning(
+                    "STT_USE_GEMMA_AUDIO=True pero el motor '%s' no soporta audio; "
+                    "se usará Whisper.", getattr(litert_client, "name", type(litert_client).__name__)
+                )
+                use_gemma = False
+        self._use_gemma = use_gemma
         self._litert = litert_client
         self._lock = asyncio.Lock()
         self._proc: Optional[asyncio.subprocess.Process] = None

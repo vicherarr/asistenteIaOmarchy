@@ -714,6 +714,10 @@ class LiteRTClient:
 
     # --- Contrato InferenceEngine (aditivo: sella fugas LiteRT-específicas) ---
     @property
+    def name(self) -> str:
+        return "LiteRT"
+
+    @property
     def is_ready(self) -> bool:
         """True si el motor cargó el modelo y puede inferir."""
         return self.engine is not None

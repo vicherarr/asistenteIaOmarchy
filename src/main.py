@@ -257,6 +257,11 @@ class TranscriptionResponse(BaseModel):
 
 
 class StatusResponse(BaseModel):
+    # Campos neutrales de motor (preferidos). Los `litert_*` se mantienen como
+    # espejo deprecado por retrocompatibilidad (consumidores externos antiguos).
+    engine_name: str = "LiteRT"
+    engine_connected: bool = False
+    engine_backend: str = "Desconectado"
     litert_connected: bool
     bluetooth_audio: str
     conversation_length: int
@@ -269,6 +274,7 @@ class StatusResponse(BaseModel):
 
 
 class HealthResponse(BaseModel):
+    engine: bool = False        # neutral; `litert` queda como espejo deprecado
     litert: bool = False
     whisper: bool = False
     kokoro: bool = False
@@ -669,22 +675,26 @@ async def cancel_processing(state: AppState = Depends(get_app_state)):
 @app.get("/status", response_model=StatusResponse, dependencies=[Depends(verify_token)])
 async def get_status(state: AppState = Depends(get_app_state)):
     """Estado actual del asistente."""
-    litert_ok = state.engine.is_ready
+    engine_ok = state.engine.is_ready
     bt_status = await state.audio_manager.get_status_summary() if state.audio_manager else "No inicializado"
     is_speaking = state.tts_engine._is_playing if state.tts_engine else False
 
-    # Backend de hardware real, vía el contrato del motor (sin depender de litert_lm).
-    litert_backend = state.engine.backend_label()
+    # Metadatos del motor por el contrato (neutral, sin depender de litert_lm).
+    engine_backend = state.engine.backend_label()
+    engine_name = getattr(state.engine, "name", "Motor")
     gpu_active = state.engine.capabilities.gpu
 
     return StatusResponse(
-        litert_connected=litert_ok,
+        engine_name=engine_name,
+        engine_connected=engine_ok,
+        engine_backend=engine_backend,
+        litert_connected=engine_ok,       # espejo deprecado
         bluetooth_audio=bt_status,
         conversation_length=len(state.conversation_history),
         processing=state.processing or state.is_recording,
         speaking=is_speaking,
         gpu_active=gpu_active,
-        litert_backend=litert_backend,
+        litert_backend=engine_backend,    # espejo deprecado
         last_user_transcription=state.last_user_transcription,
         last_transcription_timestamp=state.last_transcription_timestamp
     )
@@ -740,7 +750,7 @@ async def get_chat_interface():
 async def health_check(state: AppState = Depends(get_app_state)):
     """Verificación rápida de todos los componentes del sistema."""
     # Motor de inferencia
-    litert_ok = state.engine.is_ready
+    engine_ok = state.engine.is_ready
 
     # Whisper (verificar que whisper-cli está en PATH)
     whisper_ok = False
@@ -785,7 +795,8 @@ async def health_check(state: AppState = Depends(get_app_state)):
         pass
 
     return HealthResponse(
-        litert=litert_ok,
+        engine=engine_ok,
+        litert=engine_ok,        # espejo deprecado
         whisper=whisper_ok,
         kokoro=kokoro_ok,
         tmux=tmux_ok,
