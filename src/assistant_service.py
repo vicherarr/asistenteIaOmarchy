@@ -130,10 +130,18 @@ class AssistantService:
         # Llamada genérica que ocupa todo el fragmento: "algo(arg=...)" / "algo(".
         self._generic_call_re = re.compile(r'^\s*[A-Za-z_]\w*\s*\([^)]*\)?\s*$')
 
-        # Semilla del modo enfocado desde el .env (ASSISTANT_DEFAULT_TOOLS). Solo se
-        # aplican nombres válidos; si queda vacío, no hay restricción (retrocompatible).
-        seed = {n.strip() for n in (settings.ASSISTANT_DEFAULT_TOOLS or "").split(",") if n.strip()}
-        self.active_tool_names = {n for n in seed if n in self._tool_names}
+        # Semilla del modo enfocado desde el .env (ASSISTANT_DEFAULT_TOOLS). Sintaxis:
+        #   - nombres sueltos => lista blanca (solo esas).
+        #   - nombres con prefijo '-' => lista negra (todas MENOS esas).
+        #   - vacío => sin restricción (todas, retrocompatible).
+        # Solo se aplican nombres válidos; el '-' permite p.ej. "todas menos visión".
+        entries = [n.strip() for n in (settings.ASSISTANT_DEFAULT_TOOLS or "").split(",") if n.strip()]
+        excludes = {e[1:] for e in entries if e.startswith("-")}
+        includes = {e for e in entries if not e.startswith("-")}
+        if excludes and not includes:
+            self.active_tool_names = {n for n in self._tool_names if n not in excludes}
+        else:
+            self.active_tool_names = {n for n in includes if n in self._tool_names}
         if self.active_tool_names:
             logger.info(f"Modo enfocado por modelo (semilla .env): {sorted(self.active_tool_names)}")
 

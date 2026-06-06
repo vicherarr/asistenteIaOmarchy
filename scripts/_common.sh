@@ -271,23 +271,32 @@ exllama_model_meta() {
 }
 EXLLAMA_MODEL_KEYS="qwen3-8b qwen3-vl lfm2.5"
 
-# Modo enfocado por modelo: tools a las que se restringe el asistente con ESE modelo.
-# Vacío = todas (comportamiento normal, retrocompatible). Solo LFM2.5 se enfoca en
-# la terminal de Linux / programar; el resto (qwen3, gemma) mantiene todas las tools.
+# Modo enfocado por modelo: ASSISTANT_DEFAULT_TOOLS para ESE modelo. Vacío = todas
+# (normal, retrocompatible). Sintaxis: nombres sueltos = lista blanca; nombres con
+# prefijo '-' = lista negra (todas MENOS esas). Solo LFM2.5 se restringe: al ser un
+# modelo de SOLO TEXTO, le quitamos las tools de visión y dejamos el resto.
 # $1 = dirname/model_name del modelo exllama activo.
 ai_model_focus_tools() {
     case "$1" in
-        *LFM2.5*) echo "execute_system_command,open_terminal_and_run_command,read_terminal_screen,send_input_to_terminal,interrupt_terminal_command,read_log_file,system_diagnostics,clipboard_manager" ;;
+        *LFM2.5*) echo "-analyze_screen,-analyze_clipboard_image,-take_screenshot" ;;
         *)        echo "" ;;
     esac
 }
 
-# Recalcula ASSISTANT_DEFAULT_TOOLS en el .env según el modelo que se ejecutará de
-# verdad: con engine litert manda Gemma (sin enfoque); con exllama, EXLLAMA_MODEL.
+# Recalcula las preferencias por-modelo en el .env según el modelo que se ejecutará
+# de verdad: con engine litert manda Gemma (sin enfoque); con exllama, EXLLAMA_MODEL.
+# - ASSISTANT_DEFAULT_TOOLS: modo enfocado (solo LFM2.5 se centra en terminal/código).
+# - EXLLAMA_THINKING: LFM2.5 NECESITA razonar para emitir tool calls fiables, así que
+#   lo activamos al elegirlo (el usuario puede desactivarlo luego con 'engine thinking
+#   off', a costa de que las tools dejen de funcionar). No tocamos otros modelos.
 # Se llama tras cambiar de motor o de modelo. Idempotente y retrocompatible.
 ai_refresh_focus_tools() {
-    local focus=""
-    ai_using_exllama && focus="$(ai_model_focus_tools "$(ai_read_env EXLLAMA_MODEL '')")"
+    local focus="" model=""
+    if ai_using_exllama; then
+        model="$(ai_read_env EXLLAMA_MODEL '')"
+        focus="$(ai_model_focus_tools "$model")"
+        case "$model" in *LFM2.5*) ai_set_env_key EXLLAMA_THINKING True ;; esac
+    fi
     ai_set_env_key ASSISTANT_DEFAULT_TOOLS "$focus"
 }
 
