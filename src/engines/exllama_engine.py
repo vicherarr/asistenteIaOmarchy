@@ -38,7 +38,11 @@ _TOOL_OPEN, _TOOL_CLOSE = "<tool_call>", "</tool_call>"
 # Formato de tool-calls de LFM2.5 (turboderp): [func(arg='val'), ...] entre estos
 # marcadores, con sintaxis tipo Python (no JSON). Aditivo al de Qwen3: ambos conviven.
 _LFM_TOOL_OPEN, _LFM_TOOL_CLOSE = "<|tool_call_start|>", "<|tool_call_end|>"
-_MARKERS = (_TOOL_OPEN, _THINK_OPEN, _LFM_TOOL_OPEN)
+# Formato Hermes/Qwen "XML de función" (Qwen3.5 y otros turboderp): emiten las llamadas
+# como <function=NOMBRE><parameter=P>VALOR</parameter>...</function>, a veces envueltas en
+# <tool_call>. Aditivo: convive con el JSON de Qwen3 y el de LFM2.5.
+_FUNC_OPEN, _FUNC_CLOSE = "<function=", "</function>"
+_MARKERS = (_TOOL_OPEN, _THINK_OPEN, _LFM_TOOL_OPEN, _FUNC_OPEN)
 
 
 def _json_type(annotation) -> str:
@@ -129,6 +133,32 @@ def _extract_bare_tool_calls(text: str, valid: set) -> List[dict]:
     return calls
 
 
+_FUNC_BLOCK_RE = re.compile(r"<function=([^>\s]+)\s*>(.*?)</function>", re.DOTALL)
+_PARAM_RE = re.compile(r"<parameter=([^>\s]+)\s*>(.*?)</parameter>", re.DOTALL)
+
+
+def _coerce_param(value: str) -> Any:
+    """Valor de un <parameter>: número/bool/JSON si parsea; si no, texto pelado (lo normal,
+    p.ej. un comando de shell)."""
+    v = value.strip()
+    try:
+        return json.loads(v)
+    except Exception:  # noqa: BLE001 — texto plano
+        return v
+
+
+def _parse_function_xml(text: str) -> List[dict]:
+    """Parsea tool-calls en formato Hermes/Qwen:
+    `<function=NOMBRE><parameter=P>VALOR</parameter>...</function>` (uno o varios bloques).
+    Devuelve [{name, arguments}]; lista vacía si no hay bloques."""
+    calls: List[dict] = []
+    for m in _FUNC_BLOCK_RE.finditer(text):
+        name = m.group(1).strip()
+        args = {p.group(1).strip(): _coerce_param(p.group(2)) for p in _PARAM_RE.finditer(m.group(2))}
+        calls.append({"name": name, "arguments": args})
+    return calls
+
+
 class _StreamFilter:
     """Parser incremental de un stream de texto del modelo.
 
@@ -139,7 +169,7 @@ class _StreamFilter:
 
     def __init__(self):
         self._buf = ""
-        self._mode = "normal"  # normal | think | tool
+        self._mode = "normal"  # normal | think | tool | ltool | func
         self.tool_calls: List[dict] = []
 
     def _hold_len(self, s: str) -> int:
@@ -152,15 +182,28 @@ class _StreamFilter:
         return best
 
     def _capture_tool(self, inner: str) -> None:
+        inner = inner.strip()
+        if not inner:
+            return
         try:
-            obj = json.loads(inner.strip())
-            if isinstance(obj, dict) and obj.get("name"):
-                args = obj.get("arguments", {})
-                if isinstance(args, str):
+            obj = json.loads(inner)
+        except Exception:  # noqa: BLE001 — no es JSON; puede ser XML de función (Qwen3.5)
+            obj = None
+        if isinstance(obj, dict) and obj.get("name"):
+            args = obj.get("arguments", {})
+            if isinstance(args, str):
+                try:
                     args = json.loads(args) if args.strip() else {}
-                self.tool_calls.append({"name": obj["name"], "arguments": args or {}})
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"tool_call con JSON inválido, ignorado: {e} -- {inner!r}")
+                except Exception:  # noqa: BLE001
+                    args = {}
+            self.tool_calls.append({"name": obj["name"], "arguments": args or {}})
+            return
+        # Fallback: formato Hermes/Qwen <function=NOMBRE><parameter=P>V</parameter></function>
+        fcalls = _parse_function_xml(inner)
+        if fcalls:
+            self.tool_calls.extend(fcalls)
+        else:
+            logger.warning(f"tool_call no reconocido, ignorado: {inner!r}")
 
     def _capture_lfm_tool(self, inner: str) -> None:
         """Parsea el formato de LFM2.5: `[func(arg='val', ...), ...]` (sintaxis Python).
@@ -190,7 +233,8 @@ class _StreamFilter:
                 it = self._buf.find(_THINK_OPEN)
                 ic = self._buf.find(_TOOL_OPEN)
                 il = self._buf.find(_LFM_TOOL_OPEN)
-                idx = min([x for x in (it, ic, il) if x != -1], default=-1)
+                iff = self._buf.find(_FUNC_OPEN)
+                idx = min([x for x in (it, ic, il, iff) if x != -1], default=-1)
                 if idx == -1:
                     hold = self._hold_len(self._buf)
                     safe = self._buf[: len(self._buf) - hold]
@@ -206,6 +250,9 @@ class _StreamFilter:
                 elif idx == il:
                     self._buf = self._buf[idx + len(_LFM_TOOL_OPEN):]
                     self._mode = "ltool"
+                elif idx == iff:
+                    self._buf = self._buf[idx:]  # conserva "<function=" para el regex
+                    self._mode = "func"
                 else:
                     self._buf = self._buf[idx + len(_TOOL_OPEN):]
                     self._mode = "tool"
@@ -221,6 +268,14 @@ class _StreamFilter:
                     break
                 self._capture_lfm_tool(self._buf[:e])
                 self._buf = self._buf[e + len(_LFM_TOOL_CLOSE):]
+                self._mode = "normal"
+            elif self._mode == "func":  # formato Hermes/Qwen <function=...></function>
+                e = self._buf.find(_FUNC_CLOSE)
+                if e == -1:
+                    break
+                end = e + len(_FUNC_CLOSE)
+                self.tool_calls.extend(_parse_function_xml(self._buf[:end]))
+                self._buf = self._buf[end:]
                 self._mode = "normal"
             else:  # tool
                 e = self._buf.find(_TOOL_CLOSE)
@@ -434,11 +489,12 @@ class ExLlamaEngine:
                 yield text
 
             # tool calls estructuradas (preferente); si no, las parseadas del texto
-            # (marcadores Qwen3/LFM2.5); y como último recurso, llamadas peladas a tools
-            # reales que se hayan fugado al texto (LFM2.5 a veces omite los marcadores).
+            # (marcadores Qwen3/LFM2.5/Hermes); y como último recurso, lo que se haya fugado
+            # al texto crudo: XML de función (Qwen3.5) o llamadas peladas a tools reales.
             calls = _collect_structured(structured) or flt.tool_calls
             if not calls:
-                calls = _extract_bare_tool_calls("".join(raw), set(tool_map))
+                raw_text = "".join(raw)
+                calls = _parse_function_xml(raw_text) or _extract_bare_tool_calls(raw_text, set(tool_map))
             if not calls:
                 return  # respuesta final ya emitida
 
