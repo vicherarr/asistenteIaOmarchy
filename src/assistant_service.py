@@ -75,6 +75,9 @@ class AssistantService:
         # Selección activa de herramientas (vacío = todas → comportamiento normal).
         # Si el usuario elige un subconjunto desde la web/GUI, el modelo solo recibe
         # el contexto (esquemas) de esas tools y se le instruye a usar solo esas.
+        # Semilla inicial: ASSISTANT_DEFAULT_TOOLS del .env (lo fija la CLI según el
+        # modelo activo; vacío = sin restricción). La validación contra los nombres
+        # reales se hace más abajo, ya construido self._tool_names.
         self.active_tool_names: set[str] = set()
         # Etiquetas legibles para la UI (fallback: docstring / nombre).
         self._tool_labels = {
@@ -126,6 +129,13 @@ class AssistantService:
         self._tool_call_re = re.compile(r'\b(?:' + _names + r')\s*\([^)]*\)?')
         # Llamada genérica que ocupa todo el fragmento: "algo(arg=...)" / "algo(".
         self._generic_call_re = re.compile(r'^\s*[A-Za-z_]\w*\s*\([^)]*\)?\s*$')
+
+        # Semilla del modo enfocado desde el .env (ASSISTANT_DEFAULT_TOOLS). Solo se
+        # aplican nombres válidos; si queda vacío, no hay restricción (retrocompatible).
+        seed = {n.strip() for n in (settings.ASSISTANT_DEFAULT_TOOLS or "").split(",") if n.strip()}
+        self.active_tool_names = {n for n in seed if n in self._tool_names}
+        if self.active_tool_names:
+            logger.info(f"Modo enfocado por modelo (semilla .env): {sorted(self.active_tool_names)}")
 
     # ------------------------------------------------------------------
     # Selección de herramientas (modo enfocado)

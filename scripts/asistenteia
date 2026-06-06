@@ -399,6 +399,7 @@ PY
                 fi
                 ai_set_env_key EXLLAMA_MODEL "$dir"
                 [ "$vis" = yes ] && ai_set_env_key EXLLAMA_VISION True || ai_set_env_key EXLLAMA_VISION False
+                ai_refresh_focus_tools
                 ai_tabby_write_config "$dir" "$seq" "$vis"
                 echo "Modelo exllama activo: $dir (visión: $vis)"
                 if [ "$(ai_engine)" != exllama ]; then
@@ -598,6 +599,7 @@ PY
                 ai_tabby_write_config "$name" "$ctx" "$want_vision"
                 ai_set_env_key EXLLAMA_MODEL "$name"
                 [ "$want_vision" = yes ] && ai_set_env_key EXLLAMA_VISION True || ai_set_env_key EXLLAMA_VISION False
+                ai_refresh_focus_tools
                 ok "Modelo exllama activo: $name (contexto $ctx, visión: $want_vision)"
                 warn "Si el modelo no soporta 'tools', el asistente puede no manejarlo bien;"
                 warn "pero TabbyAPI lo sirve igual en $EXLLAMA_BASE_URL/v1 para herramientas externas."
@@ -667,6 +669,7 @@ PY
         fi
 
         ai_set_env_key AI_ENGINE "$sub"
+        ai_refresh_focus_tools
         echo "Motor activo: $sub"
 
         # Mutua exclusión: al volver a litert, parar el sidecar y liberar VRAM.

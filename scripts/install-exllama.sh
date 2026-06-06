@@ -136,6 +136,8 @@ fi
 # --- 6. Dejar el .env coherente con el modelo instalado ---------------------
 ai_set_env_key EXLLAMA_MODEL "$EXL_NAME"
 [ "$EXL_VISION" = yes ] && ai_set_env_key EXLLAMA_VISION True || ai_set_env_key EXLLAMA_VISION False
+# Modo enfocado por modelo (p.ej. LFM2.5 -> terminal/código); vacío para el resto.
+ai_refresh_focus_tools
 
 echo
 ok "Backend ExLlama instalado en $DEST (modelo $MODEL_KEY, visión: $EXL_VISION)."

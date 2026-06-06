@@ -271,6 +271,26 @@ exllama_model_meta() {
 }
 EXLLAMA_MODEL_KEYS="qwen3-8b qwen3-vl lfm2.5"
 
+# Modo enfocado por modelo: tools a las que se restringe el asistente con ESE modelo.
+# Vacío = todas (comportamiento normal, retrocompatible). Solo LFM2.5 se enfoca en
+# la terminal de Linux / programar; el resto (qwen3, gemma) mantiene todas las tools.
+# $1 = dirname/model_name del modelo exllama activo.
+ai_model_focus_tools() {
+    case "$1" in
+        *LFM2.5*) echo "execute_system_command,open_terminal_and_run_command,read_terminal_screen,send_input_to_terminal,interrupt_terminal_command,read_log_file,system_diagnostics,clipboard_manager" ;;
+        *)        echo "" ;;
+    esac
+}
+
+# Recalcula ASSISTANT_DEFAULT_TOOLS en el .env según el modelo que se ejecutará de
+# verdad: con engine litert manda Gemma (sin enfoque); con exllama, EXLLAMA_MODEL.
+# Se llama tras cambiar de motor o de modelo. Idempotente y retrocompatible.
+ai_refresh_focus_tools() {
+    local focus=""
+    ai_using_exllama && focus="$(ai_model_focus_tools "$(ai_read_env EXLLAMA_MODEL '')")"
+    ai_set_env_key ASSISTANT_DEFAULT_TOOLS "$focus"
+}
+
 # ¿Está descargado el modelo cuyo DIRNAME es $1? (dir no vacío bajo models/)
 ai_tabby_model_present() {
     local d="$EXLLAMA_TABBY_DIR/models/$1"

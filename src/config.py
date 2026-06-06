@@ -93,7 +93,12 @@ class Settings(BaseSettings):
 
     # Assistant
     MAX_HISTORY: int = 10
-    
+    # Modo enfocado por defecto: lista de tools (nombres, separados por comas) a las
+    # que se restringe el asistente al arrancar. Vacío => todas las tools (normal).
+    # Lo fija la CLI según el modelo activo (p.ej. LFM2.5 se centra en terminal/código).
+    # La UI/web puede cambiar la selección en caliente; esto solo es la semilla inicial.
+    ASSISTANT_DEFAULT_TOOLS: str = ""
+
     # TTS
     KOKORO_VOICE: str = "em_alex"
     KOKORO_LANG: str = "e"
