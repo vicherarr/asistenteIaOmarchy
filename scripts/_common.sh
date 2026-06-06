@@ -278,7 +278,10 @@ EXLLAMA_MODEL_KEYS="qwen3-8b qwen3-vl lfm2.5"
 # $1 = dirname/model_name del modelo exllama activo.
 ai_model_focus_tools() {
     case "$1" in
-        *LFM2.5*) echo "-analyze_screen,-analyze_clipboard_image,-take_screenshot" ;;
+        # LFM2.5 (8B-A1B): lista BLANCA estricta de terminal/sistema. Con pocas tools y
+        # sin duplicados acierta mucho más; execute_system_command ya abre/usa la terminal
+        # persistente (read/send/interrupt operan sobre esa misma sesión tmux).
+        *LFM2.5*) echo "execute_system_command,read_terminal_screen,send_input_to_terminal,interrupt_terminal_command,read_log_file,system_diagnostics" ;;
         *)        echo "" ;;
     esac
 }

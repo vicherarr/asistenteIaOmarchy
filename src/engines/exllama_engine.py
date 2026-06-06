@@ -442,18 +442,18 @@ class ExLlamaEngine:
             if not calls:
                 return  # respuesta final ya emitida
 
-            # Reinyecta la(s) llamada(s) en formato OpenAI y sus resultados, y reitera.
-            if structured:
-                messages.append({"role": "assistant", "content": "", "tool_calls": [
-                    {"id": f"call_{i}", "type": "function",
-                     "function": {"name": c["name"], "arguments": json.dumps(c["arguments"])}}
-                    for i, c in enumerate(calls)
-                ]})
-            else:
-                messages.append({"role": "assistant", "content": "".join(raw)})
-            for call in calls:
+            # Reinyecta la(s) llamada(s) SIEMPRE en formato OpenAI estructurado (vengan del
+            # stream estructurado o del parseo de texto de Qwen3/LFM2.5). Así el historial no
+            # arrastra los marcadores crudos (<|tool_call_start|>, <think>…) como texto y cada
+            # resultado se correlaciona con su llamada vía tool_call_id (clave en multironda).
+            messages.append({"role": "assistant", "content": "", "tool_calls": [
+                {"id": f"call_{i}", "type": "function",
+                 "function": {"name": c["name"], "arguments": json.dumps(c["arguments"])}}
+                for i, c in enumerate(calls)
+            ]})
+            for i, call in enumerate(calls):
                 result = await self._exec_tool(call, tool_map)
-                messages.append({"role": "tool", "content": result})
+                messages.append({"role": "tool", "tool_call_id": f"call_{i}", "content": result})
 
         logger.warning(f"ExLlama: alcanzado el límite de {self.max_tool_rounds} rondas de tools.")
 
