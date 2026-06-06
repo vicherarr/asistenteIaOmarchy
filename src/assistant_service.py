@@ -468,6 +468,13 @@ class AssistantService:
         sentence_buffer = ""
         chunk_count = 0
         used_fallback = False
+        # Modelos "thinking" (Qwen3.5...): el contenido empieza con el razonamiento y un
+        # </think> lo cierra antes de la respuesta. El razonamiento SE MUESTRA en pantalla
+        # pero NO se habla: el TTS queda cerrado hasta pasar </think>. Para el resto de
+        # motores/modelos, tts_open=True desde el principio (comportamiento de siempre).
+        leads_reasoning = getattr(self.litert, "leads_with_reasoning", False)
+        tts_open = not leads_reasoning
+        display_buf = ""  # para quitar etiquetas <think>/</think> aunque lleguen partidas
 
         try:
             # Primera llamada al modelo
@@ -487,17 +494,39 @@ class AssistantService:
                 )
                 
                 if not is_tool_call:
-                    sentence_buffer += chunk
-                    sentences, sentence_buffer = self._extract_sentences(sentence_buffer)
-                    for s in sentences:
-                        clean = strip_markdown(s)
-                        if self._is_speakable(clean):
-                            await queue_text.put(clean)
-                
-                # Filtrar tool calls antes de yield al cliente
-                clean_chunk = self._clean_tool_calls(chunk, strip=False)
-                if clean_chunk:
-                    yield clean_chunk
+                    # El razonamiento (antes de </think>) no se habla; en cuanto aparece el
+                    # cierre, se abre el TTS y se siembra el buffer con la respuesta real.
+                    if not tts_open and "</think>" in accumulated_text:
+                        tts_open = True
+                        sentence_buffer = accumulated_text.split("</think>", 1)[1]
+                    elif tts_open:
+                        sentence_buffer += chunk
+                    if tts_open:
+                        sentences, sentence_buffer = self._extract_sentences(sentence_buffer)
+                        for s in sentences:
+                            clean = strip_markdown(s)
+                            if self._is_speakable(clean):
+                                await queue_text.put(clean)
+
+                # Yield al cliente (sin tool calls). El razonamiento SÍ se ve, pero sin las
+                # etiquetas literales <think>/</think>, aunque lleguen partidas entre chunks:
+                # se acumulan, se quitan las completas y se retiene un sufijo ambiguo.
+                display_buf += self._clean_tool_calls(chunk, strip=False)
+                display_buf = display_buf.replace("<think>", "").replace("</think>", "")
+                hold = 0
+                for _tag in ("<think>", "</think>"):
+                    for _k in range(1, len(_tag)):
+                        if display_buf.endswith(_tag[:_k]):
+                            hold = max(hold, _k)
+                emit = display_buf[:len(display_buf) - hold]
+                display_buf = display_buf[len(display_buf) - hold:]
+                if emit:
+                    yield emit
+
+            # Vaciar lo retenido del display (al cerrar el stream ya no puede ser etiqueta).
+            if display_buf:
+                yield display_buf
+                display_buf = ""
 
             # --- Segunda pasada de visión ---
             # Si analyze_screen capturó una imagen, el motor (LLM en GPU, visión en CPU)
@@ -575,6 +604,14 @@ class AssistantService:
                 accumulated_clean = self._clean_tool_calls(accumulated_text)
                 clean_stream = getattr(self.litert, "streams_clean_text", False)
                 has_meaningful_response = self._is_meaningful_response(accumulated_clean, clean_stream)
+
+                # Seguridad: modelo "thinking" que no llegó a emitir </think> (raro), por lo
+                # que no se habló nada. Hablamos la respuesta para no quedar mudos.
+                if leads_reasoning and not tts_open and has_meaningful_response:
+                    spoken = strip_markdown(accumulated_clean).replace("<think>", "").replace("</think>", "")
+                    if self._is_speakable(spoken):
+                        await queue_text.put(spoken)
+                    tts_open = True
 
             if not has_meaningful_response:
                 used_fallback = True

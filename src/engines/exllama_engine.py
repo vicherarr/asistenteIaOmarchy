@@ -348,6 +348,15 @@ class ExLlamaEngine:
         # LiteRT (que confunde respuestas cortas válidas con residuos de tool call).
         return True
 
+    @property
+    def leads_with_reasoning(self) -> bool:
+        # Modelos "thinking" servidos por TabbyAPI (Qwen3/Qwen3.5...): la plantilla
+        # inyecta el <think> de APERTURA en el prompt, así que el contenido EMPIEZA
+        # ya dentro del razonamiento y solo llega el cierre </think> antes de la
+        # respuesta final. assistant_service lo usa para MOSTRAR el razonamiento en
+        # pantalla pero NO hablarlo (mantiene el TTS cerrado hasta pasar </think>).
+        return bool(self.thinking)
+
     def _ping(self) -> bool:
         try:
             r = httpx.get(f"{self.base_url}/v1/models", headers=self._headers, timeout=3)
