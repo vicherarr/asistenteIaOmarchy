@@ -11,11 +11,13 @@ No soporta audio (transcribe_audio -> ""): el STT cae a Whisper por capacidades.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import base64
 import inspect
 import json
 import logging
+import re
 import typing
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
@@ -33,7 +35,10 @@ _PYTYPE_TO_JSON = {
 
 _THINK_OPEN, _THINK_CLOSE = "<think>", "</think>"
 _TOOL_OPEN, _TOOL_CLOSE = "<tool_call>", "</tool_call>"
-_MARKERS = (_TOOL_OPEN, _THINK_OPEN)
+# Formato de tool-calls de LFM2.5 (turboderp): [func(arg='val'), ...] entre estos
+# marcadores, con sintaxis tipo Python (no JSON). Aditivo al de Qwen3: ambos conviven.
+_LFM_TOOL_OPEN, _LFM_TOOL_CLOSE = "<|tool_call_start|>", "<|tool_call_end|>"
+_MARKERS = (_TOOL_OPEN, _THINK_OPEN, _LFM_TOOL_OPEN)
 
 
 def _json_type(annotation) -> str:
@@ -66,6 +71,62 @@ def callable_to_schema(func: Callable) -> dict:
             "parameters": {"type": "object", "properties": props, "required": required},
         },
     }
+
+
+def _ast_call_to_dict(call) -> Optional[dict]:
+    """Convierte un nodo ast.Call `func(k=v, ...)` a {name, arguments}. None si no aplica."""
+    if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
+        return None
+    args: Dict[str, Any] = {}
+    for kw in call.keywords:
+        if kw.arg is None:
+            continue
+        try:
+            args[kw.arg] = ast.literal_eval(kw.value)
+        except Exception:  # noqa: BLE001 — valor no-literal (p.ej. true/null): a texto
+            try:
+                args[kw.arg] = ast.unparse(kw.value)
+            except Exception:  # noqa: BLE001
+                args[kw.arg] = None
+    return {"name": call.func.id, "arguments": args}
+
+
+def _extract_bare_tool_calls(text: str, valid: set) -> List[dict]:
+    """Último recurso: rescata llamadas 'peladas' `tool(arg='x')` que el modelo emite
+    SIN marcadores (LFM2.5 lo hace a veces) y se fugarían como texto. Para no disparar
+    con prosa, SOLO acepta nombres que sean tools reales (gated por `valid`)."""
+    calls: List[dict] = []
+    for m in re.finditer(r'\b([A-Za-z_]\w*)\s*\(', text):
+        if m.group(1) not in valid:
+            continue
+        # Recorta la llamada equilibrando paréntesis (respetando comillas).
+        depth, instr, end = 0, None, None
+        i = m.end() - 1
+        while i < len(text):
+            ch = text[i]
+            if instr:
+                if ch == instr and text[i - 1] != "\\":
+                    instr = None
+            elif ch in "\"'":
+                instr = ch
+            elif ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+            i += 1
+        if end is None:
+            continue
+        try:
+            node = ast.parse(text[m.start():end + 1], mode="eval").body
+        except SyntaxError:
+            continue
+        d = _ast_call_to_dict(node)
+        if d:
+            calls.append(d)
+    return calls
 
 
 class _StreamFilter:
@@ -101,6 +162,25 @@ class _StreamFilter:
         except Exception as e:  # noqa: BLE001
             logger.warning(f"tool_call con JSON inválido, ignorado: {e} -- {inner!r}")
 
+    def _capture_lfm_tool(self, inner: str) -> None:
+        """Parsea el formato de LFM2.5: `[func(arg='val', ...), ...]` (sintaxis Python).
+        Se apoya en `ast` para respetar comillas/comas. Lista vacía => sin llamada."""
+        inner = inner.strip()
+        if not inner:
+            return
+        if not inner.startswith("["):
+            inner = "[" + inner + "]"
+        try:
+            node = ast.parse(inner, mode="eval").body
+        except SyntaxError as e:
+            logger.warning(f"tool_call LFM no parsea, ignorado: {e} -- {inner!r}")
+            return
+        calls = node.elts if isinstance(node, ast.List) else [node]
+        for call in calls:
+            d = _ast_call_to_dict(call)
+            if d:
+                self.tool_calls.append(d)
+
     def feed(self, chunk: str) -> List[str]:
         """Procesa un chunk; devuelve la lista de fragmentos de texto emitibles."""
         self._buf += chunk
@@ -109,7 +189,8 @@ class _StreamFilter:
             if self._mode == "normal":
                 it = self._buf.find(_THINK_OPEN)
                 ic = self._buf.find(_TOOL_OPEN)
-                idx = min([x for x in (it, ic) if x != -1], default=-1)
+                il = self._buf.find(_LFM_TOOL_OPEN)
+                idx = min([x for x in (it, ic, il) if x != -1], default=-1)
                 if idx == -1:
                     hold = self._hold_len(self._buf)
                     safe = self._buf[: len(self._buf) - hold]
@@ -122,6 +203,9 @@ class _StreamFilter:
                 if idx == it:
                     self._buf = self._buf[idx + len(_THINK_OPEN):]
                     self._mode = "think"
+                elif idx == il:
+                    self._buf = self._buf[idx + len(_LFM_TOOL_OPEN):]
+                    self._mode = "ltool"
                 else:
                     self._buf = self._buf[idx + len(_TOOL_OPEN):]
                     self._mode = "tool"
@@ -130,6 +214,13 @@ class _StreamFilter:
                 if e == -1:
                     break
                 self._buf = self._buf[e + len(_THINK_CLOSE):]
+                self._mode = "normal"
+            elif self._mode == "ltool":  # formato LFM2.5
+                e = self._buf.find(_LFM_TOOL_CLOSE)
+                if e == -1:
+                    break
+                self._capture_lfm_tool(self._buf[:e])
+                self._buf = self._buf[e + len(_LFM_TOOL_CLOSE):]
                 self._mode = "normal"
             else:  # tool
                 e = self._buf.find(_TOOL_CLOSE)
@@ -342,8 +433,12 @@ class ExLlamaEngine:
                     seen = True
                 yield text
 
-            # tool calls estructuradas (preferente); si no, las parseadas del texto (fallback).
+            # tool calls estructuradas (preferente); si no, las parseadas del texto
+            # (marcadores Qwen3/LFM2.5); y como último recurso, llamadas peladas a tools
+            # reales que se hayan fugado al texto (LFM2.5 a veces omite los marcadores).
             calls = _collect_structured(structured) or flt.tool_calls
+            if not calls:
+                calls = _extract_bare_tool_calls("".join(raw), set(tool_map))
             if not calls:
                 return  # respuesta final ya emitida
 
