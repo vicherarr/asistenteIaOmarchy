@@ -234,6 +234,21 @@ ai_tabby_stop() {
     pkill -f "$EXLLAMA_TABBY_DIR/main.py" 2>/dev/null || true
 }
 
+# LFM2.5 tiene muchas cuantizaciones (bpw). Elige la MÁS ALTA (más calidad) que
+# quepa en la VRAM TOTAL de la tarjeta, con margen para KV-cache/CUDA. Así el equipo
+# grande baja una versión mejor y el pequeño una que entre, sin tocar nada. Imprime
+# la revisión (p.ej. 2.10bpw). Tabla rev:peso(MiB) de HF, de mayor a menor.
+ai_lfm25_pick_rev() {
+    local vram pair rev size
+    vram="$(detect_vram_mib)"; case "$vram" in ''|*[!0-9]*) vram=0 ;; esac
+    for pair in 8.00bpw:8615 6.10bpw:6693 5.10bpw:5715 4.10bpw:4737 \
+                3.53bpw:4184 3.10bpw:3759 2.53bpw:3206 2.10bpw:2781; do
+        rev="${pair%%:*}"; size="${pair##*:}"
+        [ $(( size + 1200 )) -le "$vram" ] && { echo "$rev"; return 0; }
+    done
+    echo "2.10bpw"   # ni la menor entra con margen: se baja la mínima de todos modos
+}
+
 # Catálogo de modelos EXL3 del motor exllama. Devuelve, para la clave dada:
 #   "REPO|REVISION|DIRNAME|VISION(yes/no)|MAX_SEQ|DESCRIPCIÓN"
 # DIRNAME es el directorio bajo models/ y el model_name que usa TabbyAPI.
@@ -241,13 +256,20 @@ ai_tabby_stop() {
 # 3.5bpw) solo cabe a 6144 (8192 da "Insufficient VRAM"; 4096 es poco para el
 # system prompt + imagen). 6144 carga (~6.3 GB) y sirve texto+visión.
 exllama_model_meta() {
+    local _r
     case "$1" in
         qwen3-8b) echo "turboderp/Qwen3-8B-exl3|4.0bpw|Qwen3-8B-exl3-4bpw|no|8192|texto+tools (rápido)" ;;
         qwen3-vl) echo "ArtusDev/Qwen_Qwen3-VL-8B-Instruct-EXL3|3.5bpw_H6|Qwen3-VL-8B-Instruct-3.5bpw|yes|6144|texto+tools+VISIÓN" ;;
+        # MoE 8B con solo ~1B activo: ligero y rápido. La bpw se elige según la VRAM
+        # del equipo (ai_lfm25_pick_rev): el grande baja más calidad, el de 4 GiB el
+        # 2.10bpw (~2.7 GB). Trae plantilla de chat con la etiqueta {% generation %}
+        # de HF, que ai_tabby_autofix_template adapta sola al cargarlo (ver abajo).
+        lfm2.5)   _r="$(ai_lfm25_pick_rev)"
+                  echo "turboderp/LFM2.5-8B-A1B-exl3|$_r|LFM2.5-8B-A1B-exl3-$_r|no|8192|texto+razonamiento (MoE 8B-A1B, $_r según VRAM)" ;;
         *)        return 1 ;;
     esac
 }
-EXLLAMA_MODEL_KEYS="qwen3-8b qwen3-vl"
+EXLLAMA_MODEL_KEYS="qwen3-8b qwen3-vl lfm2.5"
 
 # ¿Está descargado el modelo cuyo DIRNAME es $1? (dir no vacío bajo models/)
 ai_tabby_model_present() {
@@ -255,18 +277,42 @@ ai_tabby_model_present() {
     [ -d "$d" ] && [ -n "$(ls -A "$d" 2>/dev/null)" ]
 }
 
+# Adapta la plantilla de chat de un modelo para TabbyAPI, si hace falta. Algunos
+# modelos (p.ej. LFM2.5) traen un chat_template.jinja con la etiqueta {% generation %}
+# de HuggingFace (marca tokens del assistant para entrenar); el Jinja de TabbyAPI no
+# la compila y deshabilita /v1/chat/completions. Generamos un tabby_template.jinja
+# (que TabbyAPI carga ANTES que el del modelo) partiendo de la PROPIA plantilla del
+# modelo y quitando solo esas etiquetas. Transparente y por-modelo: es idempotente
+# (si ya existe, no hace nada) y no toca los modelos cuya plantilla ya carga bien
+# (qwen3 no tiene esa etiqueta, así que ni entran). $1 = dirname bajo models/.
+ai_tabby_autofix_template() {
+    local dir="$EXLLAMA_TABBY_DIR/models/$1"
+    local src="$dir/chat_template.jinja" dst="$dir/tabby_template.jinja"
+    [ -f "$src" ] && [ ! -f "$dst" ] || return 0
+    grep -qE '\{%-?[[:space:]]*(end)?generation[[:space:]]*-?%\}' "$src" || return 0
+    if sed -E 's/\{%-?[[:space:]]*(end)?generation[[:space:]]*-?%\}//g' "$src" > "$dst"; then
+        log "Plantilla de chat adaptada para TabbyAPI: models/$1/tabby_template.jinja"
+    else
+        rm -f "$dst"
+    fi
+}
+
 # Descarga un modelo EXL3 a models/<dirname>. $1=repo $2=revision $3=dirname.
 # Devuelve 0 si quedó presente (ya estaba o se bajó bien). Usa el venv de TabbyAPI.
 ai_tabby_download_model() {
     local repo="$1" rev="$2" name="$3"
-    ai_tabby_model_present "$name" && return 0
+    if ai_tabby_model_present "$name"; then
+        ai_tabby_autofix_template "$name"
+        return 0
+    fi
     "$EXLLAMA_TABBY_DIR/venv/bin/python" - "$repo" "$rev" "$EXLLAMA_TABBY_DIR/models/$name" <<'PY'
 import sys
 from huggingface_hub import snapshot_download
 snapshot_download(repo_id=sys.argv[1], revision=sys.argv[2], local_dir=sys.argv[3])
 print("Modelo descargado en:", sys.argv[3])
 PY
-    ai_tabby_model_present "$name"
+    ai_tabby_model_present "$name" || return 1
+    ai_tabby_autofix_template "$name"
 }
 
 # Escribe el config.yml de TabbyAPI. $1=model_name $2=max_seq_len $3=vision(yes/no).
@@ -275,6 +321,8 @@ PY
 ai_tabby_write_config() {
     local model_name="$1" max_seq="${2:-8192}" vision="${3:-no}"
     local hp host port disable_auth vbool
+    # Asegura una plantilla de chat compatible si el modelo la necesita (transparente).
+    ai_tabby_autofix_template "$model_name"
     hp="${EXLLAMA_BASE_URL#*://}"; hp="${hp%%/*}"
     host="${hp%%:*}"; port="${hp##*:}"
     case "$port" in ''|*[!0-9]*) port=5000 ;; esac
@@ -306,6 +354,144 @@ model:
 developer:
   unsafe_launch: false
 YML
+}
+
+# ---- Modelos EXL3 libres (cualquiera de HuggingFace, no solo el catálogo) ----
+# El catálogo (exllama_model_meta) son los modelos "bendecidos" que el asistente
+# usa con tools. Pero TabbyAPI es un servidor OpenAI genérico: puedes bajar y
+# servir CUALQUIER modelo EXL3 (p.ej. de turboderp, creador de ExLlama) para
+# herramientas externas (aider, Continue, Open WebUI...), funcione o no de
+# asistente. Estos helpers dan: explorar el repo del autor, ver sus bpw, y listar
+# lo ya descargado. La descarga reaprovecha ai_tabby_download_model.
+
+# Python con huggingface_hub para consultar/descargar de HF. Prefiere el venv de
+# TabbyAPI (donde viven los modelos); si no, el del propio asistente.
+ai_hf_python() {
+    if [ -x "$EXLLAMA_TABBY_DIR/venv/bin/python" ]; then
+        echo "$EXLLAMA_TABBY_DIR/venv/bin/python"
+    else
+        echo "$PROJECT_DIR/venv/bin/python"
+    fi
+}
+
+# Lista los modelos de un autor en HuggingFace, ordenados por descargas.
+# $1=autor  $2=filtro (substring, opcional). Imprime "DESCARGAS<TAB>ID" por línea.
+ai_hf_author_models() {
+    "$(ai_hf_python)" - "$1" "${2:-}" <<'PY'
+import sys
+try:
+    from huggingface_hub import HfApi
+except ImportError:
+    sys.exit("huggingface_hub no está disponible en el venv.")
+author, filt = sys.argv[1], (sys.argv[2] if len(sys.argv) > 2 else "").lower()
+try:
+    models = HfApi().list_models(author=author, sort="downloads", limit=500)
+except Exception as e:
+    sys.exit(f"No se pudo consultar HuggingFace: {e}")
+for m in models:
+    if filt and filt not in m.id.lower():
+        continue
+    print(f"{getattr(m, 'downloads', 0) or 0}\t{m.id}")
+PY
+}
+
+# Lista las revisiones (ramas) de un repo HF: en EXL3 son las cuantizaciones bpw.
+# $1=repo. Imprime una rama por línea ('main' la primera).
+ai_hf_repo_revisions() {
+    "$(ai_hf_python)" - "$1" <<'PY'
+import sys
+from huggingface_hub import HfApi
+try:
+    refs = HfApi().list_repo_refs(sys.argv[1])
+except Exception as e:
+    sys.exit(f"No se pudo consultar el repo: {e}")
+for b in refs.branches:
+    print(b.name)
+PY
+}
+
+# Lista los modelos ya descargados bajo models/ (dirs con pesos o config.json),
+# uno por línea. Sirve tanto para el catálogo como para los traídos con 'pull'.
+ai_tabby_list_downloaded() {
+    local d
+    for d in "$EXLLAMA_TABBY_DIR"/models/*/; do
+        [ -d "$d" ] || continue
+        d="${d%/}"
+        if [ -f "$d/config.json" ] || ls "$d"/*.safetensors >/dev/null 2>&1; then
+            basename "$d"
+        fi
+    done
+}
+
+# Tamaño total (MiB) de un repo@revision en HF, SIN descargarlo. $1=repo $2=rev.
+# Imprime un entero o nada si no se pudo medir.
+ai_hf_repo_size_mib() {
+    "$(ai_hf_python)" - "$1" "${2:-main}" <<'PY' 2>/dev/null
+import sys
+from huggingface_hub import HfApi
+try:
+    info = HfApi().model_info(sys.argv[1], revision=sys.argv[2], files_metadata=True)
+except Exception:
+    sys.exit(1)
+total = sum((getattr(f, "size", None) or 0) for f in (info.siblings or []))
+if total:
+    print(int(total / 1024 / 1024))
+PY
+}
+
+# Lista las ramas (cuantizaciones bpw en EXL3) de un repo con su tamaño total.
+# $1=repo. Imprime "RAMA<TAB>MIB" por línea (MIB vacío si no se pudo medir).
+ai_hf_repo_revisions_sized() {
+    "$(ai_hf_python)" - "$1" <<'PY'
+import sys
+from huggingface_hub import HfApi
+api, repo = HfApi(), sys.argv[1]
+try:
+    refs = api.list_repo_refs(repo)
+except Exception as e:
+    sys.exit(f"No se pudo consultar el repo: {e}")
+for b in refs.branches:
+    mib = ""
+    try:
+        info = api.model_info(repo, revision=b.name, files_metadata=True)
+        total = sum((getattr(f, "size", None) or 0) for f in (info.siblings or []))
+        if total:
+            mib = str(int(total / 1024 / 1024))
+    except Exception:
+        pass
+    print(f"{b.name}\t{mib}")
+PY
+}
+
+# Tamaño en disco (MiB) de un modelo ya descargado. $1=dirname bajo models/.
+ai_dir_size_mib() {
+    local d="$EXLLAMA_TABBY_DIR/models/$1"
+    [ -d "$d" ] || { echo 0; return; }
+    du -sm "$d" 2>/dev/null | awk '{print $1}'
+}
+
+# Veredicto de si un modelo de PESO $1 MiB cabe en la VRAM TOTAL de la tarjeta.
+# Mira la CAPACIDAD total de la GPU (no la libre): se asume la VRAM limpia y la
+# tarjeta dedicada al LLM. Reserva un margen para la KV-cache + contexto de CUDA.
+# Es una ESTIMACIÓN orientativa y NUNCA bloquea: solo informa (texto con color).
+ai_vram_verdict() {
+    local need_mib="$1" vram overhead total_need g_need g_vram
+    vram="$(detect_vram_mib)"
+    overhead=1200   # KV-cache + contexto CUDA + activaciones (aprox.)
+    case "$vram" in ''|*[!0-9]*) vram=0 ;; esac
+    if [ "$vram" -le 0 ]; then
+        printf "%sGPU NVIDIA/AMD no detectada%s" "$C_YELLOW" "$C_RESET"; return 0
+    fi
+    total_need=$(( need_mib + overhead ))
+    g_need="$(awk "BEGIN{printf \"%.1f\", $need_mib/1024}")"
+    g_vram="$(awk "BEGIN{printf \"%.1f\", $vram/1024}")"
+    if [ "$total_need" -le "$vram" ]; then
+        printf "%scabe%s (~%s GiB pesos + margen / %s GiB VRAM)" "$C_GREEN" "$C_RESET" "$g_need" "$g_vram"
+    elif [ "$need_mib" -le "$vram" ]; then
+        printf "%sajustado%s (~%s GiB / %s GiB; poco margen para contexto)" "$C_YELLOW" "$C_RESET" "$g_need" "$g_vram"
+    else
+        printf "%sNO cabe%s (~%s GiB pesos / %s GiB VRAM)" "$C_RED" "$C_RESET" "$g_need" "$g_vram"
+    fi
 }
 
 # ---- Estado del servidor ----------------------------------------------------

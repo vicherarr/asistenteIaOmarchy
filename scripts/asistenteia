@@ -66,7 +66,10 @@ AsistenteIA - uso: asistenteia <comando>
   engine [e]   Cambia el motor de inferencia (litert/exllama) y reinicia.
                Sin argumento, muestra el actual y los disponibles.
                engine install [m]  Instala el backend exllama (TabbyAPI + modelo).
-               engine model [m]    Modelo exllama: qwen3-8b (texto) / qwen3-vl (visión).
+               engine model [m]    Modelo curado: qwen3-8b / qwen3-vl / lfm2.5 (4 GiB).
+               engine browse [f]   Lista modelos EXL3 de turboderp en HuggingFace.
+               engine pull <repo> [bpw]  Descarga cualquier modelo EXL3 (de turboderp).
+               engine use [m]      Activa un modelo descargado (funcione o no con tools).
                engine thinking on|off  Razonamiento <think> de Qwen3 (solo exllama).
                engine start|stop   Control manual del sidecar TabbyAPI.
   logs         Muestra los logs en tiempo real
@@ -457,6 +460,165 @@ PY
                     esac
                 else
                     echo "Hecho. Se aplicará al arrancar (asistenteia start o Super + Z)."
+                fi
+                exit 0 ;;
+            browse)
+                # Explora los modelos de turboderp (creador de ExLlama) en HuggingFace.
+                # Solo lectura (necesita Internet); no descarga ni instala nada.
+                # Filtro opcional para acotar (substring sobre el id del repo).
+                filt="${2:-}"
+                echo "Modelos de ${C_CYAN}turboderp${C_RESET} en HuggingFace${filt:+ (filtro: $filt)}:"
+                echo "(ordenados por descargas; 'exl3' es el formato del motor exllama)"
+                echo
+                if ! rows="$(ai_hf_author_models turboderp "$filt" 2>&1)"; then
+                    err "$rows"; exit 1
+                fi
+                if [ -z "$rows" ]; then
+                    echo "  (sin resultados${filt:+ para '$filt'})"; exit 0
+                fi
+                printf '%s\n' "$rows" | while IFS=$'\t' read -r dl id; do
+                    printf "  %8s ↓  %s\n" "$dl" "$id"
+                done
+                echo
+                echo "Descargar uno:  asistenteia engine pull <repo> [bpw]"
+                echo "Ej.:            asistenteia engine pull turboderp/Qwen3-8B-exl3 6.0bpw"
+                echo "Para código/razonamiento, busca un *Coder* o un Qwen3 grande que te quepa en VRAM."
+                exit 0 ;;
+            pull)
+                # Descarga CUALQUIER modelo EXL3 (recomendado: de turboderp) a la carpeta
+                # de modelos de TabbyAPI, sin tocar el catálogo curado. En EXL3 cada bpw
+                # (cuantización) es una rama: sin indicar una, te enseña las disponibles.
+                repo="${2:-}"; rev="${3:-}"
+                if [ -z "$repo" ]; then
+                    err "Uso: asistenteia engine pull <repo> [revision/bpw]"
+                    err "Ej.: asistenteia engine pull turboderp/Qwen3-8B-exl3 6.0bpw"
+                    err "Ver disponibles: asistenteia engine browse"
+                    exit 1
+                fi
+                if ! ai_tabby_installed; then
+                    err "El backend exllama no está instalado. Ejecuta: asistenteia engine install"; exit 1
+                fi
+                # Atajo cómodo: 'Qwen3-8B-exl3' -> 'turboderp/Qwen3-8B-exl3'.
+                case "$repo" in */*) : ;; *) repo="turboderp/$repo" ;; esac
+
+                if [ -z "$rev" ]; then
+                    echo "Revisiones (cuantizaciones bpw) de $repo — tamaño y si cabe en tu VRAM:"
+                    echo "(VRAM total de la tarjeta, asumiéndola limpia y dedicada al LLM)"
+                    if ! revs="$(ai_hf_repo_revisions_sized "$repo" 2>&1)"; then
+                        err "$revs"; exit 1
+                    fi
+                    printf '%s\n' "$revs" | while IFS=$'\t' read -r rname rmib; do
+                        case "$rmib" in
+                            0) continue ;;  # rama sin pesos (p.ej. 'main' con solo README)
+                            "") printf "  %-14s   (tamaño n/d)\n" "$rname" ;;
+                            *)  printf "  %-14s %5s MiB  %s\n" "$rname" "$rmib" "$(ai_vram_verdict "$rmib")" ;;
+                        esac
+                    done
+                    echo
+                    if [ -r /dev/tty ]; then
+                        read -r -p "¿Qué revisión descargar? (Enter = cancelar): " rev </dev/tty || rev=""
+                    fi
+                    [ -z "$rev" ] && { echo "Sin descargar."; exit 0; }
+                fi
+
+                # Nombre de carpeta determinista: <repo-base>[-<rev>] (sin sufijo si es main).
+                base="${repo##*/}"
+                case "$rev" in main|"") dir="$base"; rev=main ;; *) dir="$base-$rev" ;; esac
+
+                # Aviso de encaje en VRAM (no bloquea: solo informa).
+                psz="$(ai_hf_repo_size_mib "$repo" "$rev")"
+                [ -n "$psz" ] && echo "VRAM: $(ai_vram_verdict "$psz")"
+
+                if ai_tabby_model_present "$dir"; then
+                    echo "Ya estaba descargado: models/$dir"
+                else
+                    echo "Descargando $repo@$rev -> models/$dir (varios GB, puede tardar)..."
+                    ai_tabby_download_model "$repo" "$rev" "$dir" \
+                        || { err "La descarga falló."; exit 1; }
+                    ok "Descargado: models/$dir"
+                fi
+                echo
+                if ai_confirm "¿Activarlo ahora (engine use $dir)?"; then
+                    exec "$SELF" engine use "$dir"
+                fi
+                echo "Cuando quieras usarlo: asistenteia engine use $dir"
+                exit 0 ;;
+            use)
+                # Activa un modelo EXL3 YA descargado (del catálogo o traído con 'pull'):
+                # escribe el config.yml del sidecar y fija EXLLAMA_MODEL. Funcione o no
+                # como asistente (depende de si soporta tools), TabbyAPI lo sirve igual
+                # en /v1 para herramientas externas. Opciones: --vision, --ctx N.
+                name="${2:-}"; want_vision=no; ctx=""
+                args=("${@:3}"); i=0
+                while [ "$i" -lt "${#args[@]}" ]; do
+                    case "${args[$i]}" in
+                        --vision)    want_vision=yes ;;
+                        --ctx|--ctx=*) [ "${args[$i]}" = --ctx ] && { i=$((i+1)); ctx="${args[$i]:-}"; } || ctx="${args[$i]#*=}" ;;
+                        *)           warn "Opción ignorada: ${args[$i]}" ;;
+                    esac
+                    i=$((i+1))
+                done
+
+                cur_model="$(ai_read_env EXLLAMA_MODEL Qwen3-8B-exl3-4bpw)"
+                if [ -z "$name" ] || [ "$name" = list ] || [ "$name" = status ]; then
+                    echo "Modelos EXL3 descargados (en $EXLLAMA_TABBY_DIR/models):"
+                    found=0
+                    while IFS= read -r d; do
+                        [ -z "$d" ] && continue
+                        found=1; mark=" "; [ "$d" = "$cur_model" ] && mark="*"
+                        printf "  %s %s\n" "$mark" "$d"
+                    done < <(ai_tabby_list_downloaded)
+                    [ "$found" = 0 ] && echo "  (ninguno; descarga con: asistenteia engine pull ...)"
+                    echo
+                    echo "Activar uno:  asistenteia engine use <nombre> [--vision] [--ctx N]"
+                    exit 0
+                fi
+
+                if ! ai_tabby_model_present "$name"; then
+                    err "No hay un modelo descargado llamado '$name'."
+                    err "Ver descargados: asistenteia engine use   ·   Descargar: asistenteia engine pull ..."
+                    exit 1
+                fi
+
+                # Por defecto: texto, 8192 de contexto. Si el nombre coincide con el
+                # catálogo curado, heredamos su visión/contexto ya validados para 8 GiB.
+                def_seq=8192; def_vis=no
+                for k in $EXLLAMA_MODEL_KEYS; do
+                    IFS='|' read -r _r _v cdir cvis cseq _d < <(exllama_model_meta "$k")
+                    [ "$cdir" = "$name" ] && { def_seq="$cseq"; def_vis="$cvis"; }
+                done
+                [ -n "$ctx" ] || ctx="$def_seq"
+                [ "$want_vision" = yes ] || want_vision="$def_vis"
+                case "$ctx" in ''|*[!0-9]*) err "Contexto no válido: '$ctx'."; exit 1 ;; esac
+
+                # Aviso de encaje en VRAM total de la tarjeta (no bloquea: solo informa).
+                dsz="$(ai_dir_size_mib "$name")"
+                [ "${dsz:-0}" -gt 0 ] && echo "VRAM: $(ai_vram_verdict "$dsz")"
+
+                ai_tabby_write_config "$name" "$ctx" "$want_vision"
+                ai_set_env_key EXLLAMA_MODEL "$name"
+                [ "$want_vision" = yes ] && ai_set_env_key EXLLAMA_VISION True || ai_set_env_key EXLLAMA_VISION False
+                ok "Modelo exllama activo: $name (contexto $ctx, visión: $want_vision)"
+                warn "Si el modelo no soporta 'tools', el asistente puede no manejarlo bien;"
+                warn "pero TabbyAPI lo sirve igual en $EXLLAMA_BASE_URL/v1 para herramientas externas."
+
+                if [ "$(ai_engine)" != exllama ]; then
+                    echo
+                    echo "El motor del asistente es '$(ai_engine)'. Para usar este modelo:"
+                    echo "  • en el propio asistente:        asistenteia engine exllama"
+                    echo "  • solo para apps externas:        asistenteia engine start"
+                    exit 0
+                fi
+                if ai_server_up; then
+                    echo "Reiniciando para cargar '$name'..."
+                    "$SCRIPTS_DIR/stop-assistant.sh" >/dev/null 2>&1 || true
+                    sleep 1
+                    case "$(ai_ensure_running 240)" in
+                        error) err "No arrancó con '$name'. Revisa: asistenteia logs"; exit 1 ;;
+                        *)     ok "Listo: '$name' cargado." ;;
+                    esac
+                else
+                    echo "Hecho. Se cargará al arrancar (asistenteia start o Super + Z)."
                 fi
                 exit 0 ;;
         esac
