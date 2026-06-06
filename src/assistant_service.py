@@ -474,7 +474,7 @@ class AssistantService:
         # motores/modelos, tts_open=True desde el principio (comportamiento de siempre).
         leads_reasoning = getattr(self.litert, "leads_with_reasoning", False)
         tts_open = not leads_reasoning
-        display_buf = ""  # para quitar etiquetas <think>/</think> aunque lleguen partidas
+        think_open_sent = False  # apertura <think> sintética para el display (ver más abajo)
 
         try:
             # Primera llamada al modelo
@@ -508,25 +508,17 @@ class AssistantService:
                             if self._is_speakable(clean):
                                 await queue_text.put(clean)
 
-                # Yield al cliente (sin tool calls). El razonamiento SÍ se ve, pero sin las
-                # etiquetas literales <think>/</think>, aunque lleguen partidas entre chunks:
-                # se acumulan, se quitan las completas y se retiene un sufijo ambiguo.
-                display_buf += self._clean_tool_calls(chunk, strip=False)
-                display_buf = display_buf.replace("<think>", "").replace("</think>", "")
-                hold = 0
-                for _tag in ("<think>", "</think>"):
-                    for _k in range(1, len(_tag)):
-                        if display_buf.endswith(_tag[:_k]):
-                            hold = max(hold, _k)
-                emit = display_buf[:len(display_buf) - hold]
-                display_buf = display_buf[len(display_buf) - hold:]
-                if emit:
-                    yield emit
-
-            # Vaciar lo retenido del display (al cerrar el stream ya no puede ser etiqueta).
-            if display_buf:
-                yield display_buf
-                display_buf = ""
+                # Yield al cliente (sin tool calls). Se conserva el </think> que cierra el
+                # razonamiento: la interfaz lo usa como frontera para mostrar el razonamiento
+                # PLEGADO y la respuesta destacada. Qwen3.5 no emite el <think> de apertura
+                # (lo inyecta la plantilla), así que lo sintetizamos una vez al principio para
+                # que el front pueda plegar el razonamiento desde el primer token.
+                clean_chunk = self._clean_tool_calls(chunk, strip=False)
+                if clean_chunk:
+                    if leads_reasoning and not think_open_sent:
+                        clean_chunk = "<think>" + clean_chunk
+                        think_open_sent = True
+                    yield clean_chunk
 
             # --- Segunda pasada de visión ---
             # Si analyze_screen capturó una imagen, el motor (LLM en GPU, visión en CPU)

@@ -96,6 +96,14 @@
         .markdown-content th { background-color: #1e2030; color: #b4befe; }
         .markdown-content a { color: #89b4fa; text-decoration: underline; transition: color 0.2s; }
         .markdown-content a:hover { color: #b4befe; }
+        /* Razonamiento del modelo (modelos "thinking"): plegado y atenuado. */
+        .reasoning-block { margin: 0 0 0.6rem; border: 1px solid rgba(180,190,254,0.15); border-radius: 8px; background: rgba(24,25,38,0.5); }
+        .reasoning-block summary { cursor: pointer; padding: 6px 10px; font-size: 0.8rem; color: #7f849c; font-family: 'Outfit', sans-serif; user-select: none; list-style: none; }
+        .reasoning-block summary::-webkit-details-marker { display: none; }
+        .reasoning-block summary::before { content: '▸ '; }
+        .reasoning-block[open] summary::before { content: '▾ '; }
+        .reasoning-content { padding: 2px 12px 8px; font-size: 0.8rem; color: #6c7086; border-top: 1px solid rgba(180,190,254,0.08); }
+        .reasoning-content p { margin: 0.4rem 0; line-height: 1.5; }
     </style>
 </head>
 <body class="h-full flex bg-base text-text font-sans overflow-hidden">
@@ -324,6 +332,32 @@
             breaks: true,
             gfm: true
         });
+
+        // Renderiza una respuesta del asistente separando el razonamiento (modelos
+        // "thinking") en un desplegable plegado, para que la respuesta quede destacada.
+        // Frontera: </think> de cierre. La apertura <think> puede faltar (Qwen3.5).
+        function renderAssistant(text) {
+            if (!text) return '';
+            let reasoning = null, answer = text;
+            const open = text.indexOf('<think>');
+            const close = text.indexOf('</think>');
+            if (close !== -1) {
+                const start = (open !== -1 && open < close) ? open + 7 : 0;
+                reasoning = text.slice(start, close);
+                answer = (open > 0 ? text.slice(0, open) : '') + text.slice(close + 8);
+            } else if (open !== -1) {
+                // Aún razonando (sin cierre todavía): todo lo posterior a <think> es razonamiento.
+                reasoning = text.slice(open + 7);
+                answer = open > 0 ? text.slice(0, open) : '';
+            }
+            let html = '';
+            if (reasoning !== null && reasoning.trim()) {
+                html += '<details class="reasoning-block"><summary>💭 Razonamiento</summary>'
+                      + '<div class="reasoning-content">' + marked.parse(reasoning) + '</div></details>';
+            }
+            if (answer && answer.trim()) html += marked.parse(answer);
+            return html;
+        }
 
         // Al iniciar la página
         window.addEventListener('DOMContentLoaded', () => {
@@ -659,7 +693,7 @@
                     </div>
                     <div class="flex flex-col items-start max-w-[85%] relative group">
                         <div id="${msgId}" class="markdown-content px-4 py-3 bg-surface/20 border border-overlay/10 rounded-2xl rounded-tl-none text-text text-sm leading-relaxed ${isStreaming ? 'typing-cursor' : ''}">
-                            ${isStreaming ? text : marked.parse(text)}
+                            ${isStreaming ? text : renderAssistant(text)}
                         </div>
                         <button onclick="copyMessage(this, '${msgId}')" class="absolute -right-8 top-1.5 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 text-subtext hover:text-lavender text-xs" title="Copiar mensaje">
                             <i class="fa-regular fa-copy"></i>
@@ -777,8 +811,8 @@
                         const chunk = decoder.decode(value);
                         accumulatedText += chunk;
                         
-                        // Parsear Markdown sobre la marcha
-                        assistantBubble.innerHTML = marked.parse(accumulatedText);
+                        // Parsear Markdown sobre la marcha (razonamiento plegado aparte)
+                        assistantBubble.innerHTML = renderAssistant(accumulatedText);
                         scrollToBottom();
                     }
                 } else if (response.status === 409) {
@@ -794,7 +828,7 @@
                 // Quitar cursor de escritura y renderizar código al finalizar
                 assistantBubble.classList.remove('typing-cursor');
                 if (accumulatedText) {
-                    assistantBubble.innerHTML = marked.parse(accumulatedText);
+                    assistantBubble.innerHTML = renderAssistant(accumulatedText);
                     assistantBubble.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
                     addCopyButtonsToCodeBlocks(assistantBubble);
                 }
