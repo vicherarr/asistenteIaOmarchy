@@ -165,6 +165,18 @@ window {{ background-color: transparent; }}
 .you     {{ color: alpha(@fg, 0.55); font-size: 12px; font-style: italic; }}
 .answer  {{ color: @fg; font-size: 13.5px; }}
 
+/* Razonamiento del modelo: tenue, secundario, plegable. */
+.think-exp {{ color: alpha(@fg, 0.5); font-size: 11.5px; }}
+.think-exp > title {{ color: alpha(@accent, 0.7); font-size: 11.5px; }}
+.think {{
+    color: alpha(@fg, 0.5);
+    font-size: 11.5px;
+    font-style: italic;
+    margin: 2px 0 2px 6px;
+    border-left: 2px solid alpha(@accent, 0.25);
+    padding-left: 8px;
+}}
+
 entry {{
     background-color: alpha(@fg, 0.08);
     color: @fg;
@@ -188,6 +200,29 @@ def derive_state(status: dict) -> str:
     if status.get("processing"):
         return "thinking"
     return "idle"
+
+
+def split_think(raw: str) -> tuple[str, str]:
+    """Separa (razonamiento, respuesta) del texto crudo del stream.
+
+    El backend emite `<think>razonamiento</think>respuesta` (el <think> de
+    apertura es sintético, para poder plegar el razonamiento). Soporta el caso
+    en streaming donde </think> aún no llegó (razonamiento abierto).
+    """
+    reason, answer, i = [], [], 0
+    while True:
+        start = raw.find("<think>", i)
+        if start == -1:
+            answer.append(raw[i:])
+            break
+        answer.append(raw[i:start])
+        end = raw.find("</think>", start)
+        if end == -1:               # razonamiento aún abierto (streaming)
+            reason.append(raw[start + 7:])
+            break
+        reason.append(raw[start + 7:end])
+        i = end + len("</think>")
+    return "".join(reason).strip(), "".join(answer).strip()
 
 
 class SSEClient(threading.Thread):
@@ -245,6 +280,8 @@ class LukaOverlay(Gtk.Application):
         self.input_mode = False
         self._dead = ""           # tecla muerta pendiente (acento) para componer
         self.answer_text = ""
+        self.reasoning_text = ""  # contenido de <think>...</think>, mostrado aparte
+        self._raw_answer = ""     # acumulador crudo del stream (para re-parsear)
         self.user_text = ""
         self._pulse = False
         self._pulse_on = False
@@ -272,6 +309,28 @@ class LukaOverlay(Gtk.Application):
         self.box.set_halign(Gtk.Align.CENTER)
         self.box.set_valign(Gtk.Align.END)
 
+        # Orden vertical: pregunta (eco) -> razonamiento -> respuesta -> fila -> entry.
+        self.echo = Gtk.Label(label="", xalign=0.0)
+        self.echo.add_css_class("you")
+        self.echo.set_wrap(True)
+        self.echo.set_max_width_chars(46)
+        self.echo_rev = Gtk.Revealer(transition_type=Gtk.RevealerTransitionType.SLIDE_UP)
+        self.echo_rev.set_child(self.echo)
+        self.box.append(self.echo_rev)
+
+        # Razonamiento del modelo (lo que hay entre <think>...</think>): tenue,
+        # cursiva, con icono, plegable. Se ve "lo que piensa" sin etiquetas crudas.
+        self.reasoning = Gtk.Label(label="", xalign=0.0)
+        self.reasoning.add_css_class("think")
+        self.reasoning.set_wrap(True)
+        self.reasoning.set_max_width_chars(46)
+        self.think_box = Gtk.Expander(label="💭 Razonamiento")
+        self.think_box.add_css_class("think-exp")
+        self.think_box.set_child(self.reasoning)
+        self.think_rev = Gtk.Revealer(transition_type=Gtk.RevealerTransitionType.SLIDE_UP)
+        self.think_rev.set_child(self.think_box)
+        self.box.append(self.think_rev)
+
         self.answer = Gtk.Label(label="", xalign=0.0)
         self.answer.add_css_class("answer")
         self.answer.set_wrap(True)
@@ -280,14 +339,6 @@ class LukaOverlay(Gtk.Application):
         self.answer_rev.set_transition_duration(180)
         self.answer_rev.set_child(self.answer)
         self.box.append(self.answer_rev)
-
-        self.echo = Gtk.Label(label="", xalign=0.0)
-        self.echo.add_css_class("you")
-        self.echo.set_wrap(True)
-        self.echo.set_max_width_chars(46)
-        self.echo_rev = Gtk.Revealer(transition_type=Gtk.RevealerTransitionType.SLIDE_UP)
-        self.echo_rev.set_child(self.echo)
-        self.box.append(self.echo_rev)
 
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         row.set_halign(Gtk.Align.CENTER)
@@ -358,9 +409,10 @@ class LukaOverlay(Gtk.Application):
         resp = (status.get("last_assistant_response") or "").strip()
         # Solo refleja la respuesta del backend cuando NO estamos escribiendo
         # (en modo escritura la pintamos en vivo desde el POST de streaming).
-        if resp and not self.input_mode and resp != self.answer_text:
-            self.answer_text = resp
+        if resp and not self.input_mode and resp != self._raw_answer:
+            self._raw_answer = resp
             self.user_text = (status.get("last_user_transcription") or "").strip()
+            self._set_response(resp)
         if self.state in ("listening", "thinking", "speaking"):
             self._cancel_collapse()
             self._collapsed = False
@@ -466,10 +518,19 @@ class LukaOverlay(Gtk.Application):
             return
         self.entry.set_text("")
         self.user_text = text
+        self._raw_answer = ""
         self.answer_text = ""
+        self.reasoning_text = ""
         self._collapsed = False
         self._refresh()
         threading.Thread(target=self._stream_post, args=(text,), daemon=True).start()
+
+    def _set_response(self, raw: str):
+        """Reparsea el texto crudo en (razonamiento, respuesta) y ajusta el
+        desplegable: expandido mientras solo hay razonamiento (se ve pensar en
+        vivo), plegado en cuanto llega la respuesta."""
+        self.reasoning_text, self.answer_text = split_think(raw)
+        self.think_box.set_expanded(not bool(self.answer_text))
 
     def _stream_post(self, text: str):
         try:
@@ -487,7 +548,8 @@ class LukaOverlay(Gtk.Application):
             GLib.idle_add(self._append_answer, f"\n[error: {exc}]")
 
     def _append_answer(self, chunk: str):
-        self.answer_text += chunk
+        self._raw_answer += chunk
+        self._set_response(self._raw_answer)
         self._refresh()
         return GLib.SOURCE_REMOVE
 
@@ -532,10 +594,13 @@ class LukaOverlay(Gtk.Application):
 
         show_answer = expanded and bool(self.answer_text)
         show_echo = expanded and bool(self.user_text) and not self.input_mode
+        show_think = expanded and bool(self.reasoning_text)
         status_txt = STATES[self.state][1] if expanded else ""
 
         self.answer.set_text(self.answer_text)
         self.answer_rev.set_reveal_child(show_answer)
+        self.reasoning.set_text(self.reasoning_text)
+        self.think_rev.set_reveal_child(show_think)
         self.echo.set_text(f"› {self.user_text}" if self.user_text else "")
         self.echo_rev.set_reveal_child(show_echo)
         self.status.set_text(status_txt)
