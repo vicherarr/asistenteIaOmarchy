@@ -267,6 +267,7 @@ class StatusResponse(BaseModel):
     bluetooth_audio: str
     conversation_length: int
     processing: bool
+    recording: bool = False
     speaking: bool = False
     gpu_active: bool = False
     litert_backend: str = "Desconectado"
@@ -695,6 +696,7 @@ async def get_status(state: AppState = Depends(get_app_state)):
         bluetooth_audio=bt_status,
         conversation_length=len(state.conversation_history),
         processing=state.processing or state.is_recording,
+        recording=state.is_recording,
         speaking=is_speaking,
         gpu_active=gpu_active,
         litert_backend=engine_backend,    # espejo deprecado

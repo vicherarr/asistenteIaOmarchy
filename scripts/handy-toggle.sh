@@ -19,18 +19,10 @@ if [ "$STATE" = "started" ]; then
     notify-send "AsistenteIA" "Iniciando asistente..." 2>/dev/null || true
 fi
 
-# 2. Levantar la interfaz visual (Spotlight) o mostrarla si ya existe.
-LAUNCH_GUI=true
-if [ -f "$GUI_PID_FILE" ]; then
-    GUI_PID=$(cat "$GUI_PID_FILE")
-    if kill -0 "$GUI_PID" 2>/dev/null; then
-        kill -USR2 "$GUI_PID"   # señal para que la GUI se muestre
-        LAUNCH_GUI=false
-    else
-        rm -f "$GUI_PID_FILE"
-    fi
-fi
-[ "$LAUNCH_GUI" = true ] && "$PROJECT_DIR/scripts/start-gui.sh"
+# 2. Levantar el overlay visual. Está SIEMPRE visible (punto mini que reacciona
+#    al estado por SSE), así que no hay que "mostrarlo": start-gui.sh no duplica
+#    si ya hay uno vivo.
+"$PROJECT_DIR/scripts/start-gui.sh"
 
 # 3. Pequeña tregua para que la GUI registre el cambio de estado.
 sleep 0.2

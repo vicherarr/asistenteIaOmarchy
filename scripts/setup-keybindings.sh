@@ -28,11 +28,13 @@ HCONF="$HYPR_DIR/hyprland.conf"
 log()  { printf '[*] %s\n' "$*"; }
 warn() { printf '[!] %s\n' "$*" >&2; }
 
-# Elimina líneas de binds antiguos del asistente (conserva las window rules).
+# Elimina TODO lo nuestro de un archivo de config: binds antiguos, las
+# windowrules de la GUI vieja centrada (asistenteia-gui) y la layer rule del
+# overlay (lua o hyprlang). Idempotente: permite reescribir sin duplicar.
 strip_ai() {
     local f="$1"
     [ -f "$f" ] || return 0
-    grep -vE 'AsistenteIA|handy-toggle\.sh|stop-assistant\.sh' "$f" > "$f.aitmp" 2>/dev/null || true
+    grep -vE 'AsistenteIA|handy-toggle\.sh|stop-assistant\.sh|asistenteia-gui|namespace = "asistenteia"|layerrule.*asistenteia' "$f" > "$f.aitmp" 2>/dev/null || true
     if [ -s "$f.aitmp" ]; then mv "$f.aitmp" "$f"; else rm -f "$f.aitmp"; fi
 }
 
@@ -57,10 +59,13 @@ fi
 # Copia de seguridad del archivo destino.
 cp "$TARGET" "$TARGET.bak.$(date +%s)" 2>/dev/null || true
 
-# Limpiar binds antiguos del asistente en todos los archivos existentes.
+# Limpiar lo nuestro en todos los archivos posibles (binds, windowrules viejas,
+# layer rule del overlay) para reescribir sin duplicar.
 strip_ai "$LUA"
 strip_ai "$CONF"
 strip_ai "$HCONF"
+strip_ai "$HYPR_DIR/looknfeel.lua"
+strip_ai "$HYPR_DIR/hyprland.lua"
 
 # Escribir los binds nuevos en el destino.
 if [ "$MODE" = "lua" ]; then
@@ -68,12 +73,17 @@ if [ "$MODE" = "lua" ]; then
         printf '\n-- AsistenteIA (gestionado por el instalador)\n'
         printf 'o.bind("SUPER + Z", "AsistenteIA Escuchar", "%s")\n' "$TOGGLE"
         printf 'o.bind("SUPER + X", "AsistenteIA Detener", "%s")\n' "$STOP"
+        # Overlay layer-shell: blur para que combine con Omarchy (forma Lua 0.55).
+        printf 'hl.layer_rule({ match = { namespace = "asistenteia" }, blur = true, ignore_alpha = 0.3 })\n'
     } >> "$TARGET"
 else
     {
         printf '\n# AsistenteIA (gestionado por el instalador)\n'
         printf 'bind = SUPER, Z, exec, %s\n' "$TOGGLE"
         printf 'bind = SUPER, X, exec, %s\n' "$STOP"
+        # Overlay layer-shell: blur (forma hyprlang legacy para Hyprland < 0.55).
+        printf 'layerrule = blur, asistenteia\n'
+        printf 'layerrule = ignorealpha 0.3, asistenteia\n'
     } >> "$TARGET"
 fi
 

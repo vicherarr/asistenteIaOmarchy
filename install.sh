@@ -205,8 +205,13 @@ sudo pacman -S --needed --noconfirm \
     bluez bluez-utils playerctl wl-clipboard \
     jq git espeak-ng ffmpeg grim slurp tmux \
     psmisc libnotify rsync openssl curl \
-    python python-pip python-virtualenv
+    python python-pip python-virtualenv \
+    gtk4 gtk4-layer-shell python-gobject
 ok "Dependencias base instaladas."
+
+# El overlay (GUI) es una superficie layer-shell GTK4 que corre con el PYTHON
+# DEL SISTEMA (python-gobject), aparte del venv de inferencia. Por eso gtk4 /
+# gtk4-layer-shell / python-gobject van como dependencias de sistema, no en pip.
 
 # -----------------------------------------------------------------------------
 # Localizar un Python compatible (3.12 o 3.11; 3.13+ no sirve para kokoro)
@@ -379,6 +384,23 @@ fi
 # -----------------------------------------------------------------------------
 if [ "$DO_KEYBIND" = true ]; then
     bash "$INSTALL_DIR/scripts/setup-keybindings.sh" "$INSTALL_DIR" || warn "No se pudieron configurar los atajos automáticamente."
+
+    # Hook de Omarchy: el overlay se re-tema al cambiar de tema (omarchy theme set).
+    # Es complementario al vigilante de fichero del propio overlay; la señal es
+    # determinista. Idempotente: solo añade nuestra línea una vez.
+    if [ -d "$HOME/.config/omarchy" ]; then
+        HOOKS_DIR="$HOME/.config/omarchy/hooks"
+        HOOK="$HOOKS_DIR/theme-set"
+        HOOK_LINE='pkill -USR1 -f luka_overlay.py 2>/dev/null || true   # AsistenteIA: re-tema el overlay'
+        mkdir -p "$HOOKS_DIR"
+        if [ ! -f "$HOOK" ]; then
+            printf '#!/bin/bash\n%s\n' "$HOOK_LINE" > "$HOOK"
+        elif ! grep -q 'luka_overlay.py' "$HOOK"; then
+            printf '%s\n' "$HOOK_LINE" >> "$HOOK"
+        fi
+        chmod +x "$HOOK" 2>/dev/null || true
+        ok "Hook de tema instalado ($HOOK)."
+    fi
 else
     log "Se omite la configuración de atajos (--no-keybind)."
 fi
