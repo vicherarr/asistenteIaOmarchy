@@ -215,7 +215,9 @@ class SSEClient(threading.Thread):
             try:
                 req = urllib.request.Request(self.url)
                 if self.token:
-                    req.add_header("Authorization", f"Bearer {self.token}")
+                    # El backend valida con el header X-API-Token (APIKeyHeader),
+                    # no con Authorization: Bearer.
+                    req.add_header("X-API-Token", self.token)
                 req.add_header("Accept", "text/event-stream")
                 with urllib.request.urlopen(req, context=self._ssl_ctx) as resp:
                     for raw in resp:
