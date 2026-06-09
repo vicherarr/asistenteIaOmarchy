@@ -273,6 +273,7 @@ class StatusResponse(BaseModel):
     litert_backend: str = "Desconectado"
     last_user_transcription: Optional[str] = None
     last_transcription_timestamp: float = 0.0
+    last_assistant_response: str = ""
 
 
 class HealthResponse(BaseModel):
@@ -687,6 +688,13 @@ async def get_status(state: AppState = Depends(get_app_state)):
     engine_model = getattr(state.engine, "model_label", "")
     gpu_active = state.engine.capabilities.gpu
 
+    # Última respuesta del asistente (para que la GUI la muestre, voz o texto).
+    last_assistant_response = ""
+    for _msg in reversed(state.conversation_history):
+        if getattr(_msg, "role", None) == "assistant":
+            last_assistant_response = getattr(_msg, "content", "") or ""
+            break
+
     return StatusResponse(
         engine_name=engine_name,
         engine_model=engine_model,
@@ -701,7 +709,8 @@ async def get_status(state: AppState = Depends(get_app_state)):
         gpu_active=gpu_active,
         litert_backend=engine_backend,    # espejo deprecado
         last_user_transcription=state.last_user_transcription,
-        last_transcription_timestamp=state.last_transcription_timestamp
+        last_transcription_timestamp=state.last_transcription_timestamp,
+        last_assistant_response=last_assistant_response
     )
 
 

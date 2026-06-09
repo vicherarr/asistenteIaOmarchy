@@ -2,32 +2,28 @@
 """Luka overlay — GUI nativa del asistente para Omarchy/Hyprland.
 
 Superficie *layer-shell* (como waybar/mako/walker), NO una ventana:
-  - anclada abajo-centro (nunca centrada en pantalla, nunca robando foco),
+  - anclada abajo-centro (nunca centrada en pantalla),
   - visible en todos los workspaces (capa overlay; sigue al cambiar de escritorio),
-  - reposo = punto mínimo; al activarse crece hacia arriba en píldora,
-  - se auto-tema con la paleta del tema activo de Omarchy y reacciona a cambios.
+  - en reposo = punto mínimo que no molesta ni roba el foco,
+  - al activarse (voz o escritura) crece hacia arriba en un panel-burbuja,
+  - **clic en la píldora** abre una caja de texto: toma el teclado SOLO mientras
+    escribes (modo exclusivo) y lo suelta con Esc,
+  - muestra la respuesta de Luka (en vivo al escribir; vía estado al hablar),
+  - se auto-tema con la paleta del tema activo de Omarchy.
 
-Refleja el estado real del asistente suscribiéndose al canal SSE `/status/events`.
+Refleja el estado real suscribiéndose al SSE `/status/events` y, al escribir,
+envía el texto a `POST /transcribe/stream` mostrando la respuesta en streaming.
 
-IMPORTANTE: se ejecuta con el PYTHON DEL SISTEMA (tiene PyGObject), no con el
-venv de inferencia del proyecto:
+Se ejecuta con el PYTHON DEL SISTEMA (tiene PyGObject), no con el venv:
 
     /usr/bin/python src/gui/luka_overlay.py
-
-Variables de entorno opcionales (para pruebas / despliegues no estándar):
-    LUKA_API_URL    p.ej. https://127.0.0.1:8765  (si no, se deduce del .env)
-    LUKA_API_TOKEN  token Bearer (si no, se lee API_TOKEN del .env)
-
-Recarga de tema en caliente: además del vigilante de fichero, responde a SIGUSR1.
-Para integrarlo con `omarchy theme set`, basta un hook que mande la señal:
-    ~/.config/omarchy/hooks/theme-set  ->  pkill -USR1 -f luka_overlay.py
 """
 from __future__ import annotations
 
 import ctypes
 
 # CRÍTICO: cargar gtk4-layer-shell con RTLD_GLOBAL ANTES de que GTK conecte con
-# Wayland; si no, interpone sus símbolos tarde y la superficie sale como ventana
+# Wayland; si no, interpone sus símbolos tarde y la ventana sale como xdg-toplevel
 # normal (se quedaría atrapada en un workspace en vez de vivir en la capa overlay).
 ctypes.CDLL("libgtk4-layer-shell.so.0", mode=ctypes.RTLD_GLOBAL)
 
@@ -36,7 +32,6 @@ import os
 import signal
 import ssl
 import threading
-import time
 import tomllib
 import urllib.request
 from pathlib import Path
@@ -52,17 +47,12 @@ from gi.repository import Gtk4LayerShell as LayerShell  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 THEME_COLORS = Path.home() / ".config/omarchy/current/theme/colors.toml"
+COLLAPSE_SECONDS = 7  # tras terminar un turno, vuelve al punto pasado este tiempo
 
-# Paleta de respaldo (Catppuccin Mocha) si no hay tema de Omarchy.
 FALLBACK = {
-    "background": "#1e1e2e",
-    "foreground": "#cdd6f4",
-    "accent": "#89b4fa",
-    "color1": "#f38ba8",  # rojo   -> desconectado
-    "color2": "#a6e3a1",  # verde  -> escuchando
-    "color3": "#f9e2af",  # ámbar  -> pensando
-    "color4": "#89b4fa",  # azul   -> hablando
-    "color8": "#45475a",  # gris   -> reposo
+    "background": "#1e1e2e", "foreground": "#cdd6f4", "accent": "#89b4fa",
+    "color1": "#f38ba8", "color2": "#a6e3a1", "color3": "#f9e2af",
+    "color4": "#89b4fa", "color8": "#45475a",
 }
 
 # estado -> (clase CSS, texto, ¿pulsa el punto?)
@@ -76,7 +66,6 @@ STATES = {
 
 
 def load_env() -> dict:
-    """Lee el .env de la raíz del proyecto (parser mínimo, sin dependencias)."""
     env: dict[str, str] = {}
     path = PROJECT_ROOT / ".env"
     if path.exists():
@@ -90,7 +79,6 @@ def load_env() -> dict:
 
 
 def resolve_api() -> tuple[str, str]:
-    """Devuelve (base_url, token) deduciendo scheme/puerto del .env."""
     env = load_env()
     port = env.get("PORT", "8765")
     scheme = "https" if env.get("SSL_CERTFILE") else "http"
@@ -107,50 +95,48 @@ def load_colors() -> dict:
         for key in colors:
             if key in data:
                 colors[key] = data[key]
-    except FileNotFoundError:
-        pass
-    except Exception:  # pragma: no cover - defensivo
+    except Exception:
         pass
     return colors
 
 
-def build_css(colors: dict) -> str:
+def build_css(c: dict) -> str:
     return f"""
-@define-color bg       {colors['background']};
-@define-color fg       {colors['foreground']};
-@define-color accent   {colors['accent']};
-@define-color c_idle   {colors['color8']};
-@define-color c_listen {colors['color2']};
-@define-color c_think  {colors['color3']};
-@define-color c_speak  {colors['color4']};
-@define-color c_off    {colors['color1']};
+@define-color bg       {c['background']};
+@define-color fg       {c['foreground']};
+@define-color accent   {c['accent']};
+@define-color c_idle   {c['color8']};
+@define-color c_listen {c['color2']};
+@define-color c_think  {c['color3']};
+@define-color c_speak  {c['color4']};
+@define-color c_off    {c['color1']};
 
 window {{ background-color: transparent; }}
 
 .luka {{
-    background-color: alpha(@bg, 0.92);
+    background-color: alpha(@bg, 0.94);
     border: 1px solid alpha(@accent, 0.35);
-    border-radius: 22px;
-    padding: 9px 16px;
-    box-shadow: 0 8px 28px alpha(black, 0.45);
-    transition: padding 180ms ease, background-color 220ms ease,
-                border-radius 180ms ease, border-color 220ms ease;
+    border-radius: 18px;
+    padding: 12px 14px;
+    box-shadow: 0 10px 30px alpha(black, 0.5);
+    transition: padding 160ms ease, border-radius 160ms ease,
+                background-color 200ms ease;
 }}
-.luka.state-idle, .luka.state-offline {{
+.luka.collapsed {{
     padding: 6px;
     border-radius: 999px;
     background-color: alpha(@bg, 0.55);
     border-color: alpha(@accent, 0.18);
     box-shadow: none;
 }}
-.luka.state-offline {{ border-color: alpha(@c_off, 0.25); }}
+.luka.collapsed:hover {{ background-color: alpha(@bg, 0.8); }}
+.luka.state-offline.collapsed {{ border-color: alpha(@c_off, 0.25); }}
 
 .dot {{
-    min-width: 13px;
-    min-height: 13px;
+    min-width: 12px; min-height: 12px;
     border-radius: 999px;
     background-color: @c_idle;
-    transition: background-color 220ms ease, opacity 650ms ease;
+    transition: background-color 200ms ease, opacity 600ms ease;
 }}
 .luka.state-listening .dot {{ background-color: @c_listen; }}
 .luka.state-thinking  .dot {{ background-color: @c_think; }}
@@ -158,21 +144,24 @@ window {{ background-color: transparent; }}
 .luka.state-offline   .dot {{ background-color: @c_off; opacity: 0.55; }}
 .dot.pulse-on {{ opacity: 0.30; }}
 
-.luka label {{
+.status  {{ color: alpha(@fg, 0.7); font-size: 12px; margin-left: 8px; }}
+.you     {{ color: alpha(@fg, 0.55); font-size: 12px; font-style: italic; }}
+.answer  {{ color: @fg; font-size: 13.5px; }}
+
+entry {{
+    background-color: alpha(@fg, 0.08);
     color: @fg;
-    font-size: 13px;
-    font-weight: 600;
-    margin-left: 9px;
+    border-radius: 11px;
+    border: 1px solid alpha(@accent, 0.30);
+    padding: 7px 11px;
+    caret-color: @accent;
+    margin-top: 4px;
 }}
+entry:focus-within {{ border-color: alpha(@accent, 0.7); }}
 """
 
 
 def derive_state(status: dict) -> str:
-    """Mapea el dict de /status al estado visual.
-
-    Degrada con elegancia: si el backend aún no expone `recording`, no habrá
-    estado "listening" y `processing` cae a "thinking" (sigue siendo útil).
-    """
     if not status.get("engine_connected", True):
         return "offline"
     if status.get("speaking"):
@@ -184,28 +173,19 @@ def derive_state(status: dict) -> str:
     return "idle"
 
 
-def state_label(state: str, status: dict) -> str:
-    if state == "thinking":
-        txt = (status.get("last_user_transcription") or "").strip()
-        if txt:
-            return txt if len(txt) <= 60 else txt[:57] + "…"
-    return STATES[state][1]
-
-
 class SSEClient(threading.Thread):
     """Suscripción a /status/events en hilo aparte; marshalla al loop GTK."""
 
-    def __init__(self, base_url: str, token: str, on_status, on_offline):
+    def __init__(self, base_url, token, on_status, on_offline):
         super().__init__(daemon=True)
         self.url = f"{base_url}/status/events"
         self.token = token
         self.on_status = on_status
         self.on_offline = on_offline
         self._stop = threading.Event()
-        # cert autofirmado en localhost: no verificamos.
-        self._ssl_ctx = ssl.create_default_context()
-        self._ssl_ctx.check_hostname = False
-        self._ssl_ctx.verify_mode = ssl.CERT_NONE
+        self._ssl = ssl.create_default_context()
+        self._ssl.check_hostname = False
+        self._ssl.verify_mode = ssl.CERT_NONE
 
     def stop(self):
         self._stop.set()
@@ -215,11 +195,9 @@ class SSEClient(threading.Thread):
             try:
                 req = urllib.request.Request(self.url)
                 if self.token:
-                    # El backend valida con el header X-API-Token (APIKeyHeader),
-                    # no con Authorization: Bearer.
                     req.add_header("X-API-Token", self.token)
                 req.add_header("Accept", "text/event-stream")
-                with urllib.request.urlopen(req, context=self._ssl_ctx) as resp:
+                with urllib.request.urlopen(req, context=self._ssl) as resp:
                     for raw in resp:
                         if self._stop.is_set():
                             return
@@ -232,7 +210,6 @@ class SSEClient(threading.Thread):
                             continue
                         GLib.idle_add(self.on_status, data)
             except Exception:
-                # servidor caído / reinicio: marca offline y reintenta.
                 GLib.idle_add(self.on_offline)
                 if self._stop.wait(2.0):
                     return
@@ -243,65 +220,101 @@ class LukaOverlay(Gtk.Application):
         super().__init__(application_id="org.asistenteia.luka")
         self.colors = load_colors()
         self.base_url, self.token = resolve_api()
-        self._provider: Gtk.CssProvider | None = None
-        self._state = "offline"
+        self._ssl = ssl.create_default_context()
+        self._ssl.check_hostname = False
+        self._ssl.verify_mode = ssl.CERT_NONE
+        self._provider = None
+        self.state = "offline"
+        self.input_mode = False
+        self.answer_text = ""
+        self.user_text = ""
         self._pulse = False
         self._pulse_on = False
-        self._sse: SSEClient | None = None
-        self._theme_monitor: Gio.FileMonitor | None = None
+        self._collapsed = True
+        self._collapse_id = None
+        self._sse = None
+        self._theme_monitor = None
 
     # ---- ciclo de vida -----------------------------------------------------
     def do_activate(self):
-        win = Gtk.ApplicationWindow(application=self)
-        win.set_default_size(1, 1)
+        self.win = Gtk.ApplicationWindow(application=self)
+        self.win.set_default_size(1, 1)
 
-        LayerShell.init_for_window(win)
-        LayerShell.set_namespace(win, "asistenteia")
-        LayerShell.set_layer(win, LayerShell.Layer.OVERLAY)
-        LayerShell.set_keyboard_mode(win, LayerShell.KeyboardMode.NONE)
-        LayerShell.set_anchor(win, LayerShell.Edge.BOTTOM, True)
-        LayerShell.set_margin(win, LayerShell.Edge.BOTTOM, 28)
-        LayerShell.set_exclusive_zone(win, 0)
+        LayerShell.init_for_window(self.win)
+        LayerShell.set_namespace(self.win, "asistenteia")
+        LayerShell.set_layer(self.win, LayerShell.Layer.OVERLAY)
+        LayerShell.set_keyboard_mode(self.win, LayerShell.KeyboardMode.NONE)
+        LayerShell.set_anchor(self.win, LayerShell.Edge.BOTTOM, True)
+        LayerShell.set_margin(self.win, LayerShell.Edge.BOTTOM, 28)
+        LayerShell.set_exclusive_zone(self.win, 0)
 
-        self.pill = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        self.pill.add_css_class("luka")
-        self.pill.set_halign(Gtk.Align.CENTER)
-        self.pill.set_valign(Gtk.Align.END)
+        # --- contenido: [respuesta] / [eco usuario] / fila(punto+estado) / [entry]
+        self.box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self.box.add_css_class("luka")
+        self.box.set_halign(Gtk.Align.CENTER)
+        self.box.set_valign(Gtk.Align.END)
 
+        self.answer = Gtk.Label(label="", xalign=0.0)
+        self.answer.add_css_class("answer")
+        self.answer.set_wrap(True)
+        self.answer.set_max_width_chars(46)
+        self.answer_rev = Gtk.Revealer(transition_type=Gtk.RevealerTransitionType.SLIDE_UP)
+        self.answer_rev.set_transition_duration(180)
+        self.answer_rev.set_child(self.answer)
+        self.box.append(self.answer_rev)
+
+        self.echo = Gtk.Label(label="", xalign=0.0)
+        self.echo.add_css_class("you")
+        self.echo.set_wrap(True)
+        self.echo.set_max_width_chars(46)
+        self.echo_rev = Gtk.Revealer(transition_type=Gtk.RevealerTransitionType.SLIDE_UP)
+        self.echo_rev.set_child(self.echo)
+        self.box.append(self.echo_rev)
+
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        row.set_halign(Gtk.Align.CENTER)
         self.dot = Gtk.Box()
         self.dot.add_css_class("dot")
         self.dot.set_valign(Gtk.Align.CENTER)
-        self.pill.append(self.dot)
+        row.append(self.dot)
+        self.status = Gtk.Label(label="")
+        self.status.add_css_class("status")
+        self.status_rev = Gtk.Revealer(transition_type=Gtk.RevealerTransitionType.CROSSFADE)
+        self.status_rev.set_child(self.status)
+        row.append(self.status_rev)
+        self.box.append(row)
 
-        self.revealer = Gtk.Revealer()
-        self.revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_RIGHT)
-        self.revealer.set_transition_duration(200)
-        self.label = Gtk.Label(label="")
-        self.revealer.set_child(self.label)
-        self.pill.append(self.revealer)
+        self.entry = Gtk.Entry()
+        self.entry.set_placeholder_text("Escribe a Luka…")
+        self.entry.connect("activate", self._on_send)
+        self.entry_rev = Gtk.Revealer(transition_type=Gtk.RevealerTransitionType.SLIDE_UP)
+        self.entry_rev.set_child(self.entry)
+        self.box.append(self.entry_rev)
 
-        win.set_child(self.pill)
+        # clic en la píldora -> abrir/centrar el modo escritura
+        click = Gtk.GestureClick()
+        click.connect("released", lambda *_: self._enter_input())
+        self.box.add_controller(click)
+        # Esc en el entry -> salir del modo escritura
+        keyc = Gtk.EventControllerKey()
+        keyc.connect("key-pressed", self._on_key)
+        self.entry.add_controller(keyc)
+
+        self.win.set_child(self.box)
         self._install_css()
-        win.present()
+        self.win.present()
 
-        self._set_state("offline", {})
+        self._refresh()
         GLib.timeout_add(700, self._tick_pulse)
         self._start_theme_watch()
-
-        # mantener viva la app aunque la ventana se oculte
         self.hold()
 
-        self._sse = SSEClient(self.base_url, self.token,
-                              self._on_status, self._on_offline)
+        self._sse = SSEClient(self.base_url, self.token, self._on_status, self._on_offline)
         self._sse.start()
 
-        # señales: SIGUSR1 = recargar tema; TERM/INT = salir limpio
-        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR1,
-                             self._reload_theme)
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR1, self._reload_theme)
         GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, self._quit)
         GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, self._quit)
-        # El overlay está siempre visible: SIGUSR2 (señal "mostrar" del toggle
-        # antiguo) se neutraliza para que no termine el proceso por defecto.
         GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR2,
                              lambda *_: GLib.SOURCE_CONTINUE)
 
@@ -311,29 +324,142 @@ class LukaOverlay(Gtk.Application):
         self.quit()
         return GLib.SOURCE_REMOVE
 
-    # ---- estado ------------------------------------------------------------
+    # ---- estado (SSE) ------------------------------------------------------
     def _on_status(self, status: dict):
-        self._set_state(derive_state(status), status)
+        self.state = derive_state(status)
+        resp = (status.get("last_assistant_response") or "").strip()
+        # Solo refleja la respuesta del backend cuando NO estamos escribiendo
+        # (en modo escritura la pintamos en vivo desde el POST de streaming).
+        if resp and not self.input_mode and resp != self.answer_text:
+            self.answer_text = resp
+            self.user_text = (status.get("last_user_transcription") or "").strip()
+        if self.state in ("listening", "thinking", "speaking"):
+            self._cancel_collapse()
+            self._collapsed = False
+        elif self.state == "idle":
+            self._schedule_collapse()
+        elif self.state == "offline" and not self.input_mode:
+            self._collapsed = True
+        self._refresh()
         return GLib.SOURCE_REMOVE
 
     def _on_offline(self):
-        self._set_state("offline", {})
+        self.state = "offline"
+        if not self.input_mode:
+            self._collapsed = True
+        self._refresh()
         return GLib.SOURCE_REMOVE
 
-    def _set_state(self, state: str, status: dict):
-        css_class, _, pulses = STATES[state]
+    # ---- modo escritura ----------------------------------------------------
+    def _enter_input(self):
+        if self.input_mode:
+            self.entry.grab_focus()
+            return
+        self.input_mode = True
+        self._cancel_collapse()
+        self._collapsed = False
+        # Tomar el teclado SOLO ahora (modo exclusivo, como un lanzador).
+        LayerShell.set_keyboard_mode(self.win, LayerShell.KeyboardMode.EXCLUSIVE)
+        self._refresh()
+        GLib.idle_add(self.entry.grab_focus)
+
+    def _exit_input(self):
+        if not self.input_mode:
+            return
+        self.input_mode = False
+        self.entry.set_text("")
+        LayerShell.set_keyboard_mode(self.win, LayerShell.KeyboardMode.NONE)
+        self._schedule_collapse()
+        self._refresh()
+
+    def _on_key(self, _ctrl, keyval, _code, _state):
+        if keyval == Gdk.KEY_Escape:
+            self._exit_input()
+            return True
+        return False
+
+    def _on_send(self, _entry):
+        text = self.entry.get_text().strip()
+        if not text:
+            return
+        self.entry.set_text("")
+        self.user_text = text
+        self.answer_text = ""
+        self._collapsed = False
+        self._refresh()
+        threading.Thread(target=self._stream_post, args=(text,), daemon=True).start()
+
+    def _stream_post(self, text: str):
+        try:
+            body = json.dumps({"text": text}).encode()
+            req = urllib.request.Request(f"{self.base_url}/transcribe/stream",
+                                         data=body, method="POST")
+            req.add_header("Content-Type", "application/json")
+            if self.token:
+                req.add_header("X-API-Token", self.token)
+            with urllib.request.urlopen(req, context=self._ssl) as resp:
+                for raw in resp:
+                    chunk = raw.decode("utf-8", "replace")
+                    GLib.idle_add(self._append_answer, chunk)
+        except Exception as exc:
+            GLib.idle_add(self._append_answer, f"\n[error: {exc}]")
+
+    def _append_answer(self, chunk: str):
+        self.answer_text += chunk
+        self._refresh()
+        return GLib.SOURCE_REMOVE
+
+    # ---- colapso -----------------------------------------------------------
+    def _cancel_collapse(self):
+        if self._collapse_id:
+            GLib.source_remove(self._collapse_id)
+            self._collapse_id = None
+
+    def _schedule_collapse(self):
+        if self.input_mode:
+            return
+        self._cancel_collapse()
+        self._collapse_id = GLib.timeout_add_seconds(COLLAPSE_SECONDS, self._do_collapse)
+
+    def _do_collapse(self):
+        self._collapse_id = None
+        if not self.input_mode:
+            self._collapsed = True
+            self._refresh()
+        return GLib.SOURCE_REMOVE
+
+    # ---- pintado -----------------------------------------------------------
+    def _refresh(self):
+        expanded = self.input_mode or not self._collapsed
+        if self.state == "offline" and not self.input_mode:
+            expanded = False
+
+        # clase de estado + colapsado
         for cls, _, _ in STATES.values():
-            self.pill.remove_css_class(cls)
-        self.pill.add_css_class(css_class)
-        text = state_label(state, status)
-        self.label.set_text(text)
-        self.revealer.set_reveal_child(bool(text))
-        self._state = state
-        self._pulse = pulses
-        if not pulses:
+            self.box.remove_css_class(cls)
+        self.box.add_css_class(STATES[self.state][0])
+        if expanded:
+            self.box.remove_css_class("collapsed")
+        else:
+            self.box.add_css_class("collapsed")
+
+        show_answer = expanded and bool(self.answer_text)
+        show_echo = expanded and bool(self.user_text) and not self.input_mode
+        status_txt = STATES[self.state][1] if expanded else ""
+
+        self.answer.set_text(self.answer_text)
+        self.answer_rev.set_reveal_child(show_answer)
+        self.echo.set_text(f"› {self.user_text}" if self.user_text else "")
+        self.echo_rev.set_reveal_child(show_echo)
+        self.status.set_text(status_txt)
+        self.status_rev.set_reveal_child(bool(status_txt))
+        self.entry_rev.set_reveal_child(self.input_mode)
+
+        self._pulse = STATES[self.state][2]
+        if not self._pulse:
             self.dot.remove_css_class("pulse-on")
 
-    def _tick_pulse(self) -> bool:
+    def _tick_pulse(self):
         if self._pulse:
             self._pulse_on = not self._pulse_on
             if self._pulse_on:
@@ -358,17 +484,12 @@ class LukaOverlay(Gtk.Application):
         return GLib.SOURCE_CONTINUE
 
     def _start_theme_watch(self):
-        # Vigila el directorio `current` (donde el symlink `theme` se repunta al
-        # cambiar de tema con `omarchy theme set`) para recargar la paleta.
         try:
-            target = Gio.File.new_for_path(
-                str(Path.home() / ".config/omarchy/current"))
-            self._theme_monitor = target.monitor_directory(
-                Gio.FileMonitorFlags.NONE, None)
-            self._theme_monitor.connect(
-                "changed", lambda *_: self._reload_theme())
+            target = Gio.File.new_for_path(str(Path.home() / ".config/omarchy/current"))
+            self._theme_monitor = target.monitor_directory(Gio.FileMonitorFlags.NONE, None)
+            self._theme_monitor.connect("changed", lambda *_: self._reload_theme())
         except Exception:
-            pass  # el vigilante es un extra; SIGUSR1 sigue funcionando
+            pass
 
 
 def main():
