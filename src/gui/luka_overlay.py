@@ -323,6 +323,10 @@ class LukaOverlay(Gtk.Application):
         keyc.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         keyc.connect("key-pressed", self._on_key)
         self.entry.add_controller(keyc)
+        # Perder el foco (clic en otra ventana) cierra el modo escritura.
+        focusc = Gtk.EventControllerFocus()
+        focusc.connect("leave", lambda *_: self._on_focus_lost())
+        self.entry.add_controller(focusc)
 
         self.win.set_child(self.box)
         self._install_css()
@@ -382,8 +386,10 @@ class LukaOverlay(Gtk.Application):
         self.input_mode = True
         self._cancel_collapse()
         self._collapsed = False
-        # Tomar el teclado SOLO ahora (modo exclusivo, como un lanzador).
-        LayerShell.set_keyboard_mode(self.win, LayerShell.KeyboardMode.EXCLUSIVE)
+        # ON_DEMAND (no EXCLUSIVE): el compositor cede el foco al clicar y lo retira
+        # al clicar otra ventana -> así se puede salir clicando fuera. La salida por
+        # Esc fuerza la liberación poniendo el modo a NONE en _exit_input.
+        LayerShell.set_keyboard_mode(self.win, LayerShell.KeyboardMode.ON_DEMAND)
         self._refresh()
         GLib.idle_add(self.entry.grab_focus)
 
@@ -395,6 +401,13 @@ class LukaOverlay(Gtk.Application):
         LayerShell.set_keyboard_mode(self.win, LayerShell.KeyboardMode.NONE)
         self._schedule_collapse()
         self._refresh()
+
+    def _on_focus_lost(self):
+        # El entry perdió el foco (p. ej. clic en otra ventana): salir del modo
+        # escritura y soltar el teclado. _exit_input ya está guardado contra
+        # reentradas (no hace nada si input_mode ya es False).
+        if self.input_mode:
+            self._exit_input()
 
     def _on_key(self, _ctrl, keyval, _code, mods):
         # Enter/Esc primero.
