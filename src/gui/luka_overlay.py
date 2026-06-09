@@ -446,6 +446,11 @@ class LukaOverlay(Gtk.Application):
         else:
             self.box.add_css_class("collapsed")
 
+        # Ancho de panel fijo al escribir: la superficie layer-shell se dimensiona
+        # al contenido y no crece de forma fiable con el entry, así que forzamos un
+        # ancho cómodo en modo escritura (si no, solo se ve un carácter).
+        self.box.set_size_request(420 if self.input_mode else -1, -1)
+
         show_answer = expanded and bool(self.answer_text)
         show_echo = expanded and bool(self.user_text) and not self.input_mode
         status_txt = STATES[self.state][1] if expanded else ""
