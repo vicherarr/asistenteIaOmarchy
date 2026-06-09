@@ -33,8 +33,15 @@ import signal
 import ssl
 import threading
 import tomllib
+import unicodedata
 import urllib.request
 from pathlib import Path
+
+# En superficies layer-shell, GTK4 usa el protocolo Wayland text-input (IME), que
+# con fcitx5 SOBRESCRIBE el buffer en cada tecla (solo se ve la última letra). El
+# arreglo real es gestionar las teclas a mano en fase de captura (ver _on_key);
+# esto es solo una red de seguridad para cualquier tecla que no capturemos.
+os.environ.setdefault("GTK_IM_MODULE", "gtk-im-context-simple")
 
 import gi
 
@@ -62,6 +69,16 @@ STATES = {
     "thinking":  ("state-thinking",  "Pensando…",   True),
     "speaking":  ("state-speaking",  "Hablando…",   True),
     "offline":   ("state-offline",   "",            False),
+}
+
+# Teclas muertas -> carácter combinante Unicode (para componer acentos a mano,
+# ya que gestionamos las teclas saltándonos el IME). Cubre el español.
+DEAD = {
+    Gdk.KEY_dead_acute: chr(0x0301),       # á é í ó ú
+    Gdk.KEY_dead_grave: chr(0x0300),       # à è
+    Gdk.KEY_dead_circumflex: chr(0x0302),  # â ê
+    Gdk.KEY_dead_tilde: chr(0x0303),       # ã õ (la ñ es tecla propia)
+    Gdk.KEY_dead_diaeresis: chr(0x0308),   # ü
 }
 
 
@@ -226,6 +243,7 @@ class LukaOverlay(Gtk.Application):
         self._provider = None
         self.state = "offline"
         self.input_mode = False
+        self._dead = ""           # tecla muerta pendiente (acento) para componer
         self.answer_text = ""
         self.user_text = ""
         self._pulse = False
@@ -298,8 +316,11 @@ class LukaOverlay(Gtk.Application):
         click = Gtk.GestureClick()
         click.connect("released", lambda *_: self._enter_input())
         self.box.add_controller(click)
-        # Esc en el entry -> salir del modo escritura
+        # Teclas a mano EN FASE DE CAPTURA: insertamos directamente y consumimos el
+        # evento (return True) para saltarnos el IME Wayland, que sobre layer-shell
+        # sobrescribe el buffer en cada tecla. Así el texto se acumula bien.
         keyc = Gtk.EventControllerKey()
+        keyc.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         keyc.connect("key-pressed", self._on_key)
         self.entry.add_controller(keyc)
 
@@ -375,9 +396,54 @@ class LukaOverlay(Gtk.Application):
         self._schedule_collapse()
         self._refresh()
 
-    def _on_key(self, _ctrl, keyval, _code, _state):
+    def _on_key(self, _ctrl, keyval, _code, mods):
+        # Enter/Esc primero.
+        if keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_ISO_Enter):
+            self._on_send(self.entry)
+            return True
         if keyval == Gdk.KEY_Escape:
             self._exit_input()
+            return True
+        # Dejar pasar combinaciones con Ctrl/Alt (atajos, pegar, etc.).
+        if mods & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK):
+            return False
+
+        buf = self.entry.get_buffer()
+        pos = self.entry.get_position()
+        if keyval == Gdk.KEY_BackSpace:
+            if pos > 0:
+                buf.delete_text(pos - 1, 1)
+            return True
+        if keyval == Gdk.KEY_Delete:
+            buf.delete_text(pos, 1)
+            return True
+        if keyval == Gdk.KEY_Left:
+            self.entry.set_position(max(0, pos - 1))
+            return True
+        if keyval == Gdk.KEY_Right:
+            self.entry.set_position(pos + 1)
+            return True
+        if keyval == Gdk.KEY_Home:
+            self.entry.set_position(0)
+            return True
+        if keyval == Gdk.KEY_End:
+            self.entry.set_position(-1)
+            return True
+        # Tecla muerta (acento): guardar y esperar a la siguiente.
+        if keyval in DEAD:
+            self._dead = DEAD[keyval]
+            return True
+        # Carácter imprimible -> insertar a mano (componiendo acento si lo había).
+        uni = Gdk.keyval_to_unicode(keyval)
+        if uni:
+            ch = chr(uni)
+            if not ch.isprintable():
+                return False
+            if self._dead:
+                ch = unicodedata.normalize("NFC", ch + self._dead)
+                self._dead = ""
+            buf.insert_text(pos, ch, len(ch))
+            self.entry.set_position(pos + len(ch))
             return True
         return False
 
