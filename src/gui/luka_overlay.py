@@ -286,6 +286,9 @@ class LukaOverlay(Gtk.Application):
 
         self.entry = Gtk.Entry()
         self.entry.set_placeholder_text("Escribe a Luka…")
+        self.entry.set_width_chars(40)
+        self.entry.set_size_request(380, -1)  # ancho mínimo cómodo (si no, se encoge al contenido)
+        self.entry.set_hexpand(True)
         self.entry.connect("activate", self._on_send)
         self.entry_rev = Gtk.Revealer(transition_type=Gtk.RevealerTransitionType.SLIDE_UP)
         self.entry_rev.set_child(self.entry)
