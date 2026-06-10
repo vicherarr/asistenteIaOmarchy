@@ -354,17 +354,23 @@ class LukaOverlay(Gtk.Application):
         self.answer_rev.set_child(self.answer)
         self.box.append(self.answer_rev)
 
-        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        row.set_halign(Gtk.Align.CENTER)
+        # Fila: punto+estado SIEMPRE centrados (CenterBox los centra respecto al
+        # ancho total), con el botón "Callar" anclado a la derecha para que no
+        # descoloque el punto central.
+        row = Gtk.CenterBox()
+        row.set_hexpand(True)
+
+        center = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         self.dot = Gtk.Box()
         self.dot.add_css_class("dot")
         self.dot.set_valign(Gtk.Align.CENTER)
-        row.append(self.dot)
+        center.append(self.dot)
         self.status = Gtk.Label(label="")
         self.status.add_css_class("status")
         self.status_rev = Gtk.Revealer(transition_type=Gtk.RevealerTransitionType.CROSSFADE)
         self.status_rev.set_child(self.status)
-        row.append(self.status_rev)
+        center.append(self.status_rev)
+        row.set_center_widget(center)
 
         # Botón para callar el TTS: visible solo mientras Luka habla. Llama a
         # POST /cancel, que detiene la reproducción (y aborta lo que se generara).
@@ -375,7 +381,9 @@ class LukaOverlay(Gtk.Application):
         self.silence_btn.connect("clicked", self._on_silence)
         self.silence_rev = Gtk.Revealer(transition_type=Gtk.RevealerTransitionType.CROSSFADE)
         self.silence_rev.set_child(self.silence_btn)
-        row.append(self.silence_rev)
+        self.silence_rev.set_halign(Gtk.Align.END)
+        self.silence_rev.set_valign(Gtk.Align.CENTER)
+        row.set_end_widget(self.silence_rev)
         self.box.append(row)
 
         self.entry = Gtk.Entry()
