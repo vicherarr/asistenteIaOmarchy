@@ -72,6 +72,22 @@ class AssistantService:
             take_screenshot,
             create_document,
         ]
+        # Tool de Gmail: solo se registra si Google está habilitado y hay credenciales
+        # del usuario (~/.config/asistenteia/google/credentials.json). Si no, ni aparece,
+        # y el asistente funciona igual que siempre (retrocompatible).
+        self._gmail_enabled = False
+        if getattr(settings, "GOOGLE_ENABLED", False):
+            try:
+                from src.integrations.google.auth import is_configured
+                from src.integrations.google.gmail import gmail_manager
+                if is_configured():
+                    self.tools.append(gmail_manager)
+                    self._gmail_enabled = True
+                    logger.info("Tool de Gmail registrada (Google configurado).")
+                else:
+                    logger.info("Gmail no registrado: faltan credenciales de Google.")
+            except Exception as e:  # noqa: BLE001 — deps de Google ausentes u otro fallo
+                logger.warning(f"No se pudo registrar la tool de Gmail: {e}")
         # Selección activa de herramientas (vacío = todas → comportamiento normal).
         # Si el usuario elige un subconjunto desde la web/GUI, el modelo solo recibe
         # el contexto (esquemas) de esas tools y se le instruye a usar solo esas.
@@ -99,6 +115,7 @@ class AssistantService:
             "analyze_clipboard_image": "Analiza imagen del portapapeles",
             "take_screenshot": "Captura de pantalla",
             "create_document": "Genera un documento ODT",
+            "gmail_manager": "Correo de Gmail (leer/buscar)",
         }
         # Grupos funcionales para el selector de la UI (menos opciones que 18 tools).
         # La selección efectiva sigue siendo por nombre de tool; los grupos solo agrupan.
@@ -118,6 +135,10 @@ class AssistantService:
             {"key": "musica", "label": "Música", "icon": "🎵",
              "tools": ["play_specific_music"]},
         ]
+        if self._gmail_enabled:
+            self._tool_groups.append(
+                {"key": "correo", "label": "Correo (Gmail)", "icon": "📧",
+                 "tools": ["gmail_manager"]})
         # Para suprimir tool calls que el modelo a veces emite como TEXTO plano (sintaxis
         # Python: nombre(args)) en lugar del formato del motor. Nunca deben llegar al TTS.
         self._tool_names = {t.__name__ for t in self.tools}
