@@ -187,6 +187,20 @@ entry {{
     margin-top: 4px;
 }}
 entry:focus-within {{ border-color: alpha(@accent, 0.7); }}
+
+/* Botón para callar el TTS (aparece solo mientras Luka habla). */
+button.silence {{
+    background-color: alpha(@c_off, 0.16);
+    border: 1px solid alpha(@c_off, 0.35);
+    border-radius: 999px;
+    color: @fg;
+    font-size: 11px;
+    padding: 1px 9px;
+    margin-left: 8px;
+    min-height: 0;
+    box-shadow: none;
+}}
+button.silence:hover {{ background-color: alpha(@c_off, 0.30); }}
 """
 
 
@@ -351,6 +365,17 @@ class LukaOverlay(Gtk.Application):
         self.status_rev = Gtk.Revealer(transition_type=Gtk.RevealerTransitionType.CROSSFADE)
         self.status_rev.set_child(self.status)
         row.append(self.status_rev)
+
+        # Botón para callar el TTS: visible solo mientras Luka habla. Llama a
+        # POST /cancel, que detiene la reproducción (y aborta lo que se generara).
+        self.silence_btn = Gtk.Button(label="🔇 Callar")
+        self.silence_btn.add_css_class("silence")
+        self.silence_btn.set_tooltip_text("Callar a Luka")
+        self.silence_btn.set_valign(Gtk.Align.CENTER)
+        self.silence_btn.connect("clicked", self._on_silence)
+        self.silence_rev = Gtk.Revealer(transition_type=Gtk.RevealerTransitionType.CROSSFADE)
+        self.silence_rev.set_child(self.silence_btn)
+        row.append(self.silence_rev)
         self.box.append(row)
 
         self.entry = Gtk.Entry()
@@ -547,6 +572,19 @@ class LukaOverlay(Gtk.Application):
         except Exception as exc:
             GLib.idle_add(self._append_answer, f"\n[error: {exc}]")
 
+    def _on_silence(self, _btn):
+        # En hilo aparte para no bloquear el loop GTK con la petición HTTP.
+        threading.Thread(target=self._post_cancel, daemon=True).start()
+
+    def _post_cancel(self):
+        try:
+            req = urllib.request.Request(f"{self.base_url}/cancel", data=b"", method="POST")
+            if self.token:
+                req.add_header("X-API-Token", self.token)
+            urllib.request.urlopen(req, context=self._ssl).read()
+        except Exception:
+            pass  # si falla, el estado SSE seguirá reflejando la realidad
+
     def _append_answer(self, chunk: str):
         self._raw_answer += chunk
         self._set_response(self._raw_answer)
@@ -595,6 +633,7 @@ class LukaOverlay(Gtk.Application):
         show_answer = expanded and bool(self.answer_text)
         show_echo = expanded and bool(self.user_text) and not self.input_mode
         show_think = expanded and bool(self.reasoning_text)
+        show_silence = expanded and self.state == "speaking"
         status_txt = STATES[self.state][1] if expanded else ""
 
         self.answer.set_text(self.answer_text)
@@ -605,6 +644,7 @@ class LukaOverlay(Gtk.Application):
         self.echo_rev.set_reveal_child(show_echo)
         self.status.set_text(status_txt)
         self.status_rev.set_reveal_child(bool(status_txt))
+        self.silence_rev.set_reveal_child(show_silence)
         self.entry_rev.set_reveal_child(self.input_mode)
 
         self._pulse = STATES[self.state][2]
