@@ -301,6 +301,7 @@ class LukaOverlay(Gtk.Application):
         self._pulse_on = False
         self._collapsed = True
         self._collapse_id = None
+        self._hidden = False      # oculto por Esc; se reabre con Super+Z (SIGUSR2)
         self._sse = None
         self._theme_monitor = None
 
@@ -427,8 +428,7 @@ class LukaOverlay(Gtk.Application):
         GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR1, self._reload_theme)
         GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, self._quit)
         GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, self._quit)
-        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR2,
-                             lambda *_: GLib.SOURCE_CONTINUE)
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR2, self._show_overlay)
 
     def _quit(self, *_):
         if self._sse:
@@ -487,6 +487,23 @@ class LukaOverlay(Gtk.Application):
         self._schedule_collapse()
         self._refresh()
 
+    # ---- ocultar / mostrar -------------------------------------------------
+    def _hide_overlay(self):
+        # Esc: oculta toda la superficie (no solo el modo escritura). Suelta el
+        # teclado saliendo del modo escritura y desmapea la ventana layer-shell.
+        # Vuelve a aparecer con Super+Z (SIGUSR2, ver _show_overlay).
+        if self.input_mode:
+            self._exit_input()
+        self._hidden = True
+        self.win.set_visible(False)
+
+    def _show_overlay(self, *_):
+        # Reabre tras un Esc. Disparado por SIGUSR2 (Super+Z vía handy-toggle.sh).
+        self._hidden = False
+        self.win.set_visible(True)
+        self.win.present()
+        return GLib.SOURCE_CONTINUE
+
     def _on_focus_lost(self):
         # El entry perdió el foco (p. ej. clic en otra ventana): salir del modo
         # escritura y soltar el teclado. _exit_input ya está guardado contra
@@ -500,7 +517,7 @@ class LukaOverlay(Gtk.Application):
             self._on_send(self.entry)
             return True
         if keyval == Gdk.KEY_Escape:
-            self._exit_input()
+            self._hide_overlay()
             return True
         # Dejar pasar combinaciones con Ctrl/Alt (atajos, pegar, etc.).
         if mods & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK):

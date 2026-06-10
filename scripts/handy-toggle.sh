@@ -24,6 +24,13 @@ fi
 #    si ya hay uno vivo.
 "$PROJECT_DIR/scripts/start-gui.sh"
 
+# 2b. Si el overlay ya estaba vivo pero oculto (el usuario pulsó Esc), pedirle
+#     que se muestre de nuevo con SIGUSR2. Inofensivo si ya estaba visible.
+GUI_PID_FILE="/tmp/asistenteia-gui.pid"
+if [ -f "$GUI_PID_FILE" ]; then
+    kill -USR2 "$(cat "$GUI_PID_FILE")" 2>/dev/null || true
+fi
+
 # 3. Pequeña tregua para que la GUI registre el cambio de estado.
 sleep 0.2
 
