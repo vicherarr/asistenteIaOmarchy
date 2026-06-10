@@ -16,6 +16,7 @@ import asyncio
 import base64
 import logging
 import time
+import unicodedata
 from email.message import EmailMessage
 from email.utils import parseaddr
 
@@ -24,10 +25,20 @@ from src.integrations.google.auth import GoogleAuthError, build_service
 logger = logging.getLogger(__name__)
 
 _MAX_BODY_CHARS = 1500   # tope de cuerpo que se devuelve al modelo (él lo resume para el TTS)
-_MAX_RESULTS_CAP = 15    # nunca pedir más de esto al API en un listado
+_MAX_RESULTS_CAP = 20    # nunca pedir más de esto al API en un listado
+_DEFAULT_RESULTS = 8     # cuántos traer si el modelo no especifica
 
-# Caché del último listado: nº (1..N) -> message_id. Permite "lee el 2" tras un "list/search".
+# Caché del último listado. Permite resolver una referencia ("lee el 2", "el de Víctor",
+# "el del curriculum") tras un list/search. `_last_ids` mantiene solo los IDs en orden
+# (compat); `_last_rows` añade remitente y asunto para resolver por nombre/asunto.
 _last_ids: list[str] = []
+_last_rows: list[dict] = []   # [{"id", "sender", "subject"}], mismo orden que _last_ids
+
+
+def _norm(s: str) -> str:
+    """Minúsculas sin acentos, para casar referencias por voz ('víctor' ~ 'victor')."""
+    s = unicodedata.normalize("NFKD", s or "")
+    return "".join(c for c in s if not unicodedata.combining(c)).lower().strip()
 
 # --- Acción pendiente de confirmación (enviar/responder/papelera/archivar) ---------
 # Las acciones IRREVERSIBLES no se ejecutan al instante: la tool deja aquí una acción
@@ -113,7 +124,7 @@ def _extract_plain_text(payload: dict) -> str:
 
 def _list_messages(action: str, query: str, max_results: int) -> str:
     svc = _service()
-    n = max(1, min(int(max_results or 5), _MAX_RESULTS_CAP))
+    n = max(1, min(int(max_results or _DEFAULT_RESULTS), _MAX_RESULTS_CAP))
     params = {"userId": "me", "maxResults": n}
     if action == "search":
         params["q"] = query or ""
@@ -122,10 +133,14 @@ def _list_messages(action: str, query: str, max_results: int) -> str:
     resp = svc.users().messages().list(**params).execute()
     ids = [m["id"] for m in resp.get("messages", [])]
 
-    global _last_ids
+    global _last_ids, _last_rows
     _last_ids = ids
+    _last_rows = []
     if not ids:
-        return "No hay correos que coincidan." if action == "search" else "La bandeja de entrada está vacía."
+        if action == "search":
+            return (f"No encontré correos para «{query}». Prueba con términos más amplios o "
+                    "distintos (un nombre de remitente, una palabra del asunto, o sin filtros).")
+        return "La bandeja de entrada está vacía."
 
     lines = []
     for i, mid in enumerate(ids, start=1):
@@ -139,22 +154,59 @@ def _list_messages(action: str, query: str, max_results: int) -> str:
         sender = _sender_short(_header(p, "From"))
         subject = _header(p, "Subject") or "(sin asunto)"
         snippet = (msg.get("snippet", "") or "").strip()
+        _last_rows.append({"id": mid, "sender": sender, "subject": subject})
         lines.append(f"{i}. {mark}{sender} — {subject}\n   {snippet[:140]}")
     header = f"{len(ids)} correos" + (f" para «{query}»" if action == "search" else " recientes") + ":"
-    return header + "\n" + "\n".join(lines) + "\n(Di 'lee el N' para abrir uno.)"
+    return (header + "\n" + "\n".join(lines)
+            + "\n(Para abrir uno: action='read' con el NÚMERO mostrado, p.ej. message_id='2'.)")
+
+
+def _resolve_ref(ref: str) -> tuple[str | None, str]:
+    """Resuelve una referencia de usuario a un message_id real.
+
+    Acepta, por orden: número del último listado ("2"), el id real de Gmail, el id
+    exacto de una fila listada, o una coincidencia por remitente/asunto ("el de Víctor",
+    "el del curriculum"). Devuelve (id, "") si resuelve, o (None, mensaje_accionable)
+    para que el modelo sepa exactamente qué hacer (no un error técnico que reintente).
+    """
+    ref = str(ref or "").strip()
+    if not ref:
+        return None, ("Indica a qué correo te refieres: un número del último listado, "
+                      "el remitente o una palabra del asunto.")
+    # 1) Número del último listado.
+    if ref.isdigit():
+        if not _last_ids:
+            return None, "Aún no he listado correos. Usa action='list' o 'search' primero."
+        idx = int(ref) - 1
+        if not (0 <= idx < len(_last_ids)):
+            return None, (f"Solo hay {len(_last_ids)} correos en el último listado "
+                          f"(del 1 al {len(_last_ids)}). Di un número de ese rango o vuelve a buscar.")
+        return _last_ids[idx], ""
+    # 2) Id exacto de una fila ya listada.
+    for row in _last_rows:
+        if row["id"] == ref:
+            return ref, ""
+    # 3) Coincidencia por remitente o asunto del último listado (sin acentos, parcial).
+    nref = _norm(ref)
+    if nref:
+        for row in _last_rows:                       # prioridad: remitente
+            if nref in _norm(row["sender"]):
+                return row["id"], ""
+        for row in _last_rows:                       # luego: asunto
+            if nref in _norm(row["subject"]):
+                return row["id"], ""
+    # 4) Parece un id real de Gmail (hex largo) aunque no esté en el listado.
+    if len(ref) >= 12 and all(c in "0123456789abcdef" for c in ref.lower()):
+        return ref, ""
+    return None, (f"No encuentro «{ref}» entre los correos listados. "
+                  "Di el número que aparece en la lista, o busca de nuevo.")
 
 
 def _read_message(message_id: str) -> str:
     svc = _service()
-    mid = message_id.strip()
-    # Permitir referirse por número del último listado ("lee el 2").
-    if mid.isdigit():
-        idx = int(mid) - 1
-        if not (0 <= idx < len(_last_ids)):
-            return f"No tengo un correo número {mid}. Lista o busca correos primero."
-        mid = _last_ids[idx]
-    if not mid:
-        return "Indica qué correo leer (un número del último listado o un id)."
+    mid, err = _resolve_ref(message_id)
+    if err:
+        return err
 
     msg = svc.users().messages().get(userId="me", id=mid, format="full").execute()
     p = msg.get("payload", {})
@@ -167,15 +219,6 @@ def _read_message(message_id: str) -> str:
     return (f"De: {sender}\nAsunto: {subject}\nFecha: {date}\n\n{body}"
             if body else
             f"De: {sender}\nAsunto: {subject}\nFecha: {date}\n\n(Sin cuerpo de texto legible.)")
-
-
-def _resolve_id(ref: str) -> str | None:
-    """Resuelve una referencia a message_id: un número del último listado o un id literal."""
-    ref = (ref or "").strip()
-    if ref.isdigit():
-        idx = int(ref) - 1
-        return _last_ids[idx] if 0 <= idx < len(_last_ids) else None
-    return ref or None
 
 
 def _raw(to: str, subject: str, body: str, in_reply_to: str = "", references: str = "") -> str:
@@ -201,9 +244,9 @@ def _stage_send(to: str, subject: str, body: str) -> tuple[dict | None, str]:
 
 
 def _stage_reply(message_id: str, body: str) -> tuple[dict | None, str]:
-    mid = _resolve_id(message_id)
-    if not mid:
-        return None, "No sé a qué correo responder. Lista o lee uno primero."
+    mid, err = _resolve_ref(message_id)
+    if err:
+        return None, err
     svc = _service()
     orig = svc.users().messages().get(
         userId="me", id=mid, format="metadata",
@@ -222,10 +265,10 @@ def _stage_reply(message_id: str, body: str) -> tuple[dict | None, str]:
 
 
 def _stage_label(kind: str, message_id: str) -> tuple[dict | None, str]:
-    mid = _resolve_id(message_id)
+    mid, err = _resolve_ref(message_id)
+    if err:
+        return None, err
     verb = "mover a la papelera" if kind == "trash" else "archivar"
-    if not mid:
-        return None, f"No sé qué correo {verb}. Lista o lee uno primero."
     svc = _service()
     meta = svc.users().messages().get(
         userId="me", id=mid, format="metadata", metadataHeaders=["From", "Subject"],

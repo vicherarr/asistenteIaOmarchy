@@ -34,6 +34,7 @@ def _fake_service(messages: list[dict], full: dict | None = None) -> MagicMock:
 @pytest.fixture(autouse=True)
 def _reset_cache():
     gmail._last_ids = []
+    gmail._last_rows = []
     gmail._pending = None
     yield
     gmail._pending = None
@@ -92,10 +93,61 @@ async def test_read_accepts_integer_message_id():
 
 
 @pytest.mark.asyncio
-async def test_read_invalid_index_is_friendly():
+async def test_read_without_listing_first_is_friendly():
+    # Pedir por número sin haber listado: mensaje accionable, no error técnico.
     with patch.object(gmail, "_service", return_value=_fake_service([])):
         out = await gmail.gmail_manager("read", message_id="9")
-    assert "número 9" in out
+    assert "listado" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_read_out_of_range_says_range():
+    messages = [{"id": "a1", "labelIds": ["INBOX"], "snippet": "s",
+                 "payload": {"headers": [{"name": "From", "value": "Ana <ana@x.com>"},
+                                         {"name": "Subject", "value": "Hola"}]}}]
+    with patch.object(gmail, "_service", return_value=_fake_service(messages)):
+        await gmail.gmail_manager("list")
+        out = await gmail.gmail_manager("read", message_id="9")
+    assert "del 1 al 1" in out          # solo había 1 correo listado
+
+
+@pytest.mark.asyncio
+async def test_read_by_sender_name_accent_insensitive():
+    messages = [{"id": "a1", "labelIds": ["INBOX"], "snippet": "s",
+                 "payload": {"headers": [{"name": "From", "value": "pepe@y.com"},
+                                         {"name": "Subject", "value": "Pago"}]}},
+                {"id": "b2", "labelIds": ["INBOX"], "snippet": "s",
+                 "payload": {"headers": [{"name": "From", "value": "Víctor Herrera <v@x.com>"},
+                                         {"name": "Subject", "value": "Currículum"}]}}]
+    full = {"payload": {"headers": [{"name": "From", "value": "Víctor Herrera <v@x.com>"},
+                                    {"name": "Subject", "value": "Currículum"},
+                                    {"name": "Date", "value": "hoy"}],
+                        "mimeType": "text/plain", "body": {"data": _b64("Mi CV.")}}}
+    svc = _fake_service(messages, full=full)
+    with patch.object(gmail, "_service", return_value=svc):
+        await gmail.gmail_manager("list")
+        out = await gmail.gmail_manager("read", message_id="victor")   # sin tilde
+    assert "Currículum" in out
+    assert gmail._resolve_ref("victor")[0] == "b2"
+
+
+@pytest.mark.asyncio
+async def test_read_by_subject_word():
+    messages = [{"id": "a1", "labelIds": ["INBOX"], "snippet": "s",
+                 "payload": {"headers": [{"name": "From", "value": "pepe@y.com"},
+                                         {"name": "Subject", "value": "Factura de marzo"}]}}]
+    with patch.object(gmail, "_service", return_value=_fake_service(messages)):
+        await gmail.gmail_manager("list")
+    assert gmail._resolve_ref("factura")[0] == "a1"
+
+
+@pytest.mark.asyncio
+async def test_search_no_results_is_helpful():
+    svc = MagicMock()
+    svc.users.return_value.messages.return_value.list.return_value.execute.return_value = {"messages": []}
+    with patch.object(gmail, "_service", return_value=svc):
+        out = await gmail.gmail_manager("search", query="from:nadie")
+    assert "amplios" in out.lower() or "distintos" in out.lower()
 
 
 @pytest.mark.asyncio
@@ -113,7 +165,8 @@ async def test_body_truncation():
                                     {"name": "Subject", "value": "S"}],
                         "mimeType": "text/plain", "body": {"data": _b64(long_body)}}}
     with patch.object(gmail, "_service", return_value=_fake_service(messages, full=full)):
-        out = await gmail.gmail_manager("read", message_id="abc123")
+        # Id real de Gmail (hex largo): se acepta tal cual aunque no se haya listado antes.
+        out = await gmail.gmail_manager("read", message_id="18c9a1b2c3d4e5f6")
     assert "truncado" in out
 
 

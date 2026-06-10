@@ -80,8 +80,10 @@ class Settings(BaseSettings):
     EXLLAMA_THINKING: bool = False
     # True si el modelo es multimodal (p.ej. Qwen3-VL): habilita enviar imágenes.
     EXLLAMA_VISION: bool = False
-    # Tope de iteraciones del bucle agéntico (modelo→tool→modelo→…).
-    EXLLAMA_MAX_TOOL_ROUNDS: int = 6
+    # Tope de iteraciones del bucle agéntico (modelo→tool→modelo→…). Margen para que un
+    # error recuperable (p.ej. referencia de correo que falla y el modelo corrige listando)
+    # no agote el presupuesto y deje al usuario sin respuesta.
+    EXLLAMA_MAX_TOOL_ROUNDS: int = 8
     # --- Lifecycle del sidecar (lo gestiona la CLI/shell, no la app Python) ---
     # Si True, "asistenteia start" arranca/para TabbyAPI automáticamente cuando
     # AI_ENGINE="exllama" (igual que LiteRT se carga solo dentro del proceso).
