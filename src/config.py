@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     # --- Motor ExLlamaV3 vía TabbyAPI (AI_ENGINE="exllama") ---
     # Sidecar OpenAI-compatible. Solo se usa si AI_ENGINE="exllama".
     EXLLAMA_BASE_URL: str = "http://127.0.0.1:5000"
-    EXLLAMA_MODEL: str = "Qwen3-8B-exl3-4bpw"
+    EXLLAMA_MODEL: str = "Qwen3.5-9B-exl3-4.00bpw"
     EXLLAMA_API_KEY: str = ""            # vacío si TabbyAPI corre con disable_auth
     EXLLAMA_TIMEOUT: float = 120.0
     EXLLAMA_MAX_TOKENS: int = 1024

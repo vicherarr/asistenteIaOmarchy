@@ -8,8 +8,8 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Presupuesto único de texto para lecturas en vivo. El modelo tiene ~4096 tokens de
-# contexto, así que mantenemos las lecturas compactas (~830 tokens).
+# Presupuesto único de texto para lecturas en vivo. Aunque el contexto del modelo sea
+# amplio, mantenemos las lecturas compactas por latencia y para que el TTS resuma bien.
 READ_CHAR_BUDGET = 2500
 # Por debajo de este umbral de texto limpio, la página es casi seguro visual
 # (SPA/canvas/imágenes/muro) y caemos automáticamente a análisis con visión.

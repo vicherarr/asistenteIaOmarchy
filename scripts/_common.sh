@@ -379,6 +379,9 @@ model:
   model_name: $model_name
   max_seq_len: $max_seq
   cache_size: $max_seq
+  # Caché KV cuantizada a 8 bits: ~la mitad de VRAM que FP16 con pérdida de calidad
+  # mínima, así cabe MÁS contexto en la misma tarjeta (p.ej. 32k en 8 GiB).
+  cache_mode: Q8
   gpu_split_auto: true
   inline_model_loading: false
   vision: $vbool
