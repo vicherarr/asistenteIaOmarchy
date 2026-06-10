@@ -75,6 +75,23 @@ async def test_read_by_index_uses_last_list():
 
 
 @pytest.mark.asyncio
+async def test_read_accepts_integer_message_id():
+    # El modelo a veces pasa el nº como entero (message_id=1) en lugar de "1": no debe romper.
+    messages = [{"id": "a1", "labelIds": ["INBOX"], "snippet": "s",
+                 "payload": {"headers": [{"name": "From", "value": "Ana <ana@x.com>"},
+                                         {"name": "Subject", "value": "Hola"}]}}]
+    full = {"payload": {"headers": [{"name": "From", "value": "Ana <ana@x.com>"},
+                                    {"name": "Subject", "value": "Hola"},
+                                    {"name": "Date", "value": "hoy"}],
+                        "mimeType": "text/plain", "body": {"data": _b64("Cuerpo.")}}}
+    svc = _fake_service(messages, full=full)
+    with patch.object(gmail, "_service", return_value=svc):
+        await gmail.gmail_manager("list")
+        out = await gmail.gmail_manager("read", message_id=1)
+    assert "Asunto: Hola" in out
+
+
+@pytest.mark.asyncio
 async def test_read_invalid_index_is_friendly():
     with patch.object(gmail, "_service", return_value=_fake_service([])):
         out = await gmail.gmail_manager("read", message_id="9")

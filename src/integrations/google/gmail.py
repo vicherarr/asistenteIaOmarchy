@@ -295,7 +295,12 @@ async def gmail_manager(action: str, query: str = "", message_id: str = "", max_
     action="trash": mueve a la papelera el correo `message_id`. Pide confirmación por voz.
     action="archive": archiva (saca de la bandeja) el correo `message_id`. Pide confirmación por voz.
     """
-    act = (action or "").strip().lower()
+    act = str(action or "").strip().lower()
+    # El modelo a veces pasa el nº de correo como entero (message_id=4) en vez de "4";
+    # normalizar a str evita que helpers que hacen .strip() revienten con AttributeError.
+    query = str(query or "")
+    message_id = str(message_id) if message_id != "" else ""
+    to, subject, body = str(to or ""), str(subject or ""), str(body or "")
     try:
         if act in ("list", "inbox", "recientes", ""):
             return await asyncio.to_thread(_list_messages, "list", query, max_results)
