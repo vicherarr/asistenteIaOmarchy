@@ -53,3 +53,14 @@ scratch/
 
 # Certificados locales
 config/certs/
+
+# Credenciales y tokens de Google (OAuth). NUNCA versionar BAJO NINGÚN CONCEPTO:
+# credentials.json es el client secret del usuario; token.json es su sesión activa.
+# Lo normal es que vivan en ~/.config/asistenteia/google/ (fuera del repo), pero
+# se protege también cualquier copia dentro del proyecto.
+credentials.json
+token.json
+client_secret*.json
+**/credentials.json
+**/token.json
+config/google/

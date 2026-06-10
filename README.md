@@ -373,9 +373,58 @@ KOKORO_LANG=e                 # e (español) | a (inglés US) | b (inglés UK)
 WAKE_WORD_ENABLED=True
 WAKE_WORD_THRESHOLD=0.10      # más bajo = más sensible
 API_TOKEN=                    # el instalador genera uno seguro
+GOOGLE_ENABLED=True          # tools de Gmail (requiere credenciales propias, ver abajo)
 ```
 
 </details>
+
+---
+
+## 📧 Integración con Gmail (opcional)
+
+Luka puede leer, buscar y (con confirmación por voz) enviar correos de **tu propia
+cuenta** de Gmail. Es **gratis**: la Gmail API no factura y no necesitas tarjeta.
+
+> **Privacidad y secretos.** Cada usuario usa **sus propias** credenciales de Google
+> (modelo *BYO – Bring Your Own*). El proyecto **NUNCA** incluye ni debes subir a git
+> tu `credentials.json` (client secret) ni tu `token.json` (sesión). Ambos viven en
+> `~/.config/asistenteia/google/`, fuera del repo, y están en `.gitignore`.
+
+### 1. Crear las credenciales en Google Cloud (una vez)
+
+1. Entra en [Google Cloud Console](https://console.cloud.google.com/) y crea un
+   **proyecto** nuevo (gratis, sin tarjeta).
+2. **APIs y servicios → Biblioteca →** busca **Gmail API** y pulsa **Habilitar**.
+3. **APIs y servicios → Pantalla de consentimiento de OAuth**:
+   - Tipo de usuario: **External**.
+   - Rellena nombre de la app y tu correo.
+   - **Publicación:** pásala a **«In production»** (evita que el token caduque cada
+     7 días). Como es para ti solo, **no necesitas verificación de Google**: al iniciar
+     sesión saldrá un aviso de «app no verificada» → *Avanzado → Continuar*.
+4. **APIs y servicios → Credenciales → Crear credenciales → ID de cliente de OAuth**:
+   - Tipo de aplicación: **App de escritorio (Desktop app)**.
+   - Descarga el JSON.
+5. Guarda ese JSON como:
+   ```
+   ~/.config/asistenteia/google/credentials.json
+   ```
+
+### 2. Iniciar sesión (una vez)
+
+```bash
+asistenteia google-auth
+```
+
+Abre el navegador, das consentimiento, y se guarda `token.json` (permisos `0600`).
+A partir de ahí el servicio refresca la sesión solo, sin volver a abrir el navegador.
+
+### 3. Verificar
+
+```bash
+cd ~/.asistenteia && venv/bin/python scripts/test-gmail-auth.py
+```
+
+Debe mostrar tu correo y el asunto del último mensaje (no envía ni modifica nada).
 
 ---
 

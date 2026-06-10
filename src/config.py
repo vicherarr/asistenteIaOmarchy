@@ -124,6 +124,16 @@ class Settings(BaseSettings):
     WAKE_WORD_MODEL_DIR: str = "models/sherpa-kws"
     WAKE_WORD_THRESHOLD: float = 0.10
     
+    # --- Integraciones Google (Gmail; Calendar/Drive en el futuro) ---
+    # Desactivado por defecto: si no hay credenciales, las tools de Google NI SIQUIERA
+    # se registran y el asistente funciona igual que siempre (100% retrocompatible).
+    # credentials.json (client secret OAuth de "Desktop app") lo aporta el USUARIO desde
+    # su propio proyecto de Google Cloud; token.json lo genera 'asistenteia google-auth'.
+    # Ambos viven fuera del repo (~/.config/asistenteia/google) y NUNCA se versionan.
+    GOOGLE_ENABLED: bool = True
+    GOOGLE_CREDENTIALS_PATH: str = "~/.config/asistenteia/google/credentials.json"
+    GOOGLE_TOKEN_PATH: str = "~/.config/asistenteia/google/token.json"
+
     # Paths
     PROJECT_ROOT: Path = Path(__file__).parent.parent
     TEMP_DIR: Path = Path(os.getenv("TMPDIR", "/tmp")) / "asistenteia"

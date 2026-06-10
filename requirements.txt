@@ -23,4 +23,9 @@ sentencepiece>=0.2.0
 pypinyin>=0.50.0
 evdev>=1.7.0
 dbus-next>=0.2.3
+# Integración con Google (Gmail; Calendar/Drive en el futuro)
+google-api-python-client>=2.140.0
+google-auth>=2.34.0
+google-auth-oauthlib>=1.2.0
+google-auth-httplib2>=0.2.0
 

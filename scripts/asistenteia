@@ -75,6 +75,8 @@ AsistenteIA - uso: asistenteia <comando>
   logs         Muestra los logs en tiempo real
   service ...  Gestiona el servicio systemd: install | enable | disable | status | uninstall
   keybindings  (Re)configura los atajos Super+Z / Super+X
+  google-auth  Inicia sesión con Google una vez (Gmail). Abre el navegador y guarda
+               el token en ~/.config/asistenteia/google/. Requiere credentials.json.
   update       Actualiza el código (git pull) y sincroniza dependencias
   uninstall    Desinstala AsistenteIA
   help         Esta ayuda
@@ -688,6 +690,11 @@ PY
         else
             echo "Hecho. Se aplicará al arrancar (asistenteia start o Super + Z)."
         fi
+        ;;
+    google-auth)
+        # Alta interactiva del token OAuth de Google (abre el navegador una vez).
+        # Se ejecuta desde PROJECT_DIR para que 'src' sea importable con -m.
+        ( cd "$PROJECT_DIR" && "$PROJECT_DIR/venv/bin/python" -m src.integrations.google.auth )
         ;;
     update)
         if [ -d "$PROJECT_DIR/.git" ]; then
