@@ -115,7 +115,7 @@ class AssistantService:
             "analyze_clipboard_image": "Analiza imagen del portapapeles",
             "take_screenshot": "Captura de pantalla",
             "create_document": "Genera un documento ODT",
-            "gmail_manager": "Correo de Gmail (leer/buscar)",
+            "gmail_manager": "Correo de Gmail (leer/enviar/responder)",
         }
         # Grupos funcionales para el selector de la UI (menos opciones que 18 tools).
         # La selección efectiva sigue siendo por nombre de tool; los grupos solo agrupan.
@@ -427,6 +427,38 @@ class AssistantService:
             return False
         return True
 
+    # Sí/no para confirmar acciones de correo irreversibles (enviar/responder/papelera/
+    # archivar). Se comprueba ANTES de llamar al modelo: si hay una acción de Gmail
+    # pendiente y el usuario afirma o niega, se resuelve aquí sin pasar por el LLM.
+    _YES_RE = re.compile(
+        r"\b(s[ií]|vale|venga|adelante|claro|correcto|confirmo|confirmado|hazlo|"
+        r"env[ií]al[oa]|m[áa]ndal[oa]|de acuerdo|por supuesto|ok|okay|dale|perfecto)\b",
+        re.IGNORECASE)
+    _NO_RE = re.compile(
+        r"\b(no|nop|para|cancela|cancelar|d[ée]jal[oa]|olv[ií]dal[oa]|mejor no|"
+        r"espera|negativo|anula|anular)\b",
+        re.IGNORECASE)
+
+    async def _resolve_gmail_confirmation(self, text: str) -> Optional[str]:
+        """Si hay una acción de Gmail pendiente, interpreta el sí/no del usuario.
+
+        Devuelve el texto de resultado (a hablar/mostrar) si la confirmación se
+        resuelve, o None si no hay nada pendiente o el turno es ambiguo (en cuyo
+        caso el flujo normal sigue y la acción pendiente caduca sola en ~2 min).
+        """
+        if not self._gmail_enabled:
+            return None
+        from src.integrations.google.gmail import peek_pending, run_pending, clear_pending
+        if peek_pending() is None:
+            return None
+        # Negar tiene prioridad: "no, mejor no" no debe ejecutar nada.
+        if self._NO_RE.search(text):
+            clear_pending()
+            return "De acuerdo, lo dejo."
+        if self._YES_RE.search(text):
+            return await run_pending()
+        return None
+
     def _strip_think_for_tts(self, text: str) -> str:
         """Devuelve solo el texto hablable, quitando el razonamiento del modelo.
 
@@ -509,6 +541,18 @@ class AssistantService:
         conversation_history.append(ChatMessage(role="user", content=text))
         if len(conversation_history) > max_history:
             conversation_history[:] = conversation_history[-max_history:]
+
+        # Confirmación de acción de correo pendiente: si en el turno anterior la tool
+        # de Gmail dejó algo a confirmar (enviar/responder/papelera/archivar), este turno
+        # es el sí/no. Se resuelve sin pasar por el modelo y se responde directamente.
+        gmail_confirm = await self._resolve_gmail_confirmation(text)
+        if gmail_confirm is not None:
+            conversation_history.append(ChatMessage(role="assistant", content=gmail_confirm))
+            if self._is_speakable(gmail_confirm):
+                await queue_text.put(gmail_confirm)
+            await queue_text.put(None)  # cerrar el pipeline de síntesis
+            yield gmail_confirm
+            return
 
         # Cargar system prompt desde archivo
         prompt_path = settings.PROJECT_ROOT / "config" / "system_prompt.txt"

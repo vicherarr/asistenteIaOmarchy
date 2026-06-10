@@ -1,4 +1,4 @@
-"""Tests de la tool de Gmail (Fase 1: list/search/read) con la API mockeada."""
+"""Tests de la tool de Gmail (Fase 1: list/search/read; Fase 2: send/reply/draft/trash/archive) con la API mockeada."""
 import base64
 from unittest.mock import MagicMock, patch
 
@@ -34,7 +34,9 @@ def _fake_service(messages: list[dict], full: dict | None = None) -> MagicMock:
 @pytest.fixture(autouse=True)
 def _reset_cache():
     gmail._last_ids = []
+    gmail._pending = None
     yield
+    gmail._pending = None
 
 
 @pytest.mark.asyncio
@@ -96,3 +98,102 @@ async def test_body_truncation():
     with patch.object(gmail, "_service", return_value=_fake_service(messages, full=full)):
         out = await gmail.gmail_manager("read", message_id="abc123")
     assert "truncado" in out
+
+
+# --- Fase 2: escritura con confirmación ---
+
+@pytest.mark.asyncio
+async def test_send_stages_and_run_pending_executes():
+    svc = MagicMock()
+    with patch.object(gmail, "_service", return_value=svc):
+        out = await gmail.gmail_manager("send", to="ana@x.com", subject="Hola", body="Qué tal")
+        assert "¿Lo envío?" in out
+        assert gmail.peek_pending() is not None      # acción a la espera de confirmación
+        svc.users.return_value.messages.return_value.send.assert_not_called()  # aún no se envía
+        result = await gmail.run_pending()
+    assert "enviado" in result.lower()
+    assert gmail.peek_pending() is None              # consumida tras ejecutar
+    svc.users.return_value.messages.return_value.send.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_send_without_valid_address_does_not_stage():
+    with patch.object(gmail, "_service", return_value=MagicMock()):
+        out = await gmail.gmail_manager("send", to="ana", subject="Hola", body="x")
+    assert "válida" in out
+    assert gmail.peek_pending() is None
+
+
+@pytest.mark.asyncio
+async def test_reply_resolves_recipient_from_listed_message():
+    messages = [{"id": "a1", "threadId": "t1", "labelIds": ["INBOX"], "snippet": "s",
+                 "payload": {"headers": [{"name": "From", "value": "Ana <ana@x.com>"},
+                                         {"name": "Subject", "value": "Reunión"},
+                                         {"name": "Message-ID", "value": "<m1@x>"}]}}]
+    svc = _fake_service(messages)
+    with patch.object(gmail, "_service", return_value=svc):
+        await gmail.gmail_manager("list")
+        out = await gmail.gmail_manager("reply", message_id="1", body="Vale")
+    assert "¿La envío?" in out
+    pending = gmail.peek_pending()
+    assert pending["to"] == "Ana <ana@x.com>"
+    assert pending["subject"] == "Re: Reunión"
+    assert pending["thread_id"] == "t1"
+    assert pending["in_reply_to"] == "<m1@x>"
+
+
+@pytest.mark.asyncio
+async def test_trash_stages_and_executes():
+    messages = [{"id": "a1", "labelIds": ["INBOX"], "snippet": "s",
+                 "payload": {"headers": [{"name": "From", "value": "Ana <ana@x.com>"},
+                                         {"name": "Subject", "value": "Spam"}]}}]
+    svc = _fake_service(messages)
+    with patch.object(gmail, "_service", return_value=svc):
+        await gmail.gmail_manager("list")
+        out = await gmail.gmail_manager("trash", message_id="1")
+        assert "papelera" in out.lower()
+        result = await gmail.run_pending()
+    assert "papelera" in result.lower()
+    svc.users.return_value.messages.return_value.trash.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_archive_removes_inbox_label():
+    messages = [{"id": "a1", "labelIds": ["INBOX"], "snippet": "s",
+                 "payload": {"headers": [{"name": "From", "value": "a@b.c"},
+                                         {"name": "Subject", "value": "X"}]}}]
+    svc = _fake_service(messages)
+    with patch.object(gmail, "_service", return_value=svc):
+        await gmail.gmail_manager("list")
+        await gmail.gmail_manager("archive", message_id="1")
+        await gmail.run_pending()
+    modify = svc.users.return_value.messages.return_value.modify
+    modify.assert_called_once()
+    assert modify.call_args.kwargs["body"] == {"removeLabelIds": ["INBOX"]}
+
+
+@pytest.mark.asyncio
+async def test_draft_does_not_require_confirmation():
+    svc = MagicMock()
+    with patch.object(gmail, "_service", return_value=svc):
+        out = await gmail.gmail_manager("draft", to="ana@x.com", subject="Hola", body="x")
+    assert "borrador" in out.lower()
+    assert gmail.peek_pending() is None              # los borradores no se confirman
+    svc.users.return_value.drafts.return_value.create.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_pending_expires_after_ttl(monkeypatch):
+    with patch.object(gmail, "_service", return_value=MagicMock()):
+        await gmail.gmail_manager("send", to="ana@x.com", subject="Hola", body="x")
+    assert gmail.peek_pending() is not None
+    # Avanzar el reloj más allá del TTL: la acción debe descartarse sola.
+    monkeypatch.setattr(gmail.time, "monotonic",
+                        lambda: gmail._pending_ts + gmail._PENDING_TTL + 1)
+    assert gmail.peek_pending() is None
+
+
+@pytest.mark.asyncio
+async def test_run_pending_with_nothing_staged():
+    out = await gmail.run_pending()
+    assert "pendiente" in out.lower()
