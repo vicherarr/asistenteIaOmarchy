@@ -129,6 +129,9 @@ class AssistantService:
         self._tool_call_re = re.compile(r'\b(?:' + _names + r')\s*\([^)]*\)?')
         # Llamada genérica que ocupa todo el fragmento: "algo(arg=...)" / "algo(".
         self._generic_call_re = re.compile(r'^\s*[A-Za-z_]\w*\s*\([^)]*\)?\s*$')
+        # Bloques de razonamiento <think>...</think> que algunos modelos (Gemma vía
+        # LiteRT) emiten en el stream: se MUESTRAN en pantalla pero NUNCA se hablan.
+        self._think_re = re.compile(r'<think>.*?</think>', re.DOTALL)
 
         # Semilla del modo enfocado desde el .env (ASSISTANT_DEFAULT_TOOLS). Sintaxis:
         #   - nombres sueltos => lista blanca (solo esas).
@@ -399,6 +402,30 @@ class AssistantService:
             return False
         return True
 
+    def _strip_think_for_tts(self, text: str) -> str:
+        """Devuelve solo el texto hablable, quitando el razonamiento del modelo.
+
+        Modelos con razonamiento EXPLÍCITO en el stream (Gemma vía LiteRT) emiten
+        `<think>razonamiento</think>respuesta`. El razonamiento se muestra en la GUI
+        pero no debe hablarse. Pensado para llamarse con el texto acumulado en cada
+        chunk: el resultado crece de forma monótona como prefijo, así que el llamante
+        solo necesita reproducir lo nuevo.
+        """
+        # Fuera los bloques de razonamiento ya cerrados.
+        text = self._think_re.sub("", text)
+        # Un <think> abierto sin cerrar = razonamiento aún en streaming: descartar
+        # ese marcador y todo lo que le sigue (todavía no es respuesta).
+        open_idx = text.find("<think>")
+        if open_idx != -1:
+            return text[:open_idx]
+        # Retener un "<think>" partido entre chunks (p.ej. la cola "...<thi") para no
+        # hablar media etiqueta ni adelantar texto que aún podría ser razonamiento.
+        marker = "<think>"
+        for k in range(len(marker) - 1, 0, -1):
+            if text.endswith(marker[:k]):
+                return text[:-k]
+        return text
+
     @staticmethod
     def _is_meaningful_response(cleaned_text: str, clean_stream: bool) -> bool:
         """¿El texto del modelo es una respuesta real (no residuo de tool call)?
@@ -475,6 +502,8 @@ class AssistantService:
         leads_reasoning = getattr(self.litert, "leads_with_reasoning", False)
         tts_open = not leads_reasoning
         think_open_sent = False  # apertura <think> sintética para el display (ver más abajo)
+        speakable_fed = 0  # chars de texto hablable ya pasados al pipeline de TTS (modelos
+        # con razonamiento explícito <think>...</think> en el stream, p.ej. LiteRT)
 
         try:
             # Primera llamada al modelo
@@ -494,13 +523,23 @@ class AssistantService:
                 )
                 
                 if not is_tool_call:
-                    # El razonamiento (antes de </think>) no se habla; en cuanto aparece el
-                    # cierre, se abre el TTS y se siembra el buffer con la respuesta real.
-                    if not tts_open and "</think>" in accumulated_text:
-                        tts_open = True
-                        sentence_buffer = accumulated_text.split("</think>", 1)[1]
-                    elif tts_open:
-                        sentence_buffer += chunk
+                    if leads_reasoning:
+                        # Razonamiento IMPLÍCITO: el stream EMPIEZA dentro del <think> (la
+                        # apertura la inyecta la plantilla) y solo llega el cierre </think>.
+                        # No se habla nada hasta pasarlo; entonces se siembra con la respuesta.
+                        if not tts_open and "</think>" in accumulated_text:
+                            tts_open = True
+                            sentence_buffer = accumulated_text.split("</think>", 1)[1]
+                        elif tts_open:
+                            sentence_buffer += chunk
+                    else:
+                        # Razonamiento EXPLÍCITO (<think>...</think> en el stream) o sin
+                        # razonamiento: reconstruimos el texto hablable sin los bloques de
+                        # razonamiento y alimentamos solo la parte nueva.
+                        speakable = self._strip_think_for_tts(accumulated_text)
+                        if len(speakable) > speakable_fed:
+                            sentence_buffer += speakable[speakable_fed:]
+                            speakable_fed = len(speakable)
                     if tts_open:
                         sentences, sentence_buffer = self._extract_sentences(sentence_buffer)
                         for s in sentences:

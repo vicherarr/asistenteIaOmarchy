@@ -105,6 +105,40 @@ def test_extract_sentences_remaining(service):
     assert remaining == " Texto incompleto"
 
 
+def test_strip_think_removes_closed_block(service):
+    """Quita un bloque <think>...</think> cerrado, deja solo la respuesta."""
+    out = service._strip_think_for_tts("<think>razono mucho</think>Hola mundo")
+    assert out == "Hola mundo"
+
+
+def test_strip_think_drops_unclosed_block(service):
+    """Un <think> abierto sin cerrar (razonamiento aún en streaming) se descarta entero."""
+    assert service._strip_think_for_tts("<think>razonando todavía") == ""
+
+
+def test_strip_think_holds_partial_open_tag(service):
+    """Una etiqueta <think> partida entre chunks no debe hablarse a medias."""
+    assert service._strip_think_for_tts("Respuesta<thi") == "Respuesta"
+
+
+def test_strip_think_passthrough_without_reasoning(service):
+    """Sin razonamiento, el texto pasa intacto."""
+    assert service._strip_think_for_tts("Hola, ¿qué tal?") == "Hola, ¿qué tal?"
+
+
+def test_strip_think_incremental_only_speaks_answer(service):
+    """Simula el stream chunk a chunk: solo se habla lo posterior a </think>."""
+    chunks = ["<th", "ink>razo", "no mu", "cho</thi", "nk>Ho", "la, ¿qué", " tal?"]
+    acc, fed, spoken = "", 0, []
+    for c in chunks:
+        acc += c
+        sp = service._strip_think_for_tts(acc)
+        if len(sp) > fed:
+            spoken.append(sp[fed:])
+            fed = len(sp)
+    assert "".join(spoken) == "Hola, ¿qué tal?"
+
+
 @pytest.mark.asyncio
 async def test_synth_worker_processes_sentences(service, mock_tts):
     """El synth worker sintetiza frases y las encola como audio."""
