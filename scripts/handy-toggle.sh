@@ -22,12 +22,18 @@ fi
 # 2. Levantar el overlay visual. Está SIEMPRE visible (punto mini que reacciona
 #    al estado por SSE), así que no hay que "mostrarlo": start-gui.sh no duplica
 #    si ya hay uno vivo.
+GUI_PID_FILE="/tmp/asistenteia-gui.pid"
+gui_was_alive=false
+if [ -f "$GUI_PID_FILE" ] && kill -0 "$(cat "$GUI_PID_FILE")" 2>/dev/null; then
+    gui_was_alive=true
+fi
+
 "$PROJECT_DIR/scripts/start-gui.sh"
 
-# 2b. Si el overlay ya estaba vivo pero oculto (el usuario pulsó Esc), pedirle
-#     que se muestre de nuevo con SIGUSR2. Inofensivo si ya estaba visible.
-GUI_PID_FILE="/tmp/asistenteia-gui.pid"
-if [ -f "$GUI_PID_FILE" ]; then
+# 2b. Si el overlay YA estaba vivo, pudo quedar oculto por un Esc: pedirle que se
+#     muestre con SIGUSR2. Si lo acabamos de lanzar NO lo señalamos: arranca
+#     visible y aún podría no tener registrado el handler (lo mataría la señal).
+if [ "$gui_was_alive" = true ]; then
     kill -USR2 "$(cat "$GUI_PID_FILE")" 2>/dev/null || true
 fi
 

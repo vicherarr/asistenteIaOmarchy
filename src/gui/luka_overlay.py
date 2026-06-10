@@ -710,6 +710,11 @@ class LukaOverlay(Gtk.Application):
 
 
 def main():
+    # Ignorar SIGUSR2 hasta que do_activate registre el handler real (mostrar el
+    # overlay). Su acción por defecto es TERMINAR el proceso, así que una señal
+    # que llegue durante el arranque (handy-toggle.sh la manda al poco de lanzar)
+    # mataría la GUI antes de tiempo. SIG_IGN la neutraliza; GLib la sobrescribe.
+    signal.signal(signal.SIGUSR2, signal.SIG_IGN)
     LukaOverlay().run(None)
 
 
