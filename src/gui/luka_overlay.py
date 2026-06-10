@@ -361,6 +361,19 @@ class LukaOverlay(Gtk.Application):
         row = Gtk.CenterBox()
         row.set_hexpand(True)
 
+        # Botón para ocultar el overlay (izquierda). Misma forma de píldora que
+        # "Callar". Se vuelve a mostrar con Super+Z (SIGUSR2, ver _show_overlay).
+        self.hide_btn = Gtk.Button(label="✕ Ocultar")
+        self.hide_btn.add_css_class("silence")
+        self.hide_btn.set_tooltip_text("Ocultar (Super+Z para volver)")
+        self.hide_btn.set_valign(Gtk.Align.CENTER)
+        self.hide_btn.connect("clicked", lambda *_: self._hide_overlay())
+        self.hide_rev = Gtk.Revealer(transition_type=Gtk.RevealerTransitionType.CROSSFADE)
+        self.hide_rev.set_child(self.hide_btn)
+        self.hide_rev.set_halign(Gtk.Align.START)
+        self.hide_rev.set_valign(Gtk.Align.CENTER)
+        row.set_start_widget(self.hide_rev)
+
         center = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         self.dot = Gtk.Box()
         self.dot.add_css_class("dot")
@@ -517,7 +530,7 @@ class LukaOverlay(Gtk.Application):
             self._on_send(self.entry)
             return True
         if keyval == Gdk.KEY_Escape:
-            self._hide_overlay()
+            self._exit_input()
             return True
         # Dejar pasar combinaciones con Ctrl/Alt (atajos, pegar, etc.).
         if mods & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK):
@@ -670,6 +683,7 @@ class LukaOverlay(Gtk.Application):
         self.status.set_text(status_txt)
         self.status_rev.set_reveal_child(bool(status_txt))
         self.silence_rev.set_reveal_child(show_silence)
+        self.hide_rev.set_reveal_child(expanded)
         self.entry_rev.set_reveal_child(self.input_mode)
 
         self._pulse = STATES[self.state][2]
