@@ -139,6 +139,36 @@ def test_strip_think_incremental_only_speaks_answer(service):
     assert "".join(spoken) == "Hola, ¿qué tal?"
 
 
+def test_strip_think_removes_channel_block(service):
+    """Quita el razonamiento de Gemma-4 delimitado por <|channel>...<channel|>."""
+    out = service._strip_think_for_tts("<|channel>razono mucho<channel|>Hola mundo")
+    assert out == "Hola mundo"
+
+
+def test_strip_think_drops_unclosed_channel(service):
+    """Un <|channel> abierto sin cerrar (razonamiento en streaming) se descarta."""
+    assert service._strip_think_for_tts("<|channel>razonando todavía") == ""
+
+
+def test_strip_think_holds_partial_channel_tag(service):
+    """Un marcador <|channel> partido entre chunks no debe hablarse a medias."""
+    assert service._strip_think_for_tts("Respuesta<|chan") == "Respuesta"
+
+
+def test_strip_think_channel_incremental(service):
+    """Stream con razonamiento de canal: solo se habla lo posterior al cierre."""
+    chunks = ["<|channel>El usuario quiere música.", " Usaré funk.<channel|>",
+              "Ya está, ", "funk sonando."]
+    acc, fed, spoken = "", 0, []
+    for c in chunks:
+        acc += c
+        sp = service._strip_think_for_tts(acc)
+        if len(sp) > fed:
+            spoken.append(sp[fed:])
+            fed = len(sp)
+    assert "".join(spoken) == "Ya está, funk sonando."
+
+
 @pytest.mark.asyncio
 async def test_synth_worker_processes_sentences(service, mock_tts):
     """El synth worker sintetiza frases y las encola como audio."""

@@ -129,9 +129,13 @@ class AssistantService:
         self._tool_call_re = re.compile(r'\b(?:' + _names + r')\s*\([^)]*\)?')
         # Llamada genérica que ocupa todo el fragmento: "algo(arg=...)" / "algo(".
         self._generic_call_re = re.compile(r'^\s*[A-Za-z_]\w*\s*\([^)]*\)?\s*$')
-        # Bloques de razonamiento <think>...</think> que algunos modelos (Gemma vía
-        # LiteRT) emiten en el stream: se MUESTRAN en pantalla pero NUNCA se hablan.
-        self._think_re = re.compile(r'<think>.*?</think>', re.DOTALL)
+        # Razonamiento del modelo: se MUESTRA en pantalla pero NUNCA se habla. Gemma-4
+        # lo delimita con tokens de canal <|channel>...<channel|>; otros modelos usan
+        # <think>...</think>. Cubrimos ambos pares (bloques cerrados) y guardamos las
+        # aperturas para el caso en streaming donde el cierre aún no llegó.
+        self._reason_opens = ("<think>", "<|channel>")
+        self._think_re = re.compile(
+            r'<think>.*?</think>|<\|channel>.*?<channel\|>', re.DOTALL)
 
         # Semilla del modo enfocado desde el .env (ASSISTANT_DEFAULT_TOOLS). Sintaxis:
         #   - nombres sueltos => lista blanca (solo esas).
@@ -405,25 +409,29 @@ class AssistantService:
     def _strip_think_for_tts(self, text: str) -> str:
         """Devuelve solo el texto hablable, quitando el razonamiento del modelo.
 
-        Modelos con razonamiento EXPLÍCITO en el stream (Gemma vía LiteRT) emiten
-        `<think>razonamiento</think>respuesta`. El razonamiento se muestra en la GUI
-        pero no debe hablarse. Pensado para llamarse con el texto acumulado en cada
-        chunk: el resultado crece de forma monótona como prefijo, así que el llamante
-        solo necesita reproducir lo nuevo.
+        Modelos con razonamiento EXPLÍCITO en el stream emiten el razonamiento entre
+        marcadores (`<|channel>...<channel|>` en Gemma-4, `<think>...</think>` en otros)
+        seguido de la respuesta. El razonamiento se muestra en la GUI pero no debe
+        hablarse. Pensado para llamarse con el texto acumulado en cada chunk: el
+        resultado crece de forma monótona como prefijo, así que el llamante solo
+        necesita reproducir lo nuevo.
         """
-        # Fuera los bloques de razonamiento ya cerrados.
+        # Fuera los bloques de razonamiento ya cerrados (de cualquier par conocido).
         text = self._think_re.sub("", text)
-        # Un <think> abierto sin cerrar = razonamiento aún en streaming: descartar
-        # ese marcador y todo lo que le sigue (todavía no es respuesta).
-        open_idx = text.find("<think>")
-        if open_idx != -1:
-            return text[:open_idx]
-        # Retener un "<think>" partido entre chunks (p.ej. la cola "...<thi") para no
-        # hablar media etiqueta ni adelantar texto que aún podría ser razonamiento.
-        marker = "<think>"
-        for k in range(len(marker) - 1, 0, -1):
-            if text.endswith(marker[:k]):
-                return text[:-k]
+        # ¿Alguna apertura sin su cierre? (razonamiento aún en streaming): cortar desde
+        # la primera que aparezca; todo lo posterior es razonamiento todavía no cerrado.
+        cut = len(text)
+        for opener in self._reason_opens:
+            i = text.find(opener)
+            if i != -1:
+                cut = min(cut, i)
+        text = text[:cut]
+        # Retener un marcador de apertura partido entre chunks (p.ej. la cola "...<|chan")
+        # para no hablar medio token ni adelantar texto que aún podría ser razonamiento.
+        for opener in self._reason_opens:
+            for k in range(len(opener) - 1, 0, -1):
+                if text.endswith(opener[:k]):
+                    return text[: len(text) - k]
         return text
 
     @staticmethod
@@ -558,6 +566,16 @@ class AssistantService:
                         clean_chunk = "<think>" + clean_chunk
                         think_open_sent = True
                     yield clean_chunk
+
+            # Diagnóstico: qué marcadores de razonamiento/tool trae el stream crudo.
+            # Sirve para afinar el filtrado de TTS si algún razonamiento se cuela.
+            logger.info(
+                "TTS markers crudos: think=%s channel=%s tool=%s | head=%r",
+                "<think>" in accumulated_text,
+                ("<|channel>" in accumulated_text or "<channel|>" in accumulated_text),
+                ("call:" in accumulated_text or "<|tool_call>" in accumulated_text),
+                accumulated_text[:300],
+            )
 
             # --- Segunda pasada de visión ---
             # Si analyze_screen capturó una imagen, el motor (LLM en GPU, visión en CPU)
