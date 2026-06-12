@@ -380,10 +380,12 @@ GOOGLE_ENABLED=True          # tools de Gmail (requiere credenciales propias, ve
 
 ---
 
-## 📧 Integración con Gmail (opcional)
+## 📧 Integración con Gmail y Google Calendar (opcional)
 
 Luka puede leer, buscar y (con confirmación por voz) enviar correos de **tu propia
-cuenta** de Gmail. Es **gratis**: la Gmail API no factura y no necesitas tarjeta.
+cuenta** de Gmail, y consultar/crear/mover/borrar eventos de tu **Google Calendar**.
+Es **gratis**: ni la Gmail API ni la Calendar API facturan y no necesitas tarjeta.
+Ambas funciones comparten un único alta de OAuth (un solo `token.json`).
 
 > **Privacidad y secretos.** Cada usuario usa **sus propias** credenciales de Google
 > (modelo *BYO – Bring Your Own*). El proyecto **NUNCA** incluye ni debes subir a git
@@ -395,6 +397,7 @@ cuenta** de Gmail. Es **gratis**: la Gmail API no factura y no necesitas tarjeta
 1. Entra en [Google Cloud Console](https://console.cloud.google.com/) y crea un
    **proyecto** nuevo (gratis, sin tarjeta).
 2. **APIs y servicios → Biblioteca →** busca **Gmail API** y pulsa **Habilitar**.
+   Repite con **Google Calendar API** (búscala y **Habilítala** también).
 3. **APIs y servicios → Pantalla de consentimiento de OAuth**:
    - Tipo de usuario: **External**.
    - Rellena nombre de la app y tu correo.
@@ -417,6 +420,11 @@ asistenteia google-auth
 
 Abre el navegador, das consentimiento, y se guarda `token.json` (permisos `0600`).
 A partir de ahí el servicio refresca la sesión solo, sin volver a abrir el navegador.
+
+> **¿Ya tenías Gmail configurado de antes?** El alta de Calendar añade un permiso
+> nuevo (`calendar.events`), así que tu `token.json` anterior se queda corto. Vuelve a
+> ejecutar `asistenteia google-auth` **una vez** para reconceder el consentimiento; si
+> no, las llamadas al calendario darían un error 403 por scope insuficiente.
 
 ### 3. Verificar
 

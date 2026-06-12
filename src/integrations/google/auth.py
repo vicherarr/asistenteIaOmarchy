@@ -24,13 +24,22 @@ from src.config import settings
 logger = logging.getLogger(__name__)
 
 # Scopes para "lectura + escritura con confirmación":
-#   - gmail.modify  -> leer, buscar, etiquetar y mover a la papelera (NO borrado permanente)
-#   - gmail.compose -> crear/editar borradores y ENVIAR mensajes
-# (Calendar/Drive añadirán los suyos aquí cuando se implementen.)
+#   - gmail.modify    -> leer, buscar, etiquetar y mover a la papelera (NO borrado permanente)
+#   - gmail.compose   -> crear/editar borradores y ENVIAR mensajes
+#   - calendar.events -> leer, crear, mover y borrar EVENTOS (no toca otros ajustes del calendario)
+# (Drive añadirá los suyos aquí cuando se implemente.)
 GMAIL_SCOPES: list[str] = [
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/gmail.compose",
 ]
+CALENDAR_SCOPES: list[str] = [
+    "https://www.googleapis.com/auth/calendar.events",
+]
+
+# Un único token cubre TODAS las funciones de Google. El alta (`asistenteia google-auth`)
+# pide consentimiento para la unión, así que añadir Calendar OBLIGA a re-autenticar una vez
+# (si no, las llamadas a Calendar darían 403 por scope insuficiente).
+ALL_SCOPES: list[str] = GMAIL_SCOPES + CALENDAR_SCOPES
 
 
 class GoogleAuthError(RuntimeError):
@@ -65,7 +74,7 @@ def _save_token(creds) -> None:
         pass
 
 
-def load_credentials(scopes: Sequence[str] = GMAIL_SCOPES):
+def load_credentials(scopes: Sequence[str] = ALL_SCOPES):
     """Carga el token guardado y lo refresca si hace falta. None si no hay sesión válida.
 
     NO lanza el flujo interactivo: en el servicio nunca debe abrirse un navegador.
@@ -95,7 +104,7 @@ def load_credentials(scopes: Sequence[str] = GMAIL_SCOPES):
     return None
 
 
-def build_service(api: str, version: str, scopes: Sequence[str] = GMAIL_SCOPES):
+def build_service(api: str, version: str, scopes: Sequence[str] = ALL_SCOPES):
     """Construye un cliente de la API de Google (p.ej. ('gmail','v1')).
 
     Lanza GoogleAuthError con un mensaje claro si falta configuración o sesión, para
@@ -118,7 +127,7 @@ def build_service(api: str, version: str, scopes: Sequence[str] = GMAIL_SCOPES):
     return build(api, version, credentials=creds, cache_discovery=False)
 
 
-def run_local_auth(scopes: Sequence[str] = GMAIL_SCOPES):
+def run_local_auth(scopes: Sequence[str] = ALL_SCOPES):
     """Flujo interactivo de alta (abre el navegador). Solo lo usa 'asistenteia google-auth'.
 
     Devuelve las credenciales y guarda token.json. Lanza GoogleAuthError si falta el
@@ -127,8 +136,8 @@ def run_local_auth(scopes: Sequence[str] = GMAIL_SCOPES):
     if not is_configured():
         raise GoogleAuthError(
             f"Falta el archivo de credenciales en {credentials_path()}.\n"
-            "Crea un proyecto en Google Cloud, habilita la Gmail API, crea un OAuth "
-            "client ID de tipo 'Desktop app' y descarga el JSON ahí. Ver README."
+            "Crea un proyecto en Google Cloud, habilita la Gmail API y la Google Calendar "
+            "API, crea un OAuth client ID de tipo 'Desktop app' y descarga el JSON ahí. Ver README."
         )
     from google_auth_oauthlib.flow import InstalledAppFlow
 
@@ -152,7 +161,7 @@ def main() -> int:
         print(f"\n✗ Falló el inicio de sesión: {e}")
         return 1
     print(f"\n✓ Sesión de Google guardada en {token_path()}")
-    print("  Ya puedes usar las funciones de Gmail. (No compartas ese token.json.)")
+    print("  Ya puedes usar las funciones de Gmail y Calendar. (No compartas ese token.json.)")
     return 0
 
 

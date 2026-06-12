@@ -37,7 +37,20 @@ def main() -> int:
         headers = {h["name"]: h["value"] for h in msg["payload"].get("headers", [])}
         print(f"  Último correo: «{headers.get('Subject', '(sin asunto)')}» "
               f"de {headers.get('From', '?')}")
-    print("\nFase 0 verificada: el acceso a Gmail funciona.")
+
+    # Smoke de Calendar (no fatal): si el token es antiguo y solo tenía scopes de Gmail,
+    # esto dará 403 y avisa de que hay que re-ejecutar 'asistenteia google-auth'.
+    try:
+        cal = auth.build_service("calendar", "v3")
+        cals = cal.calendarList().list(maxResults=1).execute()
+        primary = (cals.get("items") or [{}])[0].get("summary", "primary")
+        print(f"\n✓ Calendar accesible (calendario: {primary}).")
+    except Exception as e:  # noqa: BLE001
+        print(f"\n⚠ Calendar NO accesible: {e}")
+        print("  Si acabas de añadir Calendar, ejecuta 'asistenteia google-auth' "
+              "una vez para reconceder permisos.")
+
+    print("\nVerificado: el acceso a Google funciona.")
     return 0
 
 

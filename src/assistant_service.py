@@ -76,18 +76,22 @@ class AssistantService:
         # del usuario (~/.config/asistenteia/google/credentials.json). Si no, ni aparece,
         # y el asistente funciona igual que siempre (retrocompatible).
         self._gmail_enabled = False
+        self._calendar_enabled = False
         if getattr(settings, "GOOGLE_ENABLED", False):
             try:
                 from src.integrations.google.auth import is_configured
-                from src.integrations.google.gmail import gmail_manager
                 if is_configured():
+                    from src.integrations.google.gmail import gmail_manager
+                    from src.integrations.google.calendar import calendar_manager
                     self.tools.append(gmail_manager)
                     self._gmail_enabled = True
-                    logger.info("Tool de Gmail registrada (Google configurado).")
+                    self.tools.append(calendar_manager)
+                    self._calendar_enabled = True
+                    logger.info("Tools de Gmail y Calendar registradas (Google configurado).")
                 else:
-                    logger.info("Gmail no registrado: faltan credenciales de Google.")
+                    logger.info("Google no registrado: faltan credenciales de Google.")
             except Exception as e:  # noqa: BLE001 — deps de Google ausentes u otro fallo
-                logger.warning(f"No se pudo registrar la tool de Gmail: {e}")
+                logger.warning(f"No se pudieron registrar las tools de Google: {e}")
         # Selección activa de herramientas (vacío = todas → comportamiento normal).
         # Si el usuario elige un subconjunto desde la web/GUI, el modelo solo recibe
         # el contexto (esquemas) de esas tools y se le instruye a usar solo esas.
@@ -116,6 +120,7 @@ class AssistantService:
             "take_screenshot": "Captura de pantalla",
             "create_document": "Genera un documento ODT",
             "gmail_manager": "Correo de Gmail (leer/enviar/responder)",
+            "calendar_manager": "Agenda de Google Calendar (consultar/crear/mover/borrar)",
         }
         # Grupos funcionales para el selector de la UI (menos opciones que 18 tools).
         # La selección efectiva sigue siendo por nombre de tool; los grupos solo agrupan.
@@ -139,6 +144,10 @@ class AssistantService:
             self._tool_groups.append(
                 {"key": "correo", "label": "Correo (Gmail)", "icon": "📧",
                  "tools": ["gmail_manager"]})
+        if self._calendar_enabled:
+            self._tool_groups.append(
+                {"key": "agenda", "label": "Agenda (Calendar)", "icon": "📅",
+                 "tools": ["calendar_manager"]})
         # Para suprimir tool calls que el modelo a veces emite como TEXTO plano (sintaxis
         # Python: nombre(args)) en lugar del formato del motor. Nunca deben llegar al TTS.
         self._tool_names = {t.__name__ for t in self.tools}
@@ -439,24 +448,52 @@ class AssistantService:
         r"espera|negativo|anula|anular)\b",
         re.IGNORECASE)
 
-    async def _resolve_gmail_confirmation(self, text: str) -> Optional[str]:
-        """Si hay una acción de Gmail pendiente, interpreta el sí/no del usuario.
+    @staticmethod
+    def _now_context() -> str:
+        """Línea de fecha/hora local para el system prompt (ancla las fechas relativas)."""
+        from datetime import datetime
+        dias = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+        now = datetime.now().astimezone()
+        fecha = f"{dias[now.weekday()]} {now.day:02d}/{now.month:02d}/{now.year}"
+        return ("\n\nFECHA Y HORA ACTUAL (zona local del usuario): "
+                f"{fecha}, {now.hour:02d}:{now.minute:02d} (ISO: {now.isoformat(timespec='minutes')}). "
+                "Úsala para resolver fechas relativas (\"hoy\", \"mañana\", \"el viernes a las 5\") a "
+                "ISO 8601 al usar el calendario.")
 
-        Devuelve el texto de resultado (a hablar/mostrar) si la confirmación se
-        resuelve, o None si no hay nada pendiente o el turno es ambiguo (en cuyo
-        caso el flujo normal sigue y la acción pendiente caduca sola en ~2 min).
+    async def _resolve_pending(self, text, peek, run, clear) -> Optional[str]:
+        """Interpreta el sí/no del usuario para UNA acción Google pendiente (Gmail o Calendar).
+
+        Devuelve el texto de resultado (a hablar/mostrar) si se resuelve, o None si no hay
+        nada pendiente o el turno es ambiguo (el flujo normal sigue y la acción caduca sola).
         """
-        if not self._gmail_enabled:
-            return None
-        from src.integrations.google.gmail import peek_pending, run_pending, clear_pending
-        if peek_pending() is None:
+        if peek() is None:
             return None
         # Negar tiene prioridad: "no, mejor no" no debe ejecutar nada.
         if self._NO_RE.search(text):
-            clear_pending()
+            clear()
             return "De acuerdo, lo dejo."
         if self._YES_RE.search(text):
-            return await run_pending()
+            return await run()
+        return None
+
+    async def _resolve_google_confirmation(self, text: str) -> Optional[str]:
+        """Resuelve una confirmación pendiente de Gmail o de Calendar (la que haya).
+
+        En la práctica solo una está pendiente a la vez; se comprueban en orden y se
+        devuelve el primer resultado no nulo.
+        """
+        if self._gmail_enabled:
+            from src.integrations.google import gmail
+            res = await self._resolve_pending(
+                text, gmail.peek_pending, gmail.run_pending, gmail.clear_pending)
+            if res is not None:
+                return res
+        if self._calendar_enabled:
+            from src.integrations.google import calendar
+            res = await self._resolve_pending(
+                text, calendar.peek_pending, calendar.run_pending, calendar.clear_pending)
+            if res is not None:
+                return res
         return None
 
     def _strip_think_for_tts(self, text: str) -> str:
@@ -542,16 +579,16 @@ class AssistantService:
         if len(conversation_history) > max_history:
             conversation_history[:] = conversation_history[-max_history:]
 
-        # Confirmación de acción de correo pendiente: si en el turno anterior la tool
-        # de Gmail dejó algo a confirmar (enviar/responder/papelera/archivar), este turno
-        # es el sí/no. Se resuelve sin pasar por el modelo y se responde directamente.
-        gmail_confirm = await self._resolve_gmail_confirmation(text)
-        if gmail_confirm is not None:
-            conversation_history.append(ChatMessage(role="assistant", content=gmail_confirm))
-            if self._is_speakable(gmail_confirm):
-                await queue_text.put(gmail_confirm)
+        # Confirmación de acción de Google pendiente: si en el turno anterior una tool
+        # (Gmail: enviar/responder/papelera/archivar; Calendar: borrar/mover) dejó algo a
+        # confirmar, este turno es el sí/no. Se resuelve sin pasar por el modelo.
+        google_confirm = await self._resolve_google_confirmation(text)
+        if google_confirm is not None:
+            conversation_history.append(ChatMessage(role="assistant", content=google_confirm))
+            if self._is_speakable(google_confirm):
+                await queue_text.put(google_confirm)
             await queue_text.put(None)  # cerrar el pipeline de síntesis
-            yield gmail_confirm
+            yield google_confirm
             return
 
         # Cargar system prompt desde archivo
@@ -561,6 +598,9 @@ class AssistantService:
         except Exception as e:
             logger.error(f"Error cargando system prompt: {e}")
             system_prompt = "Eres un asistente de voz para Linux llamado AsistenteIA."
+        # Fecha/hora ACTUAL (zona local): imprescindible para resolver "hoy", "mañana",
+        # "el viernes a las 5" a ISO 8601 al crear/mover eventos de calendario.
+        system_prompt += self._now_context()
         # Modo enfocado: si hay tools seleccionadas, instruir al modelo a usar solo esas.
         system_prompt = self._focused_system_prompt(system_prompt)
 
