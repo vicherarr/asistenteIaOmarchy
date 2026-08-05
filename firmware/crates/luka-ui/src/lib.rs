@@ -85,16 +85,27 @@ pub const GAMMA: [u8; 256] = {
     table
 };
 
-/// Aplica brillo global y gamma. Es el último paso antes del bus.
+/// Aplica gamma y brillo global. Es el último paso antes del bus.
 ///
-/// El orden importa: el brillo se aplica **en escala perceptual** (antes de la
-/// gamma), que es como lo espera quien pone `led_brightness = 128` en `cfg.toml`
-/// esperando "la mitad de brillo", no "la mitad de PWM".
+/// **El orden importa, y la primera versión lo tenía al revés.** Aplicar el
+/// brillo antes de la gamma parece lo natural —"la mitad de brillo percibido"—
+/// pero compone dos atenuaciones sobre un `u8`: con el `led_brightness = 48` real
+/// de `cfg.toml`, hasta el rojo a plena saturación salía a **7/255** y el estado
+/// `Booting` a **(0,0,0)**. El anillo se quedaba negro.
+///
+/// Así que la gamma va primero, sobre el color lógico a rango completo (que es
+/// para lo que está: convertir intensidad percibida en ciclo de trabajo), y el
+/// brillo global escala **linealmente el PWM resultante**. Es decir, el brillo es
+/// un techo de potencia, no un atenuador perceptual: con 48 el anillo llega como
+/// mucho a 48/255 de ciclo, que es exactamente lo que se quiere de un "no me
+/// deslumbres".
 pub fn finish(ring: Ring, brightness: u8) -> Ring {
+    let ceiling = |canal: u8| -> u8 {
+        ((GAMMA[canal as usize] as u16 * brightness as u16) / 255) as u8
+    };
     let mut out = OFF;
     for (i, color) in ring.iter().enumerate() {
-        let c = color.scaled(brightness);
-        out[i] = Rgb::new(GAMMA[c.r as usize], GAMMA[c.g as usize], GAMMA[c.b as usize]);
+        out[i] = Rgb::new(ceiling(color.r), ceiling(color.g), ceiling(color.b));
     }
     out
 }
@@ -292,11 +303,50 @@ mod tests {
     }
 
     #[test]
-    fn el_brillo_global_escala_todo_el_anillo() {
+    fn el_brillo_global_es_un_techo_lineal_del_pwm() {
         let lleno = [Rgb::WHITE; COUNT];
-        assert_eq!(finish(lleno, 255)[0], Rgb::WHITE);
-        assert!(finish(lleno, 128)[0].r < 128, "el brillo a la mitad debería notarse");
+        assert_eq!(finish(lleno, 255)[0], Rgb::WHITE, "a tope no debe atenuar nada");
+        assert_eq!(finish(lleno, 128)[0].r, 128, "el brillo es el techo del ciclo de trabajo");
         assert_eq!(finish(lleno, 0), OFF, "brillo 0 tiene que apagar el anillo");
+    }
+
+    /// El fallo que dejó el anillo negro en la placa: con el `led_brightness = 48`
+    /// real de `cfg.toml`, componer brillo y gamma sobre un `u8` machacaba todos
+    /// los colores a 0-7. Los estados que existen para VERSE tienen que verse con
+    /// el brillo que está configurado de verdad, no solo con el brillo a tope.
+    #[test]
+    fn los_estados_visibles_se_ven_con_el_brillo_configurado() {
+        /// El mismo valor que `cfg.toml`.
+        const BRILLO_REAL: u8 = 48;
+        /// Por debajo de esto, a través del difusor y con luz en la habitación,
+        /// no se distingue de apagado.
+        const MINIMO_VISIBLE: u8 = 16;
+
+        for (nombre, state, level) in [
+            ("WifiConnecting", State::WifiConnecting { since_ms: 0 }, 0u8),
+            ("ServerConnecting", State::ServerConnecting { since_ms: 0, attempt: 0 }, 0),
+            ("Disconnected", State::Disconnected { retry_at_ms: 0, attempt: 1 }, 0),
+            ("Listening", State::Listening { since_ms: 0 }, 255),
+            ("Thinking", State::Thinking { since_ms: 0 }, 0),
+            ("Speaking", State::Speaking { since_ms: 0 }, 255),
+            ("Fault", State::Fault { kind: Fault::Audio, since_ms: 0 }, 0),
+        ] {
+            let pico = (0..4_000)
+                .step_by(10)
+                .flat_map(|t| {
+                    finish(frame(state, t, level), BRILLO_REAL)
+                        .into_iter()
+                        .map(|c| c.r.max(c.g).max(c.b))
+                        .collect::<Vec<_>>()
+                })
+                .max()
+                .unwrap_or(0);
+
+            assert!(
+                pico >= MINIMO_VISIBLE,
+                "{nombre} llega como mucho a {pico}/255 con brillo {BRILLO_REAL}: invisible"
+            );
+        }
     }
 
     // ------------------------------------------------------- las animaciones

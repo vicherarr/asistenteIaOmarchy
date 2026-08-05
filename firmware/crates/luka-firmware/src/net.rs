@@ -87,6 +87,7 @@ impl NetTask {
     fn run_loop(self) {
         let Self { cmd_rx, event_tx, playback_tx, modem } = self;
 
+        log::info!("net_io: arrancando");
         let sys_loop = match EspSystemEventLoop::take() {
             Ok(l) => l,
             Err(e) => {
@@ -95,8 +96,10 @@ impl NetTask {
                 return;
             }
         };
+        log::info!("net_io: bucle de eventos listo");
         // Sin NVS la WiFi funciona igual, solo pierde la caché de calibración.
         let nvs = EspDefaultNvsPartition::take().ok();
+        log::info!("net_io: NVS {}", if nvs.is_some() { "listo" } else { "no disponible" });
 
         let mut wifi = match EspWifi::new(modem, sys_loop.clone(), nvs)
             .and_then(|w| BlockingWifi::wrap(w, sys_loop))
@@ -109,6 +112,7 @@ impl NetTask {
             }
         };
 
+        log::info!("net_io: WiFi inicializada; esperando órdenes");
         let mut client: Option<EspWebSocketClient<'static>> = None;
         // Lo pone el callback, que corre en el hilo del cliente. Sirve para
         // mandar el HELLO en cuanto hay enlace, cosa que el callback no puede
@@ -267,9 +271,21 @@ fn connect_server(
         skip_cert_common_name_check: true,
         headers: Some(&headers),
         buffer_size: WS_BUFFER_BYTES,
-        // La reconexión la gobierna la máquina de estados, con su backoff y su
-        // anillo. Dos lógicas de reintento a la vez solo se estorbarían.
-        disable_auto_reconnect: true,
+        // **Ojo: la reconexión automática NO se desactiva, aunque la política de
+        // reintentos la lleve la máquina de estados.**
+        //
+        // Con `disable_auto_reconnect: true`, un fallo de conexión para la tarea
+        // del cliente (`run = false`). A partir de ahí, `esp_websocket_client_close`
+        // devuelve `ESP_FAIL` ("Client was not started")… y el `Drop` de
+        // esp-idf-svc hace `.unwrap()` sobre ese resultado. O sea: soltar un
+        // cliente que no llegó a conectar **aborta el dispositivo entero**.
+        // Verificado en la placa: `panic_abort` en ws/client.rs:623.
+        //
+        // Dejando la reconexión automática, la tarea sigue viva, `close()`
+        // devuelve OK y soltar el cliente es seguro. Los reintentos del ESP-IDF
+        // y los de la máquina de estados conviven sin estorbarse: los primeros
+        // solo mantienen el objeto sano, y los segundos son los que gobiernan el
+        // anillo y el backoff.
         ..Default::default()
     };
 
