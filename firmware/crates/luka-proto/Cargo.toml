@@ -1,0 +1,10 @@
+[package]
+name = "luka-proto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Códec del protocolo binario con el asistente. no_std, sin dependencias, testeable en el host."
+
+[dependencies]

@@ -3,6 +3,10 @@ resolver = "2"
 members = [
     "crates/luka-config",
     "crates/luka-board",
+    "crates/luka-proto",
+    "crates/luka-state",
+    "crates/luka-ui",
+    "crates/luka-firmware",
     "crates/spikes",
 ]
 
@@ -16,6 +20,9 @@ repository = "https://github.com/vicherarr/asistenteIaOmarchy"
 [workspace.dependencies]
 luka-config = { path = "crates/luka-config" }
 luka-board = { path = "crates/luka-board" }
+luka-proto = { path = "crates/luka-proto" }
+luka-state = { path = "crates/luka-state" }
+luka-ui = { path = "crates/luka-ui" }
 
 esp-idf-svc = "0.52"
 esp-idf-hal = "0.46"

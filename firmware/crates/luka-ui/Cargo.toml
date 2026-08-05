@@ -1,0 +1,12 @@
+[package]
+name = "luka-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Motor de animación del anillo RGB: función pura del estado y el tiempo, testeable en el host."
+
+[dependencies]
+luka-board = { workspace = true }
+luka-state = { workspace = true }

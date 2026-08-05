@@ -128,13 +128,16 @@ pub mod expander {
     /// Enable del amplificador, **activo a nivel alto**. En bajo el altavoz queda mudo.
     /// Confirmado por `spike_i2s_loopback`.
     pub const PA_ENABLE: u8 = 8;
-    /// Los botones siguen SIN verificar: ningún spike de la Fase 0 los usó.
-    /// Los confirmará la Fase 1, que los necesita para el push-to-talk.
+    /// Confirmados por `spike_buttons`, que vigiló las 16 líneas del expansor y
+    /// vio moverse exactamente estas tres.
     pub const BUTTON_1: u8 = 9;
     pub const BUTTON_2: u8 = 10;
     pub const BUTTON_3: u8 = 11;
-    /// Verificado solo `PA_ENABLE`; los botones siguen siendo `Reported`.
-    pub const CONFIDENCE: Confidence = Confidence::Reported;
+    /// Los tres botones son **activos a nivel bajo** (pull-up): en reposo leen 1 y
+    /// pulsados leen 0. Es lo que da la vuelta a la lógica en `is_pressed`.
+    pub const BUTTONS_ACTIVE_LOW: bool = true;
+    /// Mapa del expansor confirmado al completo (Fase 1, 2026-08-05).
+    pub const CONFIDENCE: Confidence = Confidence::Verified;
 }
 
 /// Parámetros del pipeline de audio.
