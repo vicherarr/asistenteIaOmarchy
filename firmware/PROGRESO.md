@@ -233,7 +233,40 @@ comparte con nadie.
 1. Terminar los cuatro módulos del binario.
 2. Compilar, grabar y **verificar el camino completo** con la placa delante.
 3. Actualizar `luka-board` si algo más resulta distinto de lo documentado.
-4. Empujar a `origin/master` (sin eso no se despliega nada; ver `reference-deploy-topology`).
+
+## Puesta en marcha del lado Python (leer antes de probar la placa)
+
+El código ya está en `origin/master`, así que `asistenteia update` se lo lleva al deploy
+(`~/.asistenteia`). Pero **estar en el disco no basta** para que la placa pueda conectar:
+
+1. **`pip install websockets`** (ya está en `requirements.txt`). Uvicorn necesita una
+   implementación de WebSocket para `/device/ws`; sin ella el endpoint **no llega ni a
+   negociar**, y el error que se ve desde el dispositivo no menciona la dependencia.
+2. **Reiniciar `asistenteia.service`**, que lo hace **el usuario**, no el agente. Hasta el
+   reinicio, el proceso en marcha sigue sin tener el endpoint por mucho que el fichero
+   esté actualizado.
+3. Comprobar desde el PC antes de culpar al firmware:
+   ```bash
+   curl -k -H "X-API-Token: $API_TOKEN" https://localhost:8765/device/status
+   # -> {"device":{"connected":false},"audio_target":"pc"}
+   ```
+   Si eso no contesta, el problema no está en la placa.
+
+### ⚠️ El certificado fijado se rompe solo si se regeneran los certificados
+
+El firmware **solo acepta el certificado exacto** que lleva empotrado. Es una garantía más
+fuerte que la validación normal, pero tiene el precio de que el pin caduca cuando el
+certificado cambia:
+
+- Si el deploy regenera `SSL_CERTFILE` (al actualizar, al reinstalar, o a mano), la placa
+  deja de conectar de golpe. El síntoma es un **fallo de handshake TLS que no dice en
+  ningún sitio que la causa sea el certificado**.
+- Arreglo: volver a ejecutar **`firmware/scripts/sync-cert.sh`** y **reflashear**. No hay
+  atajo: el certificado va dentro del binario.
+- El certificado actual caduca en **2036**, así que por caducidad no va a pasar.
+- Recordatorio de por qué el script mira `~/.asistenteia` y no el repo de desarrollo:
+  **tienen certificados distintos** (`7F:E3:…` vs `96:28:…`) y fijar el equivocado produce
+  exactamente ese mismo fallo de handshake mudo.
 
 **Decisión pendiente:** la wake word (Fase 3, según lo acordado).
 
@@ -266,13 +299,23 @@ espflash flash --chip esp32s3 --port /dev/ttyACM0 --monitor --non-interactive \
 
 ## Estado del control de versiones
 
-Rama `master`. Dos commits de esta sesión, **sin empujar todavía**:
+Rama `master`, **ya en `origin/master`** (2026-08-05). Tres commits:
 - `bf2d950` — firmware: Fase 0 cerrada + TLS con cert fijado.
 - `63b43a1` — lado Python: `/device/ws` y salida de audio configurable.
+- `04ab322` — Fase 1: crates puros, botones verificados, esqueleto del binario.
 
-Sin commitear, del trabajo en curso: `crates/luka-proto`, `crates/luka-state`,
-`crates/luka-ui`, `crates/luka-firmware` (parcial), `spike_buttons`, el
-`expander::CONFIDENCE` de `luka-board` y este mismo archivo.
+Árbol limpio; no queda nada sin commitear.
 
 Recuerda: **el deploy sale de `origin/master`**, así que nada llega a `~/.asistenteia`
-hasta que se empuje. El reinicio del servicio lo hace el usuario, no el agente.
+hasta que se empuje. El reinicio del servicio lo hace el usuario, no el agente. Ver
+"Puesta en marcha del lado Python" más arriba.
+
+**Antes de cada push**, comprobar que no se cuela nada de `cfg.toml` (el repo es público):
+
+```bash
+git diff origin/master..master | grep -F "$(grep -oP '(?<=^password = ")[^"]+' firmware/cfg.toml)"
+git diff --name-only origin/master..master | grep -E 'cfg\.toml$|certs/|\.env'
+```
+
+Ambos deben salir vacíos. Ojo: no basta con mirar la contraseña — **el SSID tampoco debe
+aparecer** en nada versionado.
