@@ -98,12 +98,16 @@ fn main() -> Result<()> {
     let shared_ring = Arc::new(ring::RingState::new());
     ring::spawn(driver, shared_ring.clone())?;
 
-    let (audio_cmd_tx, audio_cmd_rx) = mpsc::sync_channel(5);
-    let (net_cmd_tx, net_cmd_rx) = mpsc::sync_channel(5);
-    let (event_tx, event_rx) = mpsc::sync_channel(20);
-    
-    let (capture_tx, capture_rx) = mpsc::sync_channel(10);
-    let (playback_tx, playback_rx) = mpsc::sync_channel(20);
+    // Los canales de audio necesitan fondo: a 16 kHz salen 50 tramas por segundo
+    // y cualquier hipo momentáneo de la red llenaba los de 5 huecos que había
+    // aquí, tirando el principio de las frases (se veían 89 descartes en un solo
+    // turno). Estas capacidades son ~1 s de margen, que en RAM no es nada.
+    let (audio_cmd_tx, audio_cmd_rx) = mpsc::sync_channel(8);
+    let (net_cmd_tx, net_cmd_rx) = mpsc::sync_channel(64);
+    let (event_tx, event_rx) = mpsc::sync_channel(32);
+
+    let (capture_tx, capture_rx) = mpsc::sync_channel(64);
+    let (playback_tx, playback_rx) = mpsc::sync_channel(64);
 
     let audio_io = audio::AudioIO::new(audio_cmd_rx, capture_tx, playback_rx, i2s, i2c.clone());
     audio_io.spawn()?;

@@ -31,12 +31,16 @@ use std::sync::mpsc::{Receiver, SyncSender};
 /// vuelta al rango y suene a distorsión brutal en vez de a saturación.
 const CAPTURE_GAIN: i32 = 2;
 
-/// Tope del búfer de reproducción, en muestras (~2 s a 16 kHz).
+/// Tope del búfer de reproducción, en muestras (60 s a 16 kHz ≈ 1,9 MB).
 ///
-/// Absorbe el desfase de la red sin dejar que crezca sin límite: si el enlace se
-/// atasca, más vale perder audio viejo que acumular retraso hasta que la voz
-/// llegue segundos después de que el anillo diga que está hablando.
-const PLAYBACK_MAX_SAMPLES: usize = audio::SAMPLE_RATE_HZ as usize * 2;
+/// Enorme a propósito. El servidor **no manda la voz en tiempo real**: la suelta
+/// tan rápido como la sintetiza, así que una respuesta de 15 s llega en un par de
+/// segundos mientras el altavoz solo puede consumirla a 16 kHz. Con el búfer de
+/// 2 s que había, toda respuesta medianamente larga desbordaba y se oía a trozos.
+///
+/// Cabe porque `CONFIG_SPIRAM_USE_MALLOC` manda las asignaciones grandes a la
+/// PSRAM, de la que hay 8 MB.
+const PLAYBACK_MAX_SAMPLES: usize = audio::SAMPLE_RATE_HZ as usize * 60;
 
 pub enum AudioCommand {
     StartCapture,
@@ -146,10 +150,16 @@ impl AudioIO {
 
             // --- Bajada: rellenar la cola con lo que haya llegado por red ---
             while let Ok(pcm) = self.playback_rx.try_recv() {
+                // Si aun así no cabe, se descarta lo NUEVO, no lo viejo. Tirar
+                // audio ya encolado abriría un hueco en mitad de una frase que ya
+                // está sonando; perder la cola de una respuesta kilométrica solo
+                // la corta al final, que se entiende mucho mejor.
                 if cola.len() + pcm.len() > PLAYBACK_MAX_SAMPLES {
-                    let sobra = cola.len() + pcm.len() - PLAYBACK_MAX_SAMPLES;
-                    log::warn!("búfer de reproducción lleno; se tiran {sobra} muestras viejas");
-                    cola.drain(..sobra.min(cola.len()));
+                    log::warn!(
+                        "búfer de reproducción lleno ({} s encolados); se corta el final",
+                        cola.len() / audio::SAMPLE_RATE_HZ as usize
+                    );
+                    continue;
                 }
                 cola.extend(pcm);
             }

@@ -47,7 +47,19 @@ const WS_BUFFER_BYTES: usize = 8192;
 /// tramas por segundo, y atenderlas de una en una con pausa dejaría el canal
 /// lleno y el audio se perdería. Se vacía en bloque, con un tope para que subir
 /// audio no impida nunca atender un `SendEnd`.
-const MAX_CMDS_PER_LOOP: usize = 32;
+const MAX_CMDS_PER_LOOP: usize = 64;
+
+/// Muestras que se acumulan antes de subir una trama `AUDIO` (100 ms a 16 kHz).
+///
+/// El micro entrega tramas de 20 ms, pero subirlas una a una son **50 escrituras
+/// TLS por segundo de 640 bytes**, y cada una arrastra su cabecera de WebSocket,
+/// su cifrado y su ida y vuelta por la pila de red. Con eso el enlace no daba
+/// abasto y se perdía el principio de las frases.
+///
+/// Agrupando de cinco en cinco baja a 10 escrituras por segundo de ~3,2 KB, que
+/// es justo el tamaño que usa el servidor para la bajada. Los 100 ms de latencia
+/// que añade son irrelevantes al lado de lo que tarda el STT.
+const UPLINK_BATCH_SAMPLES: usize = 1_600;
 
 pub enum NetCommand {
     ConnectWifi,
@@ -136,6 +148,8 @@ impl NetTask {
         // hacer porque el cliente todavía se está construyendo cuando se define.
         let connected = Arc::new(AtomicBool::new(false));
         let mut hello_sent = false;
+        // Audio del micro pendiente de agrupar. Ver `UPLINK_BATCH_SAMPLES`.
+        let mut uplink: Vec<i16> = Vec::with_capacity(UPLINK_BATCH_SAMPLES * 2);
 
         loop {
             if connected.load(Ordering::Relaxed) && !hello_sent {
@@ -209,9 +223,25 @@ impl NetTask {
                         }
                         connected.store(false, Ordering::Relaxed);
                     }
-                    NetCommand::SendEnd => send_bare(&mut client, kind::END),
-                    NetCommand::SendCancel => send_bare(&mut client, kind::CANCEL),
-                    NetCommand::SendAudio(pcm) => send_audio(&mut client, &pcm),
+                    NetCommand::SendEnd => {
+                        // Vaciar ANTES del END: si no, el último trozo de voz
+                        // llegaría después de que el servidor haya cerrado el
+                        // turno y se mezclaría con el siguiente.
+                        flush_uplink(&mut client, &mut uplink);
+                        send_bare(&mut client, kind::END);
+                    }
+                    NetCommand::SendCancel => {
+                        // Aquí al revés: lo pendiente se tira, que es lo que
+                        // significa cancelar.
+                        uplink.clear();
+                        send_bare(&mut client, kind::CANCEL);
+                    }
+                    NetCommand::SendAudio(pcm) => {
+                        uplink.extend_from_slice(&pcm);
+                        if uplink.len() >= UPLINK_BATCH_SAMPLES {
+                            flush_uplink(&mut client, &mut uplink);
+                        }
+                    }
                 }
             }
 
@@ -490,6 +520,14 @@ fn send_bare(client: &mut Option<EspWebSocketClient<'static>>, kind: u8) {
         if let Err(e) = c.send(FrameType::Binary(false), bytes) {
             log::warn!("no se pudo mandar {}: {e:?}", luka_proto::name(kind));
         }
+    }
+}
+
+/// Sube lo acumulado y vacía el acumulador.
+fn flush_uplink(client: &mut Option<EspWebSocketClient<'static>>, uplink: &mut Vec<i16>) {
+    if !uplink.is_empty() {
+        send_audio(client, uplink);
+        uplink.clear();
     }
 }
 
