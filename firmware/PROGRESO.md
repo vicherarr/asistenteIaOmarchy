@@ -331,6 +331,23 @@ azul para siempre. Ahora sale a los 15 s con backoff.
   carga**, así que habría que leer un divisor por ADC en un pin que no está en el mapa
   verificado — otro spike, no una llamada.
 
+### La lección del anillo: comprobar antes de la última transformación es no comprobar nada
+
+Tres fallos seguidos en el mismo sitio, todos vistos con la placa delante y **ninguno**
+detectado por los tests que ya existían:
+
+1. Brillo aplicado **antes** de la gamma → con `led_brightness = 48` todo salía a 0-7/255.
+2. `finish` convertía "poca luz" en **negro exacto**: la gamma entera manda a cero todo lo
+   que baje de 23, y el faro del reposo pedía entre 4 y 14. **Llevaba apagado desde el
+   primer día.** Ahora hay un suelo de 1, que es lo mínimo que el LED sabe encender.
+3. Con el suelo se encendía pero **no respiraba**: los once niveles del faro caían todos
+   en el mismo escalón de PWM. El rango pasa a 24..92, que la gamma sí separa.
+
+El patrón común: los tests miraban `frame()` a secas, o sea el valor lógico **antes** de
+la gamma y del brillo. Daban verde mientras en la placa no se veía nada. Ahora comprueban
+lo que sale al bus. Si algún día se añade otra etapa al final de la cadena, los tests
+tienen que moverse con ella.
+
 ### Pendiente de la Fase 2 (pulido, no rehacer)
 - **Reconexión:** la cadencia real la lleva el cliente del ESP-IDF, no el backoff de la
   máquina de estados, por lo del punto 2. Funciona, pero la política está en dos sitios.
@@ -338,9 +355,8 @@ azul para siempre. Ahora sale a los 15 s con backoff.
   dispositivo (`← {"text":"<think>…"}`). Al altavoz no le afecta, pero si algún día hay
   pantalla habrá que limpiarlo en el servidor.
 - Verificar cuánto aguanta el enlace en horas, y el consumo.
-- El **anillo de LEDs no se ha comprobado a ojo** después de arreglar la composición de
-  brillo y gamma. Los tests fijan que los estados visibles superan un mínimo con el
-  `led_brightness = 48` real, pero eso es aritmética, no una mirada a la placa.
+- ~~El anillo de LEDs no se ha comprobado a ojo.~~ **Hecho, y encontró dos fallos más**
+  (ver abajo). Vúmetro cian y faro del reposo confirmados en la placa.
 
 ## Puesta en marcha del lado Python (leer antes de probar la placa)
 
