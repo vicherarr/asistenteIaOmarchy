@@ -101,7 +101,22 @@ pub const GAMMA: [u8; 256] = {
 /// deslumbres".
 pub fn finish(ring: Ring, brightness: u8) -> Ring {
     let ceiling = |canal: u8| -> u8 {
-        ((GAMMA[canal as usize] as u16 * brightness as u16) / 255) as u8
+        let salida = ((GAMMA[canal as usize] as u16 * brightness as u16) / 255) as u8;
+        // **Suelo de 1.** Sin esto, pedir poca luz da negro exacto: la gamma
+        // entera manda a cero todo lo que esté por debajo de 23, y el "faro" del
+        // reposo pide entre 4 y 14. Estuvo apagado desde el primer día y parecía
+        // que el anillo no funcionaba.
+        //
+        // No es un apaño contra la gamma: es que 1/255 es lo mínimo que el LED
+        // sabe encender, así que redondear hacia abajo hasta apagarlo pierde la
+        // única distinción que importa —encendido o apagado— justo donde el
+        // diseño la estaba usando. Con el brillo global a 0 sí se apaga todo,
+        // que es lo que se pide ahí.
+        if salida == 0 && canal > 0 && brightness > 0 {
+            1
+        } else {
+            salida
+        }
     };
     let mut out = OFF;
     for (i, color) in ring.iter().enumerate() {
@@ -232,7 +247,13 @@ pub fn frame(state: State, t_ms: u64, level: u8) -> Ring {
         // sin molestar de noche.
         State::Idle => {
             let mut ring = OFF;
-            let k = 4 + breathe(t_ms, 6_000) / 24; // ~1,5 % a ~6 %
+            // El rango tiene que ser lo bastante ancho como para que **la gamma
+            // lo separe en varios escalones**; si no, la respiración se queda
+            // clavada en un solo valor y parece un LED fijo. Con el brillo real
+            // de `cfg.toml` esto recorre unos cinco niveles de PWM, que de noche
+            // es un latido suave y de día casi no se aprecia. Lo fija el test
+            // `el_faro_del_reposo_respira_despues_de_la_gamma`.
+            let k = 24 + (breathe(t_ms, 6_000) as u16 * 68 / 255) as u8;
             ring[0] = Rgb::WHITE.scaled(k);
             ring
         }
@@ -300,6 +321,33 @@ mod tests {
         }
         assert!(GAMMA[128] < 70, "el 50 % debería quedar bien por debajo: {}", GAMMA[128]);
         assert!(GAMMA[26] <= 2, "el 10 % debería quedar casi apagado: {}", GAMMA[26]);
+    }
+
+    /// El fallo que dejó el "faro" del reposo apagado desde el primer día: la
+    /// gamma entera manda a cero todo lo que baje de 23, y el reposo pide entre
+    /// 4 y 14. Pedir poca luz **nunca** puede dar negro exacto.
+    #[test]
+    fn pedir_poca_luz_no_puede_apagar_el_led() {
+        for canal in 1..=22u8 {
+            let salida = finish([Rgb::new(canal, canal, canal); COUNT], 48)[0];
+            assert!(
+                salida.r > 0,
+                "un blanco al nivel {canal} sale completamente negro"
+            );
+        }
+        // Y el reposo, que es el caso real, tiene que verse encendido siempre.
+        for t in (0..6_000).step_by(100) {
+            let faro = finish(frame(State::Idle, t, 0), 48)[0];
+            assert!(faro.r > 0, "el faro del reposo está apagado en t={t}");
+        }
+    }
+
+    /// Pero el brillo global a cero sí apaga: es la única forma de callar el
+    /// anillo del todo, y el suelo no puede pisarla.
+    #[test]
+    fn el_brillo_a_cero_sigue_apagando_del_todo() {
+        assert_eq!(finish([Rgb::WHITE; COUNT], 0), OFF);
+        assert_eq!(finish(frame(State::Idle, 0, 0), 0), OFF);
     }
 
     #[test]
@@ -413,13 +461,27 @@ mod tests {
         }
     }
 
+    /// El faro tiene que respirar **en lo que sale al bus**, no solo en el valor
+    /// lógico.
+    ///
+    /// La versión anterior de este test miraba `frame()` a secas y por eso daba
+    /// verde mientras en la placa se veía un LED completamente fijo: el rango
+    /// lógico variaba, pero la gamma lo aplastaba todo al mismo escalón de PWM.
+    /// Comprobar antes de la última transformación es no comprobar nada.
     #[test]
-    fn el_faro_del_reposo_es_tenue_y_respira() {
-        let brillos: Vec<u8> = (0..6_000).step_by(50).map(|t| frame(State::Idle, t, 0)[0].r).collect();
-        let max = *brillos.iter().max().unwrap();
-        let min = *brillos.iter().min().unwrap();
-        assert!(max > min, "el faro no respira");
-        assert!(max < 40, "el faro molesta de noche: llega a {max}");
+    fn el_faro_del_reposo_respira_despues_de_la_gamma() {
+        const BRILLO_REAL: u8 = 48;
+        let salidas: Vec<u8> = (0..6_000)
+            .step_by(50)
+            .map(|t| finish(frame(State::Idle, t, 0), BRILLO_REAL)[0].r)
+            .collect();
+
+        let max = *salidas.iter().max().unwrap();
+        let min = *salidas.iter().min().unwrap();
+        assert!(min > 0, "el faro se apaga del todo en algún momento");
+        assert!(max > min, "el faro no respira: se queda clavado en {max}");
+        assert!(max - min >= 2, "la respiración es de un solo escalón ({min}..{max}): no se aprecia");
+        assert!(max <= 8, "el faro molesta de noche: llega a {max}/255");
 
         // Y es un solo LED: el resto del anillo, apagado.
         assert_eq!(encendidos(&frame(State::Idle, 0, 0)), 1);

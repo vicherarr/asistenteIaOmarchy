@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(venv/bin/python -c ' *)",
+      "Bash(systemctl --user restart asistenteia)",
+      "Bash(journalctl --user -u asistenteia --since \"20 seconds ago\" --no-pager)",
+      "Bash(systemctl --user is-active asistenteia)",
+      "Bash(./venv/bin/python *)",
+      "Bash(/home/victor/develop/asistenteia/venv/bin/python --version)",
+      "Bash(nvidia-smi --query-gpu=driver_version,memory.total,memory.used,memory.free --format=csv,noheader)",
+      "Bash(nvcc --version)",
+      "Bash(ldconfig -p)",
+      "Bash(/home/victor/develop/asistenteia/venv/bin/pip list *)",
+      "Bash(venv/bin/python -m pytest tests/test_main.py tests/test_assistant_service.py -q)",
+      "Bash(API_TOKEN= venv/bin/python -m pytest tests/test_main.py tests/test_integration.py tests/test_stress.py -q -k \"process_audio or transcri or audio or status or lifespan or startup or reset\")",
+      "Bash(API_TOKEN= venv/bin/python -m pytest tests/test_main.py tests/test_assistant_service.py -q)",
+      "Bash(venv/bin/python -m pytest tests/test_assistant_service.py -q)",
+      "Bash(venv/bin/pip install *)",
+      "Bash(venv/bin/python *)",
+      "Bash(systemctl --user is-active asistenteia.service)",
+      "Bash(nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader)",
+      "Bash(nvidia-smi --query-compute-apps=pid,used_memory,process_name --format=csv,noheader)",
+      "Bash(git rm *)",
+      "WebFetch(domain:ai.google.dev)",
+      "Bash(bash -c 'source ~/export-esp.sh 2>/dev/null; cargo build -p spikes --bin spike_i2s_loopback 2>&1')",
+      "Read(//home/victor/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/esp-idf-svc-0.52.1/src/ws/**)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
+    ]
+  }
+}
