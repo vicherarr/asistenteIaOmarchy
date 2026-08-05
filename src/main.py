@@ -16,7 +16,7 @@ from collections import defaultdict
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Depends, Request
+from fastapi import FastAPI, HTTPException, Depends, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
 from fastapi.security import APIKeyHeader, APIKeyQuery
 from pydantic import BaseModel
@@ -247,6 +247,11 @@ class TranscriptionRequest(BaseModel):
 class ToolSelectRequest(BaseModel):
     # Lista de nombres de tools a activar. Vacía => todas (sin restricción).
     names: list[str] = []
+
+
+class AudioSinkRequest(BaseModel):
+    # Dónde suena la voz de Luka: "pc" | "device" | "both".
+    target: str
 
 
 class TranscriptionResponse(BaseModel):
@@ -877,6 +882,68 @@ async def select_tools(request: ToolSelectRequest, state: AppState = Depends(get
     if state.engine and hasattr(state.engine, "reset_conversation"):
         state.engine.reset_conversation()
     return {"status": "ok", "active": active}
+
+
+@app.websocket("/device/ws")
+async def device_websocket(websocket: WebSocket):
+    """Canal de un dispositivo satélite (altavoz ESP32-S3).
+
+    Sube el audio de su micrófono y baja la transcripción, la respuesta y la voz
+    de Luka. El protocolo binario está en `src/device_protocol.py`.
+
+    La autenticación va aparte de `verify_token` porque las dependencias de
+    FastAPI para HTTP no aplican al *upgrade* de WebSocket: aquí hay que aceptar
+    la conexión y cerrarla con un código explícito si el token no vale.
+    """
+    from src.device_gateway import DeviceSession, manager
+
+    expected = settings.API_TOKEN
+    if expected:
+        token = websocket.headers.get("x-api-token") or websocket.query_params.get("token")
+        if token != expected:
+            logger.warning("Dispositivo rechazado: token inválido o ausente.")
+            # 1008 = policy violation. Se cierra ANTES de aceptar nada del cliente.
+            await websocket.close(code=1008, reason="Token inválido")
+            return
+
+    await websocket.accept()
+    state: AppState = websocket.app.state.app_state
+    session = DeviceSession(websocket, state)
+    manager.attach(session, state.assistant_service)
+    try:
+        await session.run()
+    except WebSocketDisconnect:
+        logger.info("Dispositivo desconectado.")
+    finally:
+        # Pase lo que pase, el asistente vuelve a hablar solo por el PC.
+        manager.detach(state.assistant_service)
+
+
+@app.get("/device/status", dependencies=[Depends(verify_token)])
+async def device_status(state: AppState = Depends(get_app_state)):
+    """Estado del dispositivo satélite y destino actual del audio."""
+    from src.device_gateway import manager
+
+    return {
+        "device": manager.status(),
+        "audio_target": state.assistant_service.audio_target,
+    }
+
+
+@app.post("/device/audio-sink", dependencies=[Depends(verify_token)])
+async def set_audio_sink(request: AudioSinkRequest, state: AppState = Depends(get_app_state)):
+    """Cambia en caliente dónde suena la voz de Luka: pc | device | both."""
+    from src.device_gateway import manager
+
+    target = (request.target or "").strip().lower()
+    if target not in ("pc", "device", "both"):
+        raise HTTPException(status_code=400, detail="target debe ser 'pc', 'device' o 'both'")
+    if target in ("device", "both") and not manager.connected:
+        raise HTTPException(status_code=409, detail="No hay ningún dispositivo conectado")
+
+    state.assistant_service.audio_target = target
+    logger.info(f"Salida de audio cambiada a: {target}")
+    return {"status": "ok", "audio_target": target}
 
 
 @app.post("/audio/configure", dependencies=[Depends(verify_token)])

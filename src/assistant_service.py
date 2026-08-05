@@ -51,6 +51,13 @@ class AssistantService:
         self.stt = stt_engine
         self._current_tts_task: Optional[asyncio.Task] = None
         self._current_play_task: Optional[asyncio.Task] = None
+        # Salida de voz: "pc" (altavoces del ordenador, comportamiento de siempre),
+        # "device" (altavoz del satélite ESP32) o "both". Mientras no haya ningún
+        # dispositivo conectado esto vale "pc" y `audio_sink` es None, así que el
+        # camino de audio es exactamente el de antes.
+        self.audio_target: str = "pc"
+        # Callable async (audio_np, sample_rate) -> None. Lo instala device_gateway.
+        self.audio_sink: Optional[Callable] = None
         # Lista de herramientas para LiteRT
         self.tools = [
             execute_system_command,
@@ -325,7 +332,15 @@ class AssistantService:
                     break
                 
                 try:
-                    await self.tts.play_audio_array(audio_np)
+                    # Dispositivo satélite primero: se manda por red mientras el PC
+                    # reproduce, en vez de después, para no sumar latencias.
+                    if self.audio_sink is not None and self.audio_target in ("device", "both"):
+                        try:
+                            await self.audio_sink(audio_np, TTSEngine.SAMPLE_RATE)
+                        except Exception as e:  # noqa: BLE001 — el enlace no debe tumbar el TTS
+                            logger.warning(f"No se pudo enviar audio al dispositivo: {e}")
+                    if self.audio_target in ("pc", "both"):
+                        await self.tts.play_audio_array(audio_np)
                 except Exception as e:
                     logger.error(f"Error reproduciendo audio: {e}")
                 finally:

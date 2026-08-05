@@ -29,6 +29,12 @@ class TTSError(Exception):
 class TTSEngine:
     """Motor de texto a voz. Prioriza Kokoro, fallback a gTTS."""
 
+    # Frecuencia de los arrays que devuelve `synthesize_only`. Expuesta como
+    # atributo de clase para que los consumidores (p.ej. el remuestreo hacia el
+    # dispositivo satélite) no tengan que importar la constante del módulo ni,
+    # peor, suponerla.
+    SAMPLE_RATE = KOKORO_SAMPLE_RATE
+
     def __init__(self) -> None:
         self._kokoro_pipeline = None
         self._playback_process: Optional[asyncio.subprocess.Process] = None
