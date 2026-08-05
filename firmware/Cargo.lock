@@ -929,6 +929,7 @@ dependencies = [
  "luka-proto",
  "luka-state",
  "luka-ui",
+ "luka-wakeword",
  "smart-leds",
  "ws2812-esp32-rmt-driver",
 ]
@@ -948,6 +949,10 @@ dependencies = [
  "luka-board",
  "luka-state",
 ]
+
+[[package]]
+name = "luka-wakeword"
+version = "0.1.0"
 
 [[package]]
 name = "memchr"

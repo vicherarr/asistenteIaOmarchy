@@ -86,7 +86,13 @@ pub enum State {
     /// En reposo, esperando al botón (o a la wake word, en la Fase 3).
     Idle,
     /// Capturando y subiendo audio.
-    Listening { since_ms: u64 },
+    ///
+    /// `hands_free` distingue quién abrió el turno, y no es un detalle: un
+    /// turno de botón lo cierra soltar el botón, pero uno abierto por la wake
+    /// word no tiene botón que soltar y solo puede cerrarlo el silencio. Sin
+    /// esta marca, callarse un segundo mientras piensas qué decir cortaría
+    /// también los turnos de botón.
+    Listening { since_ms: u64, hands_free: bool },
     /// Turno enviado, esperando a Luka.
     Thinking { since_ms: u64 },
     /// Reproduciendo la voz de Luka.
@@ -118,6 +124,11 @@ pub enum Event {
     AuthRejected,
     ButtonPressed,
     ButtonReleased,
+    /// El detector local dio por dicha la palabra "Luka".
+    WakeDetected,
+    /// Se acabó de hablar: el micro lleva un rato sin recoger voz. Solo cierra
+    /// los turnos de manos libres.
+    SilenceDetected,
     /// El servidor confirma su estado (trama `STATE`).
     ServerSaid(Reported),
     /// Llegó la primera trama de audio del TTS.
@@ -311,15 +322,26 @@ pub fn next(state: State, event: Event, now_ms: u64) -> (State, Actions) {
 
         // --- Botón: push-to-talk ---
         (S::Idle, E::ButtonPressed) => {
-            (S::Listening { since_ms: now_ms }, Actions::of(&[StartCapture]))
+            (S::Listening { since_ms: now_ms, hands_free: false }, Actions::of(&[StartCapture]))
         }
 
-        (S::Listening { .. }, E::ButtonReleased) => {
+        (S::Listening { hands_free: false, .. }, E::ButtonReleased) => {
+            (S::Thinking { since_ms: now_ms }, Actions::of(&[StopCapture, SendEnd]))
+        }
+
+        // --- Wake word: manos libres ---
+        (S::Idle, E::WakeDetected) => {
+            (S::Listening { since_ms: now_ms, hands_free: true }, Actions::of(&[StartCapture]))
+        }
+
+        // El silencio cierra el turno, pero solo el que abrió la palabra. En un
+        // turno de botón mandas tú.
+        (S::Listening { hands_free: true, .. }, E::SilenceDetected) => {
             (S::Thinking { since_ms: now_ms }, Actions::of(&[StopCapture, SendEnd]))
         }
 
         // El turno se alarga demasiado: se cierra solo, como si se hubiera soltado.
-        (S::Listening { since_ms }, E::Tick) if now_ms.saturating_sub(since_ms) >= LISTENING_TIMEOUT_MS => {
+        (S::Listening { since_ms, .. }, E::Tick) if now_ms.saturating_sub(since_ms) >= LISTENING_TIMEOUT_MS => {
             (S::Thinking { since_ms: now_ms }, Actions::of(&[StopCapture, SendEnd]))
         }
 
@@ -327,13 +349,13 @@ pub fn next(state: State, event: Event, now_ms: u64) -> (State, Actions) {
         // porque lo PRIMERO que se hace es callar el altavoz: el micro nunca
         // llega a estar abierto a la vez que suena la voz.
         (S::Speaking { .. }, E::ButtonPressed) => (
-            S::Listening { since_ms: now_ms },
+            S::Listening { since_ms: now_ms, hands_free: false },
             Actions::of(&[StopPlayback, SendCancel, StartCapture]),
         ),
 
         // Pensando: pulsar el botón aborta la espera y vuelve a escuchar.
         (S::Thinking { .. }, E::ButtonPressed) => {
-            (S::Listening { since_ms: now_ms }, Actions::of(&[SendCancel, StartCapture]))
+            (S::Listening { since_ms: now_ms, hands_free: false }, Actions::of(&[SendCancel, StartCapture]))
         }
 
         // --- Turno ---
@@ -425,7 +447,7 @@ mod tests {
 
     #[test]
     fn soltar_el_boton_cierra_el_turno() {
-        let (state, actions) = next(S::Listening { since_ms: 0 }, E::ButtonReleased, 2_000);
+        let (state, actions) = next(S::Listening { since_ms: 0, hands_free: false }, E::ButtonReleased, 2_000);
         assert!(matches!(state, S::Thinking { .. }));
         assert!(actions.contains(StopCapture));
         assert!(actions.contains(SendEnd));
@@ -436,14 +458,72 @@ mod tests {
     /// con el turno siguiente.
     #[test]
     fn primero_se_corta_la_captura_y_luego_se_manda_end() {
-        let (_, actions) = next(S::Listening { since_ms: 0 }, E::ButtonReleased, 2_000);
+        let (_, actions) = next(S::Listening { since_ms: 0, hands_free: false }, E::ButtonReleased, 2_000);
         let orden: Vec<_> = actions.iter().collect();
         assert_eq!(orden.as_slice(), &[StopCapture, SendEnd]);
     }
 
+    /// El camino de la Fase 3: decir "Luka", hablar, callarse y oír la respuesta.
+    #[test]
+    fn la_palabra_abre_el_turno_y_el_silencio_lo_cierra() {
+        let state = run(&[
+            (E::Booted, 0),
+            (E::WifiUp, 100),
+            (E::ServerUp, 200),
+            (E::WakeDetected, 1_000),
+            (E::SilenceDetected, 4_000),
+            (E::TtsStarted, 5_000),
+            (E::TtsEnded, 9_000),
+        ]);
+        assert_eq!(state, S::Idle);
+    }
+
+    #[test]
+    fn la_palabra_abre_la_captura() {
+        let (state, actions) = next(S::Idle, E::WakeDetected, 1_000);
+        assert_eq!(state, S::Listening { since_ms: 1_000, hands_free: true });
+        assert!(actions.contains(StartCapture));
+    }
+
+    /// Lo que separa un turno de manos libres de uno de botón: callarse un
+    /// momento mientras piensas qué decir NO puede cortar el turno si estás
+    /// pulsando el botón.
+    #[test]
+    fn el_silencio_solo_cierra_los_turnos_de_manos_libres() {
+        let con_boton = S::Listening { since_ms: 0, hands_free: false };
+        let (despues, actions) = next(con_boton, E::SilenceDetected, 3_000);
+        assert_eq!(despues, con_boton, "el silencio cortó un turno de botón");
+        assert!(actions.is_empty());
+
+        let manos_libres = S::Listening { since_ms: 0, hands_free: true };
+        let (despues, actions) = next(manos_libres, E::SilenceDetected, 3_000);
+        assert!(matches!(despues, S::Thinking { .. }));
+        assert!(actions.contains(SendEnd));
+    }
+
+    /// Y al revés: soltar un botón que nadie pulsó no cierra un turno abierto
+    /// por la palabra. El caso real sería un rebote del expansor.
+    #[test]
+    fn soltar_el_boton_no_cierra_un_turno_de_manos_libres() {
+        let manos_libres = S::Listening { since_ms: 0, hands_free: true };
+        assert_eq!(next(manos_libres, E::ButtonReleased, 3_000).0, manos_libres);
+    }
+
+    /// La palabra no puede colarse mientras Luka habla: sería su propia voz
+    /// saliendo por el altavoz a un palmo del micro. El detector se para en
+    /// esos estados, pero la máquina de estados no se fía y lo ignora también.
+    #[test]
+    fn la_palabra_se_ignora_mientras_luka_habla_o_piensa() {
+        for state in [S::Speaking { since_ms: 0 }, S::Thinking { since_ms: 0 }] {
+            let (despues, actions) = next(state, E::WakeDetected, 1_000);
+            assert_eq!(despues, state, "{state:?} atendió a la wake word");
+            assert!(actions.is_empty());
+        }
+    }
+
     #[test]
     fn un_turno_eterno_se_cierra_solo() {
-        let inicio = S::Listening { since_ms: 1_000 };
+        let inicio = S::Listening { since_ms: 1_000, hands_free: false };
         // Justo antes del plazo no pasa nada.
         assert_eq!(next(inicio, E::Tick, 1_000 + LISTENING_TIMEOUT_MS - 1).0, inicio);
         // Al cumplirse, se cierra igual que si se hubiera soltado el botón.
@@ -625,7 +705,7 @@ mod tests {
     /// frecuente con diferencia: si moviera algo, lo movería 50 veces por segundo.
     #[test]
     fn un_tick_inocuo_no_cambia_nada() {
-        for state in [S::Idle, S::Listening { since_ms: 99_000 }, S::Thinking { since_ms: 99_000 }] {
+        for state in [S::Idle, S::Listening { since_ms: 99_000, hands_free: false }, S::Thinking { since_ms: 99_000 }] {
             let (siguiente, actions) = next(state, E::Tick, 99_100);
             assert_eq!(siguiente, state);
             assert!(actions.is_empty());
@@ -668,19 +748,20 @@ mod tests {
         }
     }
 
-    const TODOS_LOS_ESTADOS: [State; 9] = [
+    const TODOS_LOS_ESTADOS: [State; 10] = [
         S::Booting,
         S::WifiConnecting { since_ms: 0 },
         S::ServerConnecting { since_ms: 0, attempt: 0 },
         S::Disconnected { retry_at_ms: 1_000, attempt: 1 },
         S::Idle,
-        S::Listening { since_ms: 0 },
+        S::Listening { since_ms: 0, hands_free: false },
+        S::Listening { since_ms: 0, hands_free: true },
         S::Thinking { since_ms: 0 },
         S::Speaking { since_ms: 0 },
         S::Fault { kind: Fault::Audio, since_ms: 0 },
     ];
 
-    const TODOS_LOS_EVENTOS: [Event; 13] = [
+    const TODOS_LOS_EVENTOS: [Event; 15] = [
         E::Booted,
         E::WifiUp,
         E::WifiDown,
@@ -689,6 +770,8 @@ mod tests {
         E::AuthRejected,
         E::ButtonPressed,
         E::ButtonReleased,
+        E::WakeDetected,
+        E::SilenceDetected,
         E::ServerSaid(Reported::Idle),
         E::ServerSaid(Reported::Speaking),
         E::TtsStarted,

@@ -443,12 +443,29 @@ el altavoz de la placa.
 Reconexión con *backoff*, watchdog, *jitter buffer*, mDNS, OTA por WiFi (para no depender
 del cable), telemetría de batería/RSSI, ajuste de latencia.
 
-### Fase 3 — Wake word *(1–2 sesiones + entrenamiento)*
-Aquí se decide **A o B** (§3) con datos reales del hardware ya funcionando. Si es A:
-entrenar el modelo (con la variante "Oye Luka" en paralelo para comparar) e integrar TFLite
-Micro por FFI. En ambos casos: acuse visual `WakeDetected`, umbral configurable en caliente
-y **modo calibración en el anillo** — la confianza del detector como vúmetro, que es la
-forma práctica de afinar el umbral sin instrumentar nada (§5.5).
+### Fase 3 — Wake word *(en curso)*
+**Decidido: opción A** (modelo en el dispositivo) y la palabra es **"Luka" a secas**. La
+variante "Oye Luka" que este plan recomendaba queda descartada por decisión del usuario:
+es la palabra que va a decir él, y la elige él. El coste —una palabra corta dispara más
+de la cuenta— se paga en el corpus (negativos adversarios en español) y en el umbral, no
+cambiando la palabra.
+
+Estado y detalle en [`PROGRESO.md`](PROGRESO.md) y [`wakeword/README.md`](wakeword/README.md).
+Dos correcciones a lo que este plan daba por hecho:
+
+- **El FFI no hizo falta.** ESPHome publica el intérprete y el frontend como componentes
+  gestionados del ESP-IDF (`esp-tflite-micro`, `esp-nn`, `esp-micro-speech-features`), así
+  que sobre ellos solo queda un shim en C y cinco `extern "C"`. El "trozo de más riesgo
+  del firmware" resultó ser el trozo más rutinario.
+- **El generador de voces de microWakeWord es solo inglés** (904 hablantes, sin
+  equivalente en español). El corpus se hace con las 8 voces españolas de Piper y la
+  variedad la aporta la augmentación.
+
+Además de lo previsto —acuse visual, umbral configurable y modo calibración en el
+anillo— hizo falta algo que el plan no contemplaba: **el turno se cierra por silencio**,
+porque con la wake word no hay botón que soltar. Solo se aplica a los turnos que abrió la
+palabra (`hands_free` en `Listening`).
+
 **Criterio de salida:** la palabra dispara la captura desde 3 metros, y una tarde de
 conversación normal en la sala no produce falsos positivos molestos.
 

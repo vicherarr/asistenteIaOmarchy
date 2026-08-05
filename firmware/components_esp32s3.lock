@@ -1,4 +1,38 @@
 dependencies:
+  esphome/esp-micro-speech-features:
+    component_hash: 2b720b4ed49fa9df14b24f35fd3ec8a012eddde1c8dd4709448e36a581eebd3e
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.4'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.2.3
+  espressif/esp-nn:
+    component_hash: f4633a02f05fef53b80de65ade1f733ebdef637e4c8b8be4eb11f5e27f6d9f3e
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.2'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.1.2
+  espressif/esp-tflite-micro:
+    component_hash: 78502e833b227ec15b917222ed046df1a46f2e5d3593d2a77a162012fa9a1aa0
+    dependencies:
+    - name: espressif/esp-nn
+      registry_url: https://components.espressif.com
+      require: private
+      version: ^1.1.0
+    - name: idf
+      require: private
+      version: '>=4.4'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.3.3~1
   espressif/esp_websocket_client:
     component_hash: dc00233af846f3a744ada283a300e0d586040aadc3ee67361645ecdce4523672
     dependencies:
@@ -14,7 +48,10 @@ dependencies:
       type: idf
     version: 5.2.3
 direct_dependencies:
+- esphome/esp-micro-speech-features
+- espressif/esp-nn
+- espressif/esp-tflite-micro
 - espressif/esp_websocket_client
-manifest_hash: 93c7b8e408e19992417ef90518c2dd9ec59547d8be2373c8234e2c6e6d6a4973
+manifest_hash: 7c0110ad3fadb79628a99652fad22482666e1673c20f609e472cc7af08972002
 target: esp32s3
 version: 2.0.0

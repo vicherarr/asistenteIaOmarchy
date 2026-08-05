@@ -197,6 +197,21 @@ fn vu_meter(color: Rgb, level: u8) -> Ring {
     ring
 }
 
+/// Modo calibración: la **confianza del detector** como vúmetro.
+///
+/// Es la única forma práctica de ajustar el umbral de la wake word sin
+/// instrumentar nada ni tener la placa enchufada al PC: te pones a tres metros,
+/// dices "Luka" y ves hasta dónde sube el anillo. Si llega al final, el umbral
+/// puede subir; si se queda a la mitad, hay que bajarlo.
+///
+/// En violeta y no en cian para que no se confunda con el vúmetro de micro de
+/// `Listening`: son dos cosas distintas —cuánto suena y cuánto se parece a
+/// "Luka"— y confundirlas al calibrar lleva a ajustar el umbral mirando el
+/// número equivocado.
+pub fn calibration(confianza: u8) -> Ring {
+    vu_meter(Rgb::VIOLET, confianza)
+}
+
 /// Parpadeos rojos que deletrean un código de fallo, al estilo de los pitidos de
 /// arranque de una BIOS: `k` destellos, pausa larga, y vuelta a empezar.
 fn fault_blinks(kind: Fault, t_ms: u64) -> Ring {
@@ -286,7 +301,7 @@ mod tests {
         State::ServerConnecting { since_ms: 0, attempt: 0 },
         State::Disconnected { retry_at_ms: 0, attempt: 1 },
         State::Idle,
-        State::Listening { since_ms: 0 },
+        State::Listening { since_ms: 0, hands_free: false },
         State::Thinking { since_ms: 0 },
         State::Speaking { since_ms: 0 },
         State::Fault { kind: Fault::Audio, since_ms: 0 },
@@ -295,6 +310,24 @@ mod tests {
     /// Cuántos LEDs están encendidos en un fotograma.
     fn encendidos(ring: &Ring) -> usize {
         ring.iter().filter(|c| !c.is_off()).count()
+    }
+
+    /// El anillo de calibración tiene que ser monótono y distinguirse del
+    /// vúmetro de micro: si se parecieran, se calibraría mirando el otro.
+    #[test]
+    fn la_calibracion_sube_con_la_confianza_y_no_es_cian() {
+        let mut anterior = 0;
+        for confianza in [0u8, 64, 128, 192, 255] {
+            let n = encendidos(&calibration(confianza));
+            assert!(n >= anterior, "la calibración bajó con más confianza");
+            anterior = n;
+        }
+        assert!(encendidos(&calibration(0)) > 0, "a cero debería quedar un punto tenue");
+        assert_eq!(encendidos(&calibration(255)), COUNT, "al máximo debería llenarse");
+
+        let calibrando = calibration(255);
+        let escuchando = frame(State::Listening { since_ms: 0, hands_free: true }, 0, 255);
+        assert_ne!(calibrando[0], escuchando[0], "calibración y escucha se ven igual");
     }
 
     // ------------------------------------------------------------------ gamma
@@ -374,7 +407,7 @@ mod tests {
             ("WifiConnecting", State::WifiConnecting { since_ms: 0 }, 0u8),
             ("ServerConnecting", State::ServerConnecting { since_ms: 0, attempt: 0 }, 0),
             ("Disconnected", State::Disconnected { retry_at_ms: 0, attempt: 1 }, 0),
-            ("Listening", State::Listening { since_ms: 0 }, 255),
+            ("Listening", State::Listening { since_ms: 0, hands_free: false }, 255),
             ("Thinking", State::Thinking { since_ms: 0 }, 0),
             ("Speaking", State::Speaking { since_ms: 0 }, 255),
             ("Fault", State::Fault { kind: Fault::Audio, since_ms: 0 }, 0),
@@ -435,7 +468,7 @@ mod tests {
 
     #[test]
     fn el_vumetro_sube_con_la_voz() {
-        let cuenta = |level| encendidos(&frame(State::Listening { since_ms: 0 }, 0, level));
+        let cuenta = |level| encendidos(&frame(State::Listening { since_ms: 0, hands_free: false }, 0, level));
         assert_eq!(cuenta(0), 1, "en silencio debe quedar el punto tenue");
         assert!(cuenta(128) > cuenta(0));
         assert!(cuenta(255) > cuenta(128));
@@ -446,7 +479,7 @@ mod tests {
     fn el_vumetro_es_monotono() {
         let mut previo = 0;
         for level in 0..=255u8 {
-            let n = encendidos(&frame(State::Listening { since_ms: 0 }, 0, level));
+            let n = encendidos(&frame(State::Listening { since_ms: 0, hands_free: false }, 0, level));
             assert!(n >= previo, "el vúmetro baja al subir el nivel a {level}");
             previo = n;
         }
@@ -457,7 +490,7 @@ mod tests {
     #[test]
     fn escuchando_siempre_hay_algo_encendido() {
         for level in 0..=255u8 {
-            assert!(encendidos(&frame(State::Listening { since_ms: 0 }, 0, level)) > 0);
+            assert!(encendidos(&frame(State::Listening { since_ms: 0, hands_free: false }, 0, level)) > 0);
         }
     }
 

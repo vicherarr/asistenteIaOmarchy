@@ -189,7 +189,14 @@ impl AudioIO {
             // es lo que marca el ritmo del bucle, porque bloquea justo una trama.
             match self.i2s.read(&mut rx_bytes, BLOCK) {
                 Ok(_) => {
-                    if capturing {
+                    // Desde la Fase 3 las tramas salen **siempre que no se esté
+                    // reproduciendo**, no solo durante un turno: en reposo se
+                    // las lleva el detector de wake word, que necesita oír
+                    // continuamente. Quién hace qué con ellas lo decide el hilo
+                    // `detect` según el modo; aquí solo se garantiza lo único
+                    // que no es negociable: mientras suena el altavoz, el micro
+                    // no sale de este hilo.
+                    if !playing {
                         let (pcm, level) = mono_and_level(&rx_bytes);
                         // Si el consumidor no da abasto se descarta la trama en vez
                         // de bloquear: bloquear aquí pararía también la

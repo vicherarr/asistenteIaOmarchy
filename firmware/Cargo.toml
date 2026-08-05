@@ -6,6 +6,7 @@ members = [
     "crates/luka-proto",
     "crates/luka-state",
     "crates/luka-ui",
+    "crates/luka-wakeword",
     "crates/luka-firmware",
     "crates/spikes",
 ]
@@ -23,6 +24,7 @@ luka-board = { path = "crates/luka-board" }
 luka-proto = { path = "crates/luka-proto" }
 luka-state = { path = "crates/luka-state" }
 luka-ui = { path = "crates/luka-ui" }
+luka-wakeword = { path = "crates/luka-wakeword" }
 
 esp-idf-svc = "0.52"
 esp-idf-hal = "0.46"

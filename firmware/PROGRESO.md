@@ -349,14 +349,100 @@ lo que sale al bus. Si algún día se añade otra etapa al final de la cadena, l
 tienen que moverse con ella.
 
 ### Pendiente de la Fase 2 (pulido, no rehacer)
-- **Reconexión:** la cadencia real la lleva el cliente del ESP-IDF, no el backoff de la
-  máquina de estados, por lo del punto 2. Funciona, pero la política está en dos sitios.
-- **La respuesta llega con el `<think>` del modelo dentro.** Se ve en el log del
+- ~~**Reconexión:** la cadencia real la lleva el cliente del ESP-IDF, no el backoff de la
+  máquina de estados, por lo del punto 2. Funciona, pero la política está en dos sitios.~~ **Hecho** (con `disable_auto_reconnect: true` la FSM recupera el control).
+- ~~**La respuesta llega con el `<think>` del modelo dentro.** Se ve en el log del
   dispositivo (`← {"text":"<think>…"}`). Al altavoz no le afecta, pero si algún día hay
-  pantalla habrá que limpiarlo en el servidor.
+  pantalla habrá que limpiarlo en el servidor.~~ **Hecho** (se eliminan las etiquetas con regex en `device_gateway.py`).
 - Verificar cuánto aguanta el enlace en horas, y el consumo.
 - ~~El anillo de LEDs no se ha comprobado a ojo.~~ **Hecho, y encontró dos fallos más**
   (ver abajo). Vúmetro cian y faro del reposo confirmados en la placa.
+
+## 🔨 Fase 3 — Wake word "Luka" (en curso, 2026-08-05)
+
+**Decisión tomada:** opción A del plan, modelo en el dispositivo. Y la palabra es
+**"Luka" a secas**, no "Oye Luka": es la que se va a decir treinta veces al día y la
+elige quien la dice. El coste de esa elección es real —dos sílabas cortas disparan más
+de la cuenta— y se paga en el corpus y en el umbral, no cambiando la palabra.
+
+### Lo que ya está construido
+
+| Pieza | Estado |
+|---|---|
+| Entorno de entrenamiento aislado (2 venvs, GPU) | ✅ `firmware/wakeword/preparar_entorno.sh` |
+| Corpus: 4.000 "Luka" + 3.600 palabras vecinas | ✅ 8 voces españolas de Piper |
+| Datasets negativos y fondos (ruido, música, impulsos) | ✅ ~10 GB fuera del repo |
+| Componente C `luka_ww`: frontend + TFLite Micro | ✅ **compila para el S3** |
+| Crate `luka-wakeword` (FFI + política de decisión) | ✅ 8 tests en el host |
+| `Event::WakeDetected` / `SilenceDetected` en la FSM | ✅ 27 tests |
+| Hilo `detect`: pre-roll, silencio, modos | ✅ compila y enlaza |
+| Modo calibración del anillo | ✅ `luka_ui::calibration` |
+| Modelo entrenado | ✅ `luka.tflite` empotrado |
+| Prueba de campo | ⏳ requiere al usuario |
+
+### El riesgo grande resultó no serlo
+
+El plan daba el FFI de TFLite Micro como "el trozo de más riesgo de todo el firmware":
+~300 líneas de *glue* con `bindgen`. No hizo falta nada de eso. ESPHome empaqueta las
+tres piezas como **componentes gestionados del ESP-IDF** y se declaran igual que el
+cliente WebSocket, en `luka-firmware/Cargo.toml`:
+
+- `espressif/esp-tflite-micro` — el intérprete.
+- `espressif/esp-nn` — sus kernels para el S3. Sin él la inferencia no llega a tiempo.
+- `esphome/esp-micro-speech-features` — el frontend de espectrograma.
+
+Encima queda un shim en C de ~250 líneas (`components/luka_ww/`) y cinco `extern "C"` en
+Rust. Sin `bindgen`, y el `unsafe` cabe en una pantalla.
+
+**Lo que sí es delicado:** las constantes del frontend (40 bandas, ventana de 30 ms,
+suavizado del ruido, desplazamiento del logaritmo) tienen que coincidir **exactamente**
+con las del entrenamiento. Si se cambia una, el modelo recibe características que no
+vio nunca y **no dispara jamás, sin ningún error en el log**. Están replicadas literales
+en `luka_ww.cc` con un comentario que lo advierte.
+
+### El generador de voces de microWakeWord es solo inglés
+
+Es el hallazgo que más condiciona la fase. Los positivos del flujo estándar salen de un
+checkpoint LibriTTS-R con **904 hablantes**; no hay equivalente en español. Con 8 voces
+españolas, la variedad tiene que salir de la augmentación (reverberación de salas
+reales, ruido entre -5 y +10 dB de SNR, tono, EQ). Detalle en
+[`wakeword/README.md`](wakeword/README.md).
+
+### Lo que no tiene arreglo por entrenamiento
+
+En español **"Luca" se pronuncia exactamente igual que "Luka"**. Si alguien en la sala
+se llama así, la placa despertará. "Lucas" y "Lucía" sí se distinguen (hay sonido
+después) y están entre los negativos adversarios.
+
+### Sin botón que soltar, el turno lo cierra el silencio
+
+La wake word abre el turno, pero no hay nada que soltar para cerrarlo. Se añadió
+`SilenceDetected` (1,2 s por debajo del nivel de voz) y una marca `hands_free` en el
+estado `Listening`: **el silencio solo cierra los turnos que abrió la palabra**. Sin esa
+distinción, callarte un momento mientras piensas qué decir te cortaría también los
+turnos de botón, que es justo lo contrario de lo que quiere quien tiene el dedo puesto.
+
+### El pre-roll no es un lujo
+
+Cuando el detector dice "Luka", la palabra **ya se ha dicho**: el modelo necesita oírla
+entera. Grabar a partir de ese instante manda al servidor una frase que empieza por la
+mitad. El hilo `detect` guarda el último segundo en un anillo y lo vuelca al despertar.
+
+### Trampas del entrenamiento (todas costaron una vuelta)
+
+- **Las libs de CUDA viven dentro de los venvs.** Sin `LD_LIBRARY_PATH` ni PyTorch ni
+  TensorFlow las encuentran y entrenan en CPU **sin avisar**.
+- **La GPU la comparte el propio asistente.** TabbyAPI tiene ~5 GB de los 8, y
+  TensorFlow por defecto reserva de golpe casi toda la memoria libre; la evaluación del
+  set ambiente copia ~1 GB y revienta con `Dst tensor is not initialized`, que no
+  menciona la memoria por ningún lado. Se arregla con `TF_FORCE_GPU_ALLOW_GROWTH`.
+- **`datasets` ≥4 exige `torchcodec`**, que arrastra PyTorch entero al venv de
+  TensorFlow. Anclado a la serie 3.
+- **HuggingFace devuelve 200 con 15 bytes de JSON** cuando una ruta ya no existe (le
+  pasó a AudioSet). El script comprueba tamaños.
+- **Un directorio creado y vacío no es un paso hecho.** La comprobación de "ya está" de
+  las features miraba la carpeta, no los datos, y el corpus positivo se saltó entero en
+  silencio.
 
 ## Puesta en marcha del lado Python (leer antes de probar la placa)
 

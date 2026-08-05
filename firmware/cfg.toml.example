@@ -25,3 +25,17 @@ tls_cert = "certs/server.pem"
 name = "luka-speaker"
 # Brillo del anillo RGB, 0-255. Por encima de ~64 molesta de noche.
 led_brightness = 48
+
+# --- Wake word (Fase 3). Las dos claves son opcionales: si no están, valen
+# --- 200 y false, así que un cfg.toml antiguo sigue compilando.
+
+# Umbral de la palabra "Luka", 0-255, sobre la media de la ventana del detector.
+# Alto = cuesta más despertarla pero casi no hay falsos positivos.
+# Bajo  = despierta a la primera y también con la tele.
+wake_threshold = 200
+
+# Modo calibración: en reposo, el anillo enseña en VIOLETA cuánto se parece lo
+# que oye a "Luka". Ponte a tres metros, dilo, y mira hasta dónde sube: si llega
+# al final holgado, sube el umbral; si se queda a medias, bájalo.
+# Para el uso diario, déjalo en false: el reposo debe ser discreto.
+wake_calibration = false

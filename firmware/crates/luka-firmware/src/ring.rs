@@ -9,6 +9,12 @@ use ws2812_esp32_rmt_driver::Ws2812Esp32Rmt;
 /// Frecuencia de actualización del anillo (50 fps = 20 ms).
 const FPS_INTERVAL: Duration = Duration::from_millis(20);
 
+/// Confianza por debajo de la cual el modo calibración no enciende nada.
+///
+/// Sin este suelo, el ruido de fondo mantendría el anillo encendido en violeta
+/// toda la noche mientras se calibra.
+const CALIBRACION_MINIMA: u8 = 30;
+
 pub struct RingState {
     state: AtomicU32,
     fault: AtomicU32,
@@ -18,6 +24,9 @@ pub struct RingState {
     since_ms: AtomicU32,
     level: AtomicU8,
     brightness: AtomicU8,
+    /// Confianza del detector de wake word (0-255). Solo se pinta en modo
+    /// calibración; el resto del tiempo el reposo tiene que ser discreto.
+    confianza: AtomicU8,
 }
 
 impl RingState {
@@ -29,6 +38,7 @@ impl RingState {
             level: AtomicU8::new(0),
             // Brillo de `cfg.toml`; `set_brightness` puede cambiarlo en caliente.
             brightness: AtomicU8::new(luka_config::device::LED_BRIGHTNESS),
+            confianza: AtomicU8::new(0),
         }
     }
 
@@ -43,6 +53,11 @@ impl RingState {
 
     pub fn set_level(&self, level: u8) {
         self.level.store(level, Ordering::Relaxed);
+    }
+
+    /// Confianza actual del detector, para el modo calibración.
+    pub fn set_confianza(&self, confianza: u8) {
+        self.confianza.store(confianza, Ordering::Relaxed);
     }
 
     /// Todavía no lo llama nadie: es la palanca del **modo nocturno** del plan
@@ -73,7 +88,21 @@ pub fn spawn(
                 let brightness = shared_state.brightness.load(Ordering::Relaxed);
 
                 let t_en_estado = now_ms.saturating_sub(since_ms);
-                let raw_frame = luka_ui::frame(state, t_en_estado, level);
+                let confianza = shared_state.confianza.load(Ordering::Relaxed);
+
+                // En calibración el anillo deja de contar el estado y pasa a
+                // ser un instrumento: enseña cuánto se parece lo que oye a
+                // "Luka". Solo en reposo —durante el turno el vúmetro del
+                // micro sigue siendo más útil— y solo si hay algo que ver, para
+                // que un salón en silencio siga a oscuras de noche.
+                let calibrando = luka_config::device::WAKE_CALIBRATION
+                    && state == State::Idle
+                    && confianza >= CALIBRACION_MINIMA;
+                let raw_frame = if calibrando {
+                    luka_ui::calibration(confianza)
+                } else {
+                    luka_ui::frame(state, t_en_estado, level)
+                };
                 let finished = luka_ui::finish(raw_frame, brightness);
 
                 let pixels = finished.iter().map(|rgb| {
@@ -111,7 +140,7 @@ fn decode_state(encoded: u32, fault_encoded: u32, since_ms: u64) -> State {
         2 => State::ServerConnecting { since_ms, attempt: 0 }, // attempt es irrelevante para UI
         3 => State::Disconnected { retry_at_ms: 0, attempt: 0 },
         4 => State::Idle,
-        5 => State::Listening { since_ms },
+        5 => State::Listening { since_ms, hands_free: false },
         6 => State::Thinking { since_ms },
         7 => State::Speaking { since_ms },
         8 => {

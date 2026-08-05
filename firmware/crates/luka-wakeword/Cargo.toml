@@ -1,0 +1,13 @@
+[package]
+name = "luka-wakeword"
+description = "Detector de la wake word 'Luka': frontend + TFLite Micro"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# Sin dependencias a propósito: la mitad que se prueba en el PC es aritmética
+# de enteros, y la otra mitad son cinco `extern "C"` contra el componente
+# `luka_ww`, que lo aporta el binario (ver luka-firmware/Cargo.toml).
+[dependencies]

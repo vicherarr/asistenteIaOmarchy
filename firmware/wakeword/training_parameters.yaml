@@ -1,0 +1,98 @@
+# Configuración de entrenamiento de la wake word "Luka".
+#
+# Las rutas son relativas al directorio de trabajo (~/luka-wakeword), no al
+# repo: los datasets no se versionan.
+#
+# Lo que diferencia esta configuración de la de referencia de microWakeWord es
+# todo consecuencia de la misma decisión: la palabra es "Luka", dos sílabas
+# cortas. Eso no complica reconocerla, complica NO reconocerla de más.
+
+train_dir: trained_models/luka
+window_step_ms: 10
+
+# Máxima duración de la palabra que aceptará el modelo en streaming. 1,5 s
+# sobra para "Luka" y mantiene el modelo pequeño.
+clip_duration_ms: 1500
+
+features:
+  # Las muestras de "Luka" generadas con las 8 voces españolas.
+  - features_dir: features_positivas
+    sampling_weight: 2.0
+    penalty_weight: 1.0
+    truth: true
+    truncation_strategy: truncate_start
+    type: mmap
+
+  # Palabras vecinas (loca, lupa, luna, Lucas...). Peso de penalización alto:
+  # equivocarse aquí es exactamente el fallo que hace insufrible un detector.
+  - features_dir: features_adversarias
+    sampling_weight: 3.0
+    penalty_weight: 2.0
+    truth: false
+    truncation_strategy: truncate_start
+    type: mmap
+
+  # Conversación general: la fuente número uno de falsos positivos.
+  - features_dir: negative_datasets/speech
+    sampling_weight: 10.0
+    penalty_weight: 1.0
+    truth: false
+    truncation_strategy: random
+    type: mmap
+
+  - features_dir: negative_datasets/dinner_party
+    sampling_weight: 10.0
+    penalty_weight: 1.0
+    truth: false
+    truncation_strategy: random
+    type: mmap
+
+  - features_dir: negative_datasets/no_speech
+    sampling_weight: 5.0
+    penalty_weight: 1.0
+    truth: false
+    truncation_strategy: random
+    type: mmap
+
+  # Solo validación y test: de aquí sale la estimación de falsos positivos por
+  # hora, que es la métrica que decide qué pesos se guardan.
+  - features_dir: negative_datasets/dinner_party_eval
+    sampling_weight: 0.0
+    penalty_weight: 1.0
+    truth: false
+    truncation_strategy: split
+    type: mmap
+
+# 10.000 es el valor de referencia de microWakeWord y da modelos usables. Se
+# mantiene bajo a propósito: esta GPU la comparte el motor del asistente, así
+# que entrenar significa dejar al usuario sin él mientras dura. Si tras la
+# prueba de campo el modelo se queda corto, subir a 20.000 es lo primero que
+# hay que probar.
+training_steps: [10000]
+learning_rates: [0.001]
+batch_size: 128
+
+# Un positivo perdido lo repites; un falso positivo te interrumpe. 20:1 es el
+# valor de referencia de microWakeWord y ya está sesgado hacia lo segundo.
+positive_class_weight: [1]
+negative_class_weight: [20]
+
+# SpecAugment desactivado: con la augmentación de audio que ya se aplica
+# (ruido, reverberación, tono) enmascarar además el espectrograma tiende a
+# borrar una palabra que dura tres cuartos de segundo.
+time_mask_max_size: [0]
+time_mask_count: [0]
+freq_mask_max_size: [0]
+freq_mask_count: [0]
+
+eval_step_interval: 500
+
+# Criterio para quedarse con unos pesos u otros, y es la parte que más importa
+# aquí: **primero** se exige bajar de 0,5 falsos positivos por hora sobre la
+# grabación de una cena (voces solapadas, ruido de fondo, lo más parecido a un
+# salón real); solo entre los pesos que lo cumplen se elige el que mejor
+# reconoce. Al revés —maximizar acierto y mirar luego los falsos positivos—
+# sale un modelo que dispara con la tele.
+minimization_metric: ambient_false_positives_per_hour
+target_minimization: 0.5
+maximization_metric: average_viable_recall

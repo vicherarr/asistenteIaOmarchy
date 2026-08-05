@@ -46,6 +46,36 @@ fn emit_int(doc: &toml::Value, table: &str, key: &str, env_name: &str) {
     println!("cargo:rustc-env={env_name}={value}");
 }
 
+/// Igual que [`emit_int`], pero con valor por defecto si la clave no está.
+///
+/// Las claves nuevas entran así a propósito: un `cfg.toml` que ya funcionaba
+/// —y que no está versionado, así que nadie puede actualizarlo por ti— tiene
+/// que seguir compilando después de una actualización del firmware.
+fn emit_int_default(doc: &toml::Value, table: &str, key: &str, env_name: &str, por_defecto: i64) {
+    let value = doc
+        .get(table)
+        .and_then(|t| t.get(key))
+        .map(|v| {
+            v.as_integer()
+                .unwrap_or_else(|| panic!("cfg.toml: [{table}].{key} debe ser un número"))
+        })
+        .unwrap_or(por_defecto);
+    println!("cargo:rustc-env={env_name}={value}");
+}
+
+/// Un booleano se emite como 0 o 1: `lib.rs` no puede parsear texto en `const`.
+fn emit_bool_default(doc: &toml::Value, table: &str, key: &str, env_name: &str, por_defecto: bool) {
+    let value = doc
+        .get(table)
+        .and_then(|t| t.get(key))
+        .map(|v| {
+            v.as_bool()
+                .unwrap_or_else(|| panic!("cfg.toml: [{table}].{key} debe ser true o false"))
+        })
+        .unwrap_or(por_defecto);
+    println!("cargo:rustc-env={env_name}={}", if value { 1 } else { 0 });
+}
+
 /// Resuelve la ruta del certificado del servidor y la expone al crate.
 ///
 /// El PEM no se pasa como variable de entorno (es multilínea y se llevaría mal):
@@ -105,4 +135,6 @@ fn main() {
     emit_cert(&doc, path.parent().unwrap());
     emit_str(&doc, "device", "name", "LUKA_DEVICE_NAME");
     emit_int(&doc, "device", "led_brightness", "LUKA_LED_BRIGHTNESS");
+    emit_int_default(&doc, "device", "wake_threshold", "LUKA_WAKE_THRESHOLD", 200);
+    emit_bool_default(&doc, "device", "wake_calibration", "LUKA_WAKE_CALIBRATION", false);
 }

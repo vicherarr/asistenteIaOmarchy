@@ -19,6 +19,7 @@
 
 mod audio;
 mod board;
+mod detect;
 mod net;
 mod ring;
 mod watchdog;
@@ -115,6 +116,19 @@ fn main() -> Result<()> {
 
     let net_task = net::NetTask::new(net_cmd_rx, event_tx.clone(), playback_tx, peripherals.modem);
     net_task.spawn()?;
+
+    // El detector se pone EN MEDIO de audio y red: es quien decide, trama a
+    // trama, si lo que llega del micro va al modelo de wake word o al servidor.
+    // El supervisor ya no toca audio; solo le dice en qué modo está.
+    let modo_detect = Arc::new(detect::ModoCompartido::new());
+    let detect_task = detect::Detect::new(
+        capture_rx,
+        net_cmd_tx.clone(),
+        event_tx.clone(),
+        shared_ring.clone(),
+        modo_detect.clone(),
+    );
+    detect_task.spawn()?;
     
     // Iniciar
     let _ = event_tx.try_send(luka_state::Event::Booted);
@@ -147,15 +161,6 @@ fn main() -> Result<()> {
             }
         }
         
-        // Las tramas capturadas suben a la red y, de paso, alimentan el vúmetro
-        // con el nivel que el hilo de audio ya ha calculado.
-        while let Ok(frame) = capture_rx.try_recv() {
-            shared_ring.set_level(frame.level);
-            if net_cmd_tx.try_send(net::NetCommand::SendAudio(frame.pcm)).is_err() {
-                log::warn!("trama de micro descartada: la red no da abasto");
-            }
-        }
-
         while let Ok(ev) = event_rx.try_recv() {
             events.push(ev);
         }
@@ -168,6 +173,15 @@ fn main() -> Result<()> {
                 log::info!("State transition: {:?} -> {:?}", current_state, next_state);
                 current_state = next_state;
                 shared_ring.set_state(current_state, now_ms);
+
+                // El modo del detector se DERIVA del estado en vez de mandarse
+                // como acción: así no hay forma de que se queden desincronizados
+                // (que es como se acaba escuchando con el altavoz abierto).
+                modo_detect.set(match current_state {
+                    luka_state::State::Idle => detect::Modo::Detectando,
+                    luka_state::State::Listening { .. } => detect::Modo::Enviando,
+                    _ => detect::Modo::Parado,
+                });
             }
             
             for action in actions.iter() {

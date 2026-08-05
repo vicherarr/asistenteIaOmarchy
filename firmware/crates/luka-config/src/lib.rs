@@ -63,6 +63,18 @@ pub mod device {
     pub const NAME: &str = env!("LUKA_DEVICE_NAME");
     /// Brillo del anillo RGB (0-255). Se aplica tras la corrección gamma.
     pub const LED_BRIGHTNESS: u8 = super::parse_u32(env!("LUKA_LED_BRIGHTNESS")) as u8;
+
+    /// Umbral de la wake word (0-255) sobre la media de la ventana.
+    ///
+    /// Alto por defecto: "Luka" es una palabra corta y el fallo que se paga
+    /// caro es el falso positivo. Se baja con el modo calibración delante.
+    pub const WAKE_THRESHOLD: u8 = super::parse_u32(env!("LUKA_WAKE_THRESHOLD")) as u8;
+
+    /// Modo calibración: el anillo enseña en violeta la confianza del detector
+    /// mientras está en reposo, para poder ajustar el umbral a ojo.
+    ///
+    /// Apagado por defecto porque en uso normal el reposo debe ser discreto.
+    pub const WAKE_CALIBRATION: bool = super::parse_u32(env!("LUKA_WAKE_CALIBRATION")) != 0;
 }
 
 /// Resumen apto para log: confirma que la config llegó **sin filtrar secretos**.

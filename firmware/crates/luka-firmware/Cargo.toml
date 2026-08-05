@@ -11,12 +11,21 @@ publish = false
 name = "luka-firmware"
 path = "src/main.rs"
 
+[features]
+# La wake word va detrás de una feature, activada por defecto, por dos razones
+# prácticas: el binario base sigue compilando sin el modelo entrenado (que no
+# existe hasta que se entrena), y ante cualquier duda sobre el detector se puede
+# volver al firmware de la Fase 1 —solo botón— con `--no-default-features`.
+default = ["wakeword"]
+wakeword = ["dep:luka-wakeword"]
+
 [dependencies]
 luka-board.workspace = true
 luka-config.workspace = true
 luka-proto.workspace = true
 luka-state.workspace = true
 luka-ui.workspace = true
+luka-wakeword = { workspace = true, optional = true }
 esp-idf-svc = { workspace = true, features = ["binstart"] }
 esp-idf-hal.workspace = true
 ws2812-esp32-rmt-driver = { workspace = true, features = ["smart-leds-trait"] }
@@ -34,7 +43,22 @@ embuild = "0.33"
 #
 # Lo descarga el gestor de componentes de Espressif en el primer build, así que
 # ese build necesita red.
+#
+# Para la wake word hacen falta tres más, y ninguno es opcional:
+#   - `esp-tflite-micro`: el intérprete.
+#   - `esp-nn`: sus kernels optimizados para el S3. Sin él la inferencia pasa de
+#     unos pocos milisegundos a decenas, y el detector no llega a tiempo.
+#   - `esp-micro-speech-features`: el frontend de espectrograma, extraído del
+#     microfrontend de TFLite Micro. Es el que tiene que generar EXACTAMENTE las
+#     mismas características con las que se entrenó el modelo.
+#
+# Las versiones van fijadas a las que usa ESPHome en producción: es la
+# combinación con más horas de vuelo con estos modelos.
 [package.metadata.esp-idf-sys]
 extra_components = [
     { remote_component = { name = "espressif/esp_websocket_client", version = "^1.2" } },
+    { remote_component = { name = "espressif/esp-tflite-micro", version = "1.3.3~1" } },
+    { remote_component = { name = "espressif/esp-nn", version = "1.1.2" } },
+    { remote_component = { name = "esphome/esp-micro-speech-features", version = "1.2.3" } },
+    { component_dirs = ["../../components/luka_ww"] },
 ]
