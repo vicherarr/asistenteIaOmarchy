@@ -54,6 +54,19 @@ scratch/
 # Certificados locales
 config/certs/
 
+# --- Firmware ESP32-S3 (firmware/) ---
+# cfg.toml lleva la clave de la WiFi y el API_TOKEN: NUNCA se versiona.
+# La plantilla pública es firmware/cfg.toml.example.
+firmware/cfg.toml
+# El certificado fijado es específico de este despliegue (el del repo de desarrollo
+# y el de ~/.asistenteia son distintos). Lo genera firmware/scripts/sync-cert.sh.
+firmware/certs/
+firmware/target/
+firmware/**/target/
+firmware/.embuild/
+firmware/sdkconfig
+firmware/sdkconfig.old
+
 # Credenciales y tokens de Google (OAuth). NUNCA versionar BAJO NINGÚN CONCEPTO:
 # credentials.json es el client secret del usuario; token.json es su sesión activa.
 # Lo normal es que vivan en ~/.config/asistenteia/google/ (fuera del repo), pero

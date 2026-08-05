@@ -1,0 +1,3 @@
+[toolchain]
+# Fork de Espressif con soporte Xtensa (instalado con `espup install`).
+channel = "esp"

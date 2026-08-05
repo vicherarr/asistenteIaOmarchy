@@ -1,0 +1,13 @@
+[package]
+name = "luka-config"
+description = "Configuración del firmware empotrada en compilación desde firmware/cfg.toml"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[build-dependencies]
+# Solo en el host, durante el build: no entra en el binario del firmware.
+toml = { version = "0.8", default-features = false, features = ["parse"] }

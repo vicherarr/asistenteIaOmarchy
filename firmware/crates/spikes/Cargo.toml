@@ -1,0 +1,21 @@
+[package]
+name = "spikes"
+description = "Fase 0: programas desechables que confirman el hardware antes de integrar nada"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+luka-board.workspace = true
+luka-config.workspace = true
+esp-idf-svc = { workspace = true, features = ["binstart"] }
+esp-idf-hal.workspace = true
+ws2812-esp32-rmt-driver = { workspace = true, features = ["smart-leds-trait"] }
+smart-leds.workspace = true
+anyhow.workspace = true
+log.workspace = true
+
+[build-dependencies]
+embuild = "0.33"

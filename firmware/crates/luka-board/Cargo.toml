@@ -1,0 +1,9 @@
+[package]
+name = "luka-board"
+description = "BSP del Waveshare ESP32-S3-AUDIO-Board: mapa de pines, direcciones I2C y constantes de audio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]

@@ -1,0 +1,19 @@
+[build]
+target = "xtensa-esp32s3-espidf"
+
+[target.xtensa-esp32s3-espidf]
+linker = "ldproxy"
+runner = "espflash flash --monitor --chip esp32s3"
+rustflags = ["--cfg", "espidf_time64"]
+
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[env]
+MCU = "esp32s3"
+# Reutiliza el toolchain que espup ya dejó en ~/.espressif en vez de clonar otro
+# por proyecto.
+ESP_IDF_TOOLS_INSTALL_DIR = "global"
+# Fijada tras el primer build: es la que esp-idf-sys 0.37 eligió por defecto y ya
+# está clonada en ~/.espressif/esp-idf/v5.2.3. Explícita = builds reproducibles.
+ESP_IDF_VERSION = "v5.2.3"

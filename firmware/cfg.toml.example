@@ -1,0 +1,27 @@
+# Configuración del firmware luka-speaker.
+#
+# Copia este archivo a `cfg.toml` y rellénalo. `cfg.toml` está en .gitignore:
+# NUNCA se versiona, porque lleva la clave de tu WiFi y el token de la API.
+#
+# Los valores se leen en tiempo de COMPILACIÓN (build.rs de luka-config) y quedan
+# empotrados en el binario como constantes. Si cambias algo aquí, recompila.
+
+[wifi]
+ssid = "TU_SSID"
+password = "TU_CLAVE_WIFI"
+
+[server]
+# IP del PC donde corre `asistenteia` (el servidor FastAPI).
+host = "192.168.1.100"
+port = 8765
+# Debe coincidir EXACTAMENTE con el API_TOKEN del .env del asistente.
+api_token = ""
+# Certificado del servidor, que el firmware FIJA (pinning): no confía en ninguna
+# CA, solo en este certificado exacto. Cópialo con ./scripts/sync-cert.sh
+tls_cert = "certs/server.pem"
+
+[device]
+# Nombre con el que el dispositivo se presenta al servidor.
+name = "luka-speaker"
+# Brillo del anillo RGB, 0-255. Por encima de ~64 molesta de noche.
+led_brightness = 48

@@ -1,0 +1,37 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/luka-config",
+    "crates/luka-board",
+    "crates/spikes",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+license = "MIT"
+repository = "https://github.com/vicherarr/asistenteIaOmarchy"
+
+[workspace.dependencies]
+luka-config = { path = "crates/luka-config" }
+luka-board = { path = "crates/luka-board" }
+
+esp-idf-svc = "0.52"
+esp-idf-hal = "0.46"
+esp-idf-sys = "0.37"
+ws2812-esp32-rmt-driver = "0.14"
+smart-leds = "0.4"
+anyhow = "1"
+log = "0.4"
+
+# Los spikes y el firmware se compilan siempre con optimizaciones: en `debug` puro
+# el driver de I2S no llega a tiempo y el audio sale con cortes.
+[profile.dev]
+opt-level = "s"
+debug = true
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
