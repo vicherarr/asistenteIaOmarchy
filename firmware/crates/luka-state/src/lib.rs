@@ -22,6 +22,10 @@
 pub const LISTENING_TIMEOUT_MS: u64 = 15_000;
 /// Plazo para que el servidor conteste algo tras el fin del turno.
 pub const THINKING_TIMEOUT_MS: u64 = 30_000;
+/// Plazo para abrir el WebSocket. Sin esto, un fallo que no llegue a producir un
+/// evento de desconexión dejaría el dispositivo en `ServerConnecting` para
+/// siempre, con el anillo girando en azul y sin reintentar jamás.
+pub const SERVER_CONNECT_TIMEOUT_MS: u64 = 15_000;
 /// Guarda por si el `TTS_END` se pierde: sin esto el anillo se quedaría en verde
 /// para siempre y el dispositivo sordo, porque en v1 es half-duplex.
 pub const SPEAKING_TIMEOUT_MS: u64 = 60_000;
@@ -284,6 +288,15 @@ pub fn next(state: State, event: Event, now_ms: u64) -> (State, Actions) {
             S::Disconnected { retry_at_ms: retry_at(now_ms, attempt), attempt: attempt + 1 },
             Actions::of(&[DropServer]),
         ),
+
+        (S::ServerConnecting { since_ms, attempt }, E::Tick)
+            if now_ms.saturating_sub(since_ms) >= SERVER_CONNECT_TIMEOUT_MS =>
+        {
+            (
+                S::Disconnected { retry_at_ms: retry_at(now_ms, attempt), attempt: attempt + 1 },
+                Actions::of(&[DropServer]),
+            )
+        }
 
         (S::Disconnected { retry_at_ms, attempt }, E::Tick) if now_ms >= retry_at_ms => {
             (S::ServerConnecting { since_ms: now_ms, attempt }, Actions::of(&[ConnectServer]))
@@ -549,6 +562,25 @@ mod tests {
         let S::Disconnected { retry_at_ms, attempt } = state else { panic!("no reintenta") };
         assert_eq!(attempt, 1);
         assert!(retry_at_ms - 1_000 <= BACKOFF_MIN_MS, "no reintentó rápido tras un enlace bueno");
+    }
+
+    /// Si abrir el WebSocket no termina ni bien ni mal, hay que salir igual: el
+    /// caso real fue un fallo que no llegaba a producir evento de desconexión.
+    #[test]
+    fn abrir_el_websocket_tiene_plazo() {
+        let conectando = S::ServerConnecting { since_ms: 1_000, attempt: 0 };
+        assert_eq!(
+            next(conectando, E::Tick, 1_000 + SERVER_CONNECT_TIMEOUT_MS - 1).0,
+            conectando,
+            "no debería rendirse antes de tiempo"
+        );
+
+        let (state, actions) = next(conectando, E::Tick, 1_000 + SERVER_CONNECT_TIMEOUT_MS);
+        let S::Disconnected { attempt, .. } = state else {
+            panic!("no salió de ServerConnecting: {state:?}");
+        };
+        assert_eq!(attempt, 1);
+        assert!(actions.contains(DropServer));
     }
 
     #[test]

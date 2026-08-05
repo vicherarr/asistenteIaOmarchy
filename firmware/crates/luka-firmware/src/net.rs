@@ -22,7 +22,9 @@ use esp_idf_svc::wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configura
 use esp_idf_svc::ws::client::{
     EspWebSocketClient, EspWebSocketClientConfig, WebSocketClosingReason, WebSocketEventType,
 };
+use esp_idf_svc::hal::sys::{esp, esp_websocket_client_start, esp_websocket_client_stop};
 use esp_idf_svc::ws::FrameType;
+use esp_idf_svc::handle::RawHandle;
 use luka_proto::kind;
 use luka_state::{Event, Fault, Reported};
 use std::ffi::CStr;
@@ -113,6 +115,21 @@ impl NetTask {
         };
 
         log::info!("net_io: WiFi inicializada; esperando órdenes");
+        // **Este cliente se crea una vez y NO se suelta nunca.**
+        //
+        // Su `Drop` llama a `esp_websocket_client_close`, que intenta mandar la
+        // trama de cierre; si no hay conexión abierta el componente responde
+        // "Websocket client is not connected" y devuelve ESP_FAIL… sobre el que
+        // esp-idf-svc hace `.unwrap()`. Resultado: **soltar un cliente que no
+        // está conectado aborta el dispositivo entero**. Verificado dos veces en
+        // la placa (`panic_abort` en ws/client.rs:623), y la reconexión
+        // automática no lo evita, porque el problema es "no conectado", no "no
+        // arrancado".
+        //
+        // Así que la reconexión la lleva el propio cliente del ESP-IDF, y aquí
+        // solo se para y se arranca su tarea, que sí es seguro. La máquina de
+        // estados sigue mandando sobre el anillo y sobre cuándo se considera
+        // caído el enlace; lo único que cede es la cadencia exacta del reintento.
         let mut client: Option<EspWebSocketClient<'static>> = None;
         // Lo pone el callback, que corre en el hilo del cliente. Sirve para
         // mandar el HELLO en cuanto hay enlace, cosa que el callback no puede
@@ -158,20 +175,39 @@ impl NetTask {
                     NetCommand::ConnectWifi => {
                         connect_wifi(&mut wifi, &event_tx);
                     }
-                    NetCommand::ConnectServer => {
-                        connected.store(false, Ordering::Relaxed);
-                        hello_sent = false;
-                        client = connect_server(&event_tx, &playback_tx, &connected);
-                        if client.is_none() {
-                            let _ = event_tx.try_send(Event::ServerDown);
+                    NetCommand::ConnectServer => match client.as_ref() {
+                        // El cliente se crea UNA vez y no se suelta jamás (ver la
+                        // nota de `client`). Si ya existe, está reintentando por su
+                        // cuenta: basta con asegurarse de que su tarea corre.
+                        Some(c) => {
+                            if !connected.load(Ordering::Relaxed) {
+                                // `start` sobre un cliente ya arrancado devuelve
+                                // error y no pasa nada; solo importa el caso en que
+                                // se paró (p.ej. tras rechazo de token).
+                                let _ = esp!(unsafe {
+                                    esp_websocket_client_start(c.handle())
+                                });
+                            }
                         }
-                    }
+                        None => {
+                            hello_sent = false;
+                            client = connect_server(&event_tx, &playback_tx, &connected);
+                            if client.is_none() {
+                                let _ = event_tx.try_send(Event::ServerDown);
+                            }
+                        }
+                    },
                     NetCommand::DropServer => {
-                        // Soltar el cliente es la única forma de cerrar: el
-                        // envoltorio hace `panic!` si se intenta cerrar a mano.
-                        client = None;
-                        connected.store(false, Ordering::Relaxed);
+                        // **No se suelta el cliente**: hacerlo aborta el
+                        // dispositivo. Se para su tarea, que sí es seguro, y el
+                        // objeto se queda vivo para reutilizarlo.
                         hello_sent = false;
+                        if let Some(c) = client.as_ref() {
+                            if let Err(e) = esp!(unsafe { esp_websocket_client_stop(c.handle()) }) {
+                                log::debug!("WS: stop devolvió {e:?} (ya estaba parado)");
+                            }
+                        }
+                        connected.store(false, Ordering::Relaxed);
                     }
                     NetCommand::SendEnd => send_bare(&mut client, kind::END),
                     NetCommand::SendCancel => send_bare(&mut client, kind::CANCEL),
@@ -298,15 +334,25 @@ fn connect_server(
 
     log::info!("WS: conectando a {uri}");
     let resultado = EspWebSocketClient::new(&uri, &config, Duration::from_secs(10), move |event| {
-        // El callback recibe un `Result`: un error de la capa de transporte llega
-        // por aquí igual que un evento. Se trata como caída del enlace, que es lo
-        // que es, para que el supervisor reintente en vez de quedarse esperando.
+        // El callback recibe un `Result`, y un `Err` aquí **no significa que el
+        // enlace se haya caído**.
+        //
+        // esp-idf-svc 0.52 traduce con `_ => Err(ESP_ERR_INVALID_ARG)` cualquier
+        // id de evento que no conozca, y el componente gestionado que se compila
+        // (esp_websocket_client 1.8.0) es bastante más nuevo: emite `BEGIN`,
+        // `FINISH` y `HEADER_RECEIVED`, que esa versión no contempla. O sea que
+        // el primer evento de toda conexión llega como "error".
+        //
+        // Tratarlo como caída costó una tarde: el dispositivo conectaba, se
+        // declaraba caído a sí mismo, paraba el cliente y volvía a empezar, en
+        // bucle. El servidor lo veía conectar y desconectar cada segundo.
+        //
+        // Así que un `Err` solo se registra. Las caídas de verdad llegan como
+        // `Disconnected` o `Closed`, que se manejan abajo.
         let event = match event {
             Ok(e) => e,
             Err(e) => {
-                log::warn!("WS: error de transporte ({e:?})");
-                connected.store(false, Ordering::Relaxed);
-                let _ = event_tx.try_send(Event::ServerDown);
+                log::debug!("WS: evento no reconocido por esp-idf-svc ({e:?}); se ignora");
                 return;
             }
         };
