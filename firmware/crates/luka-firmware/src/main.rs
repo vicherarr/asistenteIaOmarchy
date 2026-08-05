@@ -21,6 +21,7 @@ mod audio;
 mod board;
 mod net;
 mod ring;
+mod watchdog;
 
 use anyhow::{Context, Result};
 use esp_idf_hal::i2c::{I2cConfig, I2cDriver};
@@ -118,12 +119,18 @@ fn main() -> Result<()> {
     // Iniciar
     let _ = event_tx.try_send(luka_state::Event::Booted);
     
+    // A partir de aquí el supervisor tiene que dar señales de vida cada 10 s o el
+    // watchdog reinicia. Se suscribe DESPUÉS de arrancar los hilos, porque crear
+    // los drivers puede tardar y no queremos reiniciar durante el arranque.
+    watchdog::subscribe("supervisor");
+
     let start_time = Instant::now();
     let mut current_state = luka_state::State::Booting;
     
     let mut last_buttons = crate::board::Buttons::default();
 
     loop {
+        watchdog::feed();
         let now_ms = start_time.elapsed().as_millis() as u64;
         
         let mut events = Vec::new();

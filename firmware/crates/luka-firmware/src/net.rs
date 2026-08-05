@@ -29,7 +29,7 @@ use luka_proto::kind;
 use luka_state::{Event, Fault, Reported};
 use std::ffi::CStr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -177,11 +177,38 @@ impl NetTask {
                 }
             }
 
+            // **Se BLOQUEA en el canal, no se duerme.**
+            //
+            // Aquí había un `try_recv` en bucle con `sleep(5 ms)`, y eso colgaba
+            // el dispositivo entero: el tick de FreeRTOS es de 10 ms
+            // (`CONFIG_FREERTOS_HZ=100`) y **`usleep` por debajo de un tick hace
+            // espera activa en vez de ceder la CPU**. Como los hilos `pthread`
+            // corren a prioridad 5 y la tarea `main` a 1, este hilo se quedaba
+            // girando y el supervisor no volvía a ejecutarse nunca: el watchdog
+            // saltaba señalando a `main`, que era la víctima y no el culpable.
+            //
+            // `recv_timeout` sí bloquea de verdad, así que cede la CPU y además
+            // reacciona al instante en vez de esperar al siguiente ciclo.
+            let primera = match cmd_rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(c) => Some(c),
+                Err(RecvTimeoutError::Timeout) => None,
+                // El otro extremo ha desaparecido: el supervisor ha muerto y este
+                // hilo ya no pinta nada.
+                Err(RecvTimeoutError::Disconnected) => {
+                    log::error!("net_io: el supervisor cerró el canal; se termina");
+                    return;
+                }
+            };
+
+            let mut pendiente = primera;
             let mut atendidas = 0;
             while atendidas < MAX_CMDS_PER_LOOP {
-                let cmd = match cmd_rx.try_recv() {
-                    Ok(c) => c,
-                    Err(_) => break,
+                // La primera es la que desbloqueó la espera; el resto se vacían
+                // sin bloquear, para no dejar el canal lleno cuando llega una
+                // ráfaga de audio.
+                let cmd = match pendiente.take().or_else(|| cmd_rx.try_recv().ok()) {
+                    Some(c) => c,
+                    None => break,
                 };
                 atendidas += 1;
 
@@ -189,33 +216,38 @@ impl NetTask {
                     NetCommand::ConnectWifi => {
                         connect_wifi(&mut wifi, &event_tx);
                     }
-                    NetCommand::ConnectServer => match client.as_ref() {
-                        // El cliente se crea UNA vez y no se suelta jamás (ver la
-                        // nota de `client`). Si ya existe, está reintentando por su
-                        // cuenta: basta con asegurarse de que su tarea corre.
-                        Some(c) => {
-                            if !connected.load(Ordering::Relaxed) {
-                                // `start` sobre un cliente ya arrancado devuelve
-                                // error y no pasa nada; solo importa el caso en que
-                                // se paró (p.ej. tras rechazo de token).
-                                let _ = esp!(unsafe {
-                                    esp_websocket_client_start(c.handle())
-                                });
+                    NetCommand::ConnectServer => {
+                        hello_sent = false;
+                        match client.as_ref() {
+                            // El cliente se crea UNA vez y no se suelta jamás (ver
+                            // la nota de `client`); reconectar es rearrancar su
+                            // tarea. Tras un `stop` el estado queda en
+                            // `WEBSOCKET_STATE_UNKNOW`, así que `start` vuelve a
+                            // pasar su comprobación.
+                            Some(c) => {
+                                if let Err(e) = esp!(unsafe { esp_websocket_client_start(c.handle()) }) {
+                                    log::warn!("WS: no se pudo rearrancar ({e:?})");
+                                    let _ = event_tx.try_send(Event::ServerDown);
+                                }
+                            }
+                            None => {
+                                client = connect_server(&event_tx, &playback_tx, &connected);
+                                if client.is_none() {
+                                    let _ = event_tx.try_send(Event::ServerDown);
+                                }
                             }
                         }
-                        None => {
-                            hello_sent = false;
-                            client = connect_server(&event_tx, &playback_tx, &connected);
-                            if client.is_none() {
-                                let _ = event_tx.try_send(Event::ServerDown);
-                            }
-                        }
-                    },
+                    }
                     NetCommand::DropServer => {
                         // **No se suelta el cliente**: hacerlo aborta el
                         // dispositivo. Se para su tarea, que sí es seguro, y el
                         // objeto se queda vivo para reutilizarlo.
+                        //
+                        // `stop` espera a que la tarea termine de verdad, así que
+                        // al volver de aquí el enlace está cerrado y el siguiente
+                        // `start` arranca limpio.
                         hello_sent = false;
+                        uplink.clear();
                         if let Some(c) = client.as_ref() {
                             if let Err(e) = esp!(unsafe { esp_websocket_client_stop(c.handle()) }) {
                                 log::debug!("WS: stop devolvió {e:?} (ya estaba parado)");
@@ -244,10 +276,6 @@ impl NetTask {
                     }
                 }
             }
-
-            // Espera corta: mantiene la latencia del audio baja sin quemar CPU
-            // cuando no hay nada que hacer.
-            std::thread::sleep(Duration::from_millis(5));
         }
     }
 }
@@ -337,21 +365,14 @@ fn connect_server(
         skip_cert_common_name_check: true,
         headers: Some(&headers),
         buffer_size: WS_BUFFER_BYTES,
-        // **Ojo: la reconexión automática NO se desactiva, aunque la política de
-        // reintentos la lleve la máquina de estados.**
+        // La política de reintentos es **de la máquina de estados y de nadie
+        // más**: es donde está escrita, donde se entiende y donde hay tests.
         //
-        // Con `disable_auto_reconnect: true`, un fallo de conexión para la tarea
-        // del cliente (`run = false`). A partir de ahí, `esp_websocket_client_close`
-        // devuelve `ESP_FAIL` ("Client was not started")… y el `Drop` de
-        // esp-idf-svc hace `.unwrap()` sobre ese resultado. O sea: soltar un
-        // cliente que no llegó a conectar **aborta el dispositivo entero**.
-        // Verificado en la placa: `panic_abort` en ws/client.rs:623.
-        //
-        // Dejando la reconexión automática, la tarea sigue viva, `close()`
-        // devuelve OK y soltar el cliente es seguro. Los reintentos del ESP-IDF
-        // y los de la máquina de estados conviven sin estorbarse: los primeros
-        // solo mantienen el objeto sano, y los segundos son los que gobiernan el
-        // anillo y el backoff.
+        // Se puede desactivar la reconexión automática porque el cliente ya no se
+        // suelta nunca (ver la nota de `client`). Lo que abortaba el dispositivo
+        // era el `Drop`, no este ajuste; mientras el objeto viva, pararlo y
+        // arrancarlo es seguro.
+        disable_auto_reconnect: true,
         ..Default::default()
     };
 

@@ -112,8 +112,10 @@ impl AudioIO {
 
         // El amplificador arranca cerrado pase lo que pase.
         crate::board::silence(&self.shared_i2c);
+        crate::watchdog::subscribe("audio_io");
 
         loop {
+            crate::watchdog::feed();
             while let Ok(cmd) = self.cmd_rx.try_recv() {
                 match cmd {
                     AudioCommand::StartCapture => {
