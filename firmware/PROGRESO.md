@@ -107,12 +107,16 @@ WiFi, ni el `API_TOKEN`, ni el SSID.
 
 ---
 
-## 🔄 Fase 1 — en curso
+## ✅ Fase 1 — CRITERIO DE SALIDA ALCANZADO (2026-08-05)
 
 Botón → grabar → WebSocket → Luka responde → suena por el altavoz. LEDs de estado. Sin ML.
 
-**Criterio de salida:** pulsar el botón, decir "¿qué hora es?" y oír a Luka contestar por
-el altavoz de la placa. **Todavía no se ha alcanzado.**
+**Funciona de extremo a extremo con la placa**: se pulsa el botón, se habla, y Luka
+contesta por el altavoz. Verificado con voz real. El servidor transcribió correctamente
+«Hola, ¿qué tal? ¿Cómo estás?» y «¿Sabes multiplicar mil por tres mil?», y reporta
+`{"connected":true,"name":"luka-speaker"}` de forma estable.
+
+Queda pulir (ver "Pendiente de la Fase 2" al final), no rehacer.
 
 ### ✅ Hecho: TLS con certificado fijado (*pinning*)
 - **`scripts/sync-cert.sh`** copia el certificado del asistente a `firmware/certs/`.
@@ -261,10 +265,43 @@ extra_components = [
   cerrar a mano (hay que soltar el cliente).
 - Los eventos llegan como `WebSocketEventType::{Connected, Disconnected, Binary, Text, …}`.
 
-### Siguiente, en orden
-1. Terminar los cuatro módulos del binario.
-2. Compilar, grabar y **verificar el camino completo** con la placa delante.
-3. Actualizar `luka-board` si algo más resulta distinto de lo documentado.
+### Los tres fallos que solo aparecieron con la placa delante
+
+Ninguno lo habría cazado el compilador ni los tests del host. Están documentados en el
+código, en el sitio donde muerden.
+
+1. **El anillo salía negro.** `luka_ui::finish` aplicaba el brillo global **antes** de la
+   gamma. Parece lo natural ("la mitad de brillo percibido"), pero compone dos
+   atenuaciones sobre un `u8`: con el `led_brightness = 48` real, hasta el rojo a plena
+   saturación salía a **7/255** y `Booting` a **(0,0,0)** exacto. Ahora la gamma va primero
+   y el brillo escala linealmente el PWM: es un **techo de potencia**, no un atenuador
+   perceptual. El test que había solo probaba blanco a tope, el único caso que sobrevivía.
+2. **Soltar el cliente WebSocket aborta el dispositivo.** Su `Drop` llama a
+   `esp_websocket_client_close`, que intenta mandar la trama de cierre; sin conexión
+   abierta el componente devuelve `ESP_FAIL` y esp-idf-svc hace `.unwrap()` sobre eso.
+   La reconexión automática **no** lo evita (el problema es "no conectado", no "no
+   arrancado"). Solución: el cliente se crea una vez y no se suelta nunca; se para y se
+   arranca su tarea con `esp_websocket_client_stop`/`start`, que sí es seguro.
+3. **El "error" que no era un error.** esp-idf-svc 0.52 traduce con
+   `_ => Err(ESP_ERR_INVALID_ARG)` **cualquier id de evento que no conozca**, y el
+   componente que se compila (esp_websocket_client **1.8.0**) es más nuevo: emite `BEGIN`,
+   `FINISH` y `HEADER_RECEIVED`. O sea que **el primer evento de toda conexión llega como
+   "error"**. Tratarlo como caída hacía que el firmware se declarase caído a sí mismo y
+   reconectase en bucle cada segundo, con un síntoma que apuntaba a TLS o al token.
+   Ahora un `Err` del callback **solo se registra**: las caídas de verdad llegan como
+   `Disconnected` o `Closed`.
+
+De paso se cerró un hueco que esto destapó: `ServerConnecting` no tenía plazo, así que un
+fallo que no llegara a producir evento de desconexión dejaba el dispositivo girando en
+azul para siempre. Ahora sale a los 15 s con backoff.
+
+### Pendiente de la Fase 2 (pulido, no rehacer)
+- **Reconexión:** la cadencia real la lleva el cliente del ESP-IDF, no el backoff de la
+  máquina de estados, por lo del punto 2. Funciona, pero la política está en dos sitios.
+- **La respuesta llega con el `<think>` del modelo dentro.** Se ve en el log del
+  dispositivo (`← {"text":"<think>…"}`). Al altavoz no le afecta, pero si algún día hay
+  pantalla habrá que limpiarlo en el servidor.
+- Verificar cuánto aguanta el enlace en horas, y el consumo.
 
 ## Puesta en marcha del lado Python (leer antes de probar la placa)
 
