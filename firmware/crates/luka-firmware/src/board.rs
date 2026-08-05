@@ -82,13 +82,21 @@ pub fn set_amplifier(i2c: &mut I2cDriver, on: bool) -> Result<()> {
     write_reg(i2c, bi2c::ADDR_TCA9555, REG_OUTPUT_1, out)
 }
 
-/// Apaga el amplificador tragándose el error.
+/// Apaga el amplificador sin propagar errores.
 ///
-/// Para las rutas de limpieza y de pánico: si algo ya ha ido mal, lo que importa
-/// es que el altavoz quede mudo, no propagar un segundo error encima del primero.
+/// Es **la** forma de callar el altavoz en todo el firmware, incluidas las rutas
+/// de limpieza y de error: si algo ya ha ido mal, lo que importa es que quede
+/// mudo, no propagar un segundo error encima del primero. Deja rastro en el log
+/// porque un fallo aquí es de los graves — significa que el altavoz puede haberse
+/// quedado abierto.
 pub fn silence(i2c: &SharedI2c) {
-    if let Ok(mut guard) = i2c.lock() {
-        let _ = set_amplifier(&mut guard, false);
+    match i2c.lock() {
+        Ok(mut guard) => {
+            if let Err(e) = set_amplifier(&mut guard, false) {
+                log::error!("NO se pudo cerrar el amplificador: {e:#}");
+            }
+        }
+        Err(_) => log::error!("mutex del I2C envenenado: el amplificador queda como estaba"),
     }
 }
 

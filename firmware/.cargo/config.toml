@@ -17,3 +17,12 @@ ESP_IDF_TOOLS_INSTALL_DIR = "global"
 # Fijada tras el primer build: es la que esp-idf-sys 0.37 eligió por defecto y ya
 # está clonada en ~/.espressif/esp-idf/v5.2.3. Explícita = builds reproducibles.
 ESP_IDF_VERSION = "v5.2.3"
+# Este es un workspace VIRTUAL (el Cargo.toml de arriba no tiene [package]), así
+# que `metadata.root_package()` devuelve None y esp-idf-sys **ignora en silencio**
+# el `[package.metadata.esp-idf-sys]` de los crates: solo suelta un aviso que se
+# pierde entre el ruido del build.
+#
+# Sin esto, el componente gestionado `esp_websocket_client` no se descarga y
+# `esp_idf_svc::ws::client` no existe, con un error de importación que no apunta
+# a la causa por ningún lado.
+ESP_IDF_SYS_ROOT_CRATE = "luka-firmware"

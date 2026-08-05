@@ -64,6 +64,10 @@ firmware/certs/
 firmware/target/
 firmware/**/target/
 firmware/.embuild/
+# Carpetas de IDE (JetBrains). components_esp32s3.lock SÍ se versiona: fija la
+# versión exacta del componente esp_websocket_client y es lo que hace que el
+# build sea reproducible.
+.idea/
 firmware/sdkconfig
 firmware/sdkconfig.old
 

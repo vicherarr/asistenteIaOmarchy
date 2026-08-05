@@ -17,7 +17,10 @@
 //! apagado**, y no hay ninguna ruta que lo encienda todavía. Mientras el hilo de
 //! audio no exista, este binario no puede producir sonido.
 
+mod audio;
 mod board;
+mod net;
+mod ring;
 
 use anyhow::{Context, Result};
 use esp_idf_hal::i2c::{I2cConfig, I2cDriver};
@@ -25,10 +28,18 @@ use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_hal::units::FromValueType;
 use luka_board::{i2c as bi2c, PINOUT_VERIFIED};
 use std::sync::{Arc, Mutex};
+use std::sync::mpsc;
+use std::time::Instant;
+use esp_idf_hal::i2s::config::{
+    Config, DataBitWidth, MclkMultiple, SlotMode, StdClkConfig, StdConfig, StdGpioConfig,
+    StdSlotConfig,
+};
+use esp_idf_hal::i2s::I2sDriver;
 
-// Los pines se nombran literalmente más abajo (cada GPIO es un tipo distinto en
-// esp-idf-hal), así que si alguien cambia el mapa del BSP esto no compila.
 const _: () = assert!(bi2c::SDA == 11 && bi2c::SCL == 10);
+/// MCLK = 256 x 16 kHz = 4.096 MHz. Es la relación para la que están calculados
+/// los coeficientes de reloj de AMBOS codecs; cambiarla obliga a recalcularlos.
+const MCLK_MULTIPLE: MclkMultiple = MclkMultiple::M256;
 
 fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
@@ -53,8 +64,6 @@ fn main() -> Result<()> {
 
     {
         let mut guard = i2c.lock().expect("el mutex del I2C no debería estar envenenado");
-        // Amplificador apagado ANTES que nada. Todo lo demás puede fallar sin
-        // consecuencias; el altavoz abierto por error, no.
         board::init_expander(&mut guard).context("inicializando el TCA9555")?;
         board::es7210_init(&mut guard).context("inicializando el ES7210")?;
         board::es8311_init(&mut guard).context("inicializando el ES8311")?;
@@ -62,8 +71,110 @@ fn main() -> Result<()> {
         let botones = board::read_buttons(&mut guard).context("leyendo los botones")?;
         log::info!("Botones en reposo: {botones:?} (ninguno debería estar pulsado)");
     }
+    
+    let std_config = StdConfig::new(
+        Config::default(),
+        StdClkConfig::from_sample_rate_hz(luka_board::audio::SAMPLE_RATE_HZ)
+            .mclk_multiple(MCLK_MULTIPLE),
+        StdSlotConfig::philips_slot_default(DataBitWidth::Bits16, SlotMode::Stereo),
+        StdGpioConfig::default(),
+    );
 
-    log::info!("Hardware listo. El resto de la Fase 1 está sin implementar todavía.");
-    board::silence(&i2c);
-    Ok(())
+    let mut i2s = I2sDriver::new_std_bidir(
+        peripherals.i2s0,
+        &std_config,
+        peripherals.pins.gpio13,
+        peripherals.pins.gpio15,
+        peripherals.pins.gpio16,
+        Some(peripherals.pins.gpio12),
+        peripherals.pins.gpio14,
+    )
+    .context("no se pudo abrir el I2S")?;
+
+    i2s.tx_enable().context("no se pudo habilitar el TX del I2S")?;
+    i2s.rx_enable().context("no se pudo habilitar el RX del I2S")?;
+
+    let driver = ws2812_esp32_rmt_driver::Ws2812Esp32Rmt::new(peripherals.rmt.channel0, peripherals.pins.gpio38)?;
+    let shared_ring = Arc::new(ring::RingState::new());
+    ring::spawn(driver, shared_ring.clone())?;
+
+    let (audio_cmd_tx, audio_cmd_rx) = mpsc::sync_channel(5);
+    let (net_cmd_tx, net_cmd_rx) = mpsc::sync_channel(5);
+    let (event_tx, event_rx) = mpsc::sync_channel(20);
+    
+    let (capture_tx, capture_rx) = mpsc::sync_channel(10);
+    let (playback_tx, playback_rx) = mpsc::sync_channel(20);
+
+    let audio_io = audio::AudioIO::new(audio_cmd_rx, capture_tx, playback_rx, i2s, i2c.clone());
+    audio_io.spawn()?;
+
+    let net_task = net::NetTask::new(net_cmd_rx, event_tx.clone(), playback_tx, peripherals.modem);
+    net_task.spawn()?;
+    
+    // Iniciar
+    let _ = event_tx.try_send(luka_state::Event::Booted);
+    
+    let start_time = Instant::now();
+    let mut current_state = luka_state::State::Booting;
+    
+    let mut last_buttons = crate::board::Buttons::default();
+
+    loop {
+        let now_ms = start_time.elapsed().as_millis() as u64;
+        
+        let mut events = Vec::new();
+        
+        // Sondeo de botones (cada 20ms en teoría, aquí lo hacemos en el loop)
+        if let Ok(mut guard) = i2c.lock() {
+            if let Ok(botones) = board::read_buttons(&mut guard) {
+                if botones.any() && !last_buttons.any() {
+                    events.push(luka_state::Event::ButtonPressed);
+                } else if !botones.any() && last_buttons.any() {
+                    events.push(luka_state::Event::ButtonReleased);
+                }
+                last_buttons = botones;
+            }
+        }
+        
+        // Las tramas capturadas suben a la red y, de paso, alimentan el vúmetro
+        // con el nivel que el hilo de audio ya ha calculado.
+        while let Ok(frame) = capture_rx.try_recv() {
+            shared_ring.set_level(frame.level);
+            if net_cmd_tx.try_send(net::NetCommand::SendAudio(frame.pcm)).is_err() {
+                log::warn!("trama de micro descartada: la red no da abasto");
+            }
+        }
+
+        while let Ok(ev) = event_rx.try_recv() {
+            events.push(ev);
+        }
+        events.push(luka_state::Event::Tick);
+        
+        for event in events {
+            let (next_state, actions) = luka_state::next(current_state, event, now_ms);
+            
+            if next_state != current_state {
+                log::info!("State transition: {:?} -> {:?}", current_state, next_state);
+                current_state = next_state;
+                shared_ring.set_state(current_state, now_ms);
+            }
+            
+            for action in actions.iter() {
+                use luka_state::Action::*;
+                match action {
+                    ConnectWifi => { let _ = net_cmd_tx.try_send(net::NetCommand::ConnectWifi); }
+                    ConnectServer => { let _ = net_cmd_tx.try_send(net::NetCommand::ConnectServer); }
+                    DropServer => { let _ = net_cmd_tx.try_send(net::NetCommand::DropServer); }
+                    StartCapture => { let _ = audio_cmd_tx.try_send(audio::AudioCommand::StartCapture); }
+                    StopCapture => { let _ = audio_cmd_tx.try_send(audio::AudioCommand::StopCapture); }
+                    SendEnd => { let _ = net_cmd_tx.try_send(net::NetCommand::SendEnd); }
+                    SendCancel => { let _ = net_cmd_tx.try_send(net::NetCommand::SendCancel); }
+                    StartPlayback => { let _ = audio_cmd_tx.try_send(audio::AudioCommand::StartPlayback); }
+                    StopPlayback => { let _ = audio_cmd_tx.try_send(audio::AudioCommand::StopPlayback); }
+                }
+            }
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
 }

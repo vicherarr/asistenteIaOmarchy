@@ -215,6 +215,38 @@ audio (que abre y cierra el amplificador) y el de botones (sondeo cada 20 ms): p
 pasan operaciones cortas y esporádicas, y la ruta de tiempo real es el I²S, que no se
 comparte con nadie.
 
+### ⚠️ El cliente WebSocket exige un componente gestionado del ESP-IDF
+
+`esp_idf_svc::ws::client` **no forma parte del ESP-IDF base**. Está detrás de un `cfg`
+(`esp_idf_comp_espressif__esp_websocket_client_enabled`), así que sin el componente el
+módulo sencillamente no existe y el error que sale es `unresolved import` — que **no
+menciona en ningún sitio que falte un componente**. Se declara en el `Cargo.toml` del
+binario:
+
+```toml
+[package.metadata.esp-idf-sys]
+extra_components = [
+    { remote_component = { name = "espressif/esp_websocket_client", version = "^1.2" } },
+]
+```
+
+- Lo descarga el gestor de componentes de Espressif, así que **el primer build necesita red**.
+- Cambiar esa metadata **no invalida el build de `esp-idf-sys`**: hay que forzarlo con
+  `cargo clean -p esp-idf-sys`, y eso reconstruye el ESP-IDF entero (varios minutos).
+- **Y no basta con declararlo.** Este es un workspace *virtual* (el `Cargo.toml` de
+  `firmware/` no tiene `[package]`), así que `metadata.root_package()` devuelve `None` y
+  esp-idf-sys **ignora en silencio** todos los `[package.metadata.esp-idf-sys]`: solo
+  suelta un aviso que se pierde entre el ruido del build. Hay que nombrar el crate raíz
+  a mano en `.cargo/config.toml`:
+
+  ```toml
+  [env]
+  ESP_IDF_SYS_ROOT_CRATE = "luka-firmware"
+  ```
+
+  Sin esa línea, el `extra_components` de arriba no hace absolutamente nada y el síntoma
+  es idéntico a no haberlo puesto.
+
 ### API del cliente WebSocket, ya comprobada en el crate
 `esp_idf_svc::ws::client::{EspWebSocketClient, EspWebSocketClientConfig}` (esp-idf-svc
 0.52.1). Lo relevante, mirado en el fuente y no supuesto:
