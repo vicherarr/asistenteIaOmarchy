@@ -116,7 +116,30 @@ contesta por el altavoz. Verificado con voz real. El servidor transcribió corre
 «Hola, ¿qué tal? ¿Cómo estás?» y «¿Sabes multiplicar mil por tres mil?», y reporta
 `{"connected":true,"name":"luka-speaker"}` de forma estable.
 
+**La calidad del audio también está validada con voz real** (2026-08-05): la primera
+versión sonaba entrecortada y perdía el principio de las frases, y tras arreglar los dos
+cuellos de botella se oye bien. Ver "Caudal de audio" más abajo. Conforme a
+[[feedback-evaluate-audio-with-real-voice]], esto se juzgó hablándole a la placa, no con
+audio sintético.
+
 Queda pulir (ver "Pendiente de la Fase 2" al final), no rehacer.
+
+### ✅ Hecho: caudal de audio en los dos sentidos
+La voz llegaba a trozos por dos motivos **distintos**, y ninguno se ve leyendo el código:
+
+- **Subida.** El micro entrega tramas de 20 ms y se subían una a una: **50 escrituras TLS
+  por segundo** de 640 bytes, cada una con su cabecera de WebSocket, su cifrado y su viaje
+  por la pila de red. El enlace no daba abasto y se perdía el principio de las frases (89
+  tramas descartadas en un solo turno; algún turno se quedó en "demasiado corto"). Ahora
+  se agrupan de cinco en cinco: 10 escrituras por segundo de ~3,2 KB, el mismo tamaño que
+  usa el servidor para la bajada. El acumulador **se vacía antes del `END`**, o el último
+  trozo de voz se mezclaría con el turno siguiente.
+- **Bajada.** El búfer de reproducción era de 2 s, dando por supuesto que el audio llega en
+  tiempo real. **No es así:** el servidor suelta la voz tan rápido como la sintetiza, así
+  que una respuesta de 15 s llega en un par de segundos mientras el altavoz solo la
+  consume a 16 kHz. Ahora son 60 s, que caben porque `CONFIG_SPIRAM_USE_MALLOC` manda lo
+  grande a la PSRAM. Y al desbordar se descarta **lo nuevo, no lo viejo**: tirar audio ya
+  encolado abre un hueco en mitad de una frase que está sonando.
 
 ### ✅ Hecho: TLS con certificado fijado (*pinning*)
 - **`scripts/sync-cert.sh`** copia el certificado del asistente a `firmware/certs/`.
@@ -302,6 +325,9 @@ azul para siempre. Ahora sale a los 15 s con backoff.
   dispositivo (`← {"text":"<think>…"}`). Al altavoz no le afecta, pero si algún día hay
   pantalla habrá que limpiarlo en el servidor.
 - Verificar cuánto aguanta el enlace en horas, y el consumo.
+- El **anillo de LEDs no se ha comprobado a ojo** después de arreglar la composición de
+  brillo y gamma. Los tests fijan que los estados visibles superan un mínimo con el
+  `led_brightness = 48` real, pero eso es aritmética, no una mirada a la placa.
 
 ## Puesta en marcha del lado Python (leer antes de probar la placa)
 
