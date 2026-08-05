@@ -21,6 +21,7 @@ AUDIO = 0x02          # PCM16LE del micrófono
 END = 0x03            # fin del turno de habla: procesa lo acumulado
 CANCEL = 0x04         # aborta el turno en curso
 PING = 0x05           # latido
+TELEMETRY = 0x06      # {rssi, uptime_s, free_heap}: latido con diagnóstico
 
 # --- Servidor -> Dispositivo ---
 STATE = 0x81          # {state}: idle|listening|thinking|speaking
@@ -34,6 +35,7 @@ PONG = 0x87           # respuesta al latido
 # Nombres legibles, para logs y mensajes de error que se entiendan.
 NAMES: dict[int, str] = {
     HELLO: "HELLO", AUDIO: "AUDIO", END: "END", CANCEL: "CANCEL", PING: "PING",
+    TELEMETRY: "TELEMETRY",
     STATE: "STATE", TRANSCRIPT: "TRANSCRIPT", REPLY: "REPLY",
     TTS_AUDIO: "TTS_AUDIO", TTS_END: "TTS_END", ERROR: "ERROR", PONG: "PONG",
 }

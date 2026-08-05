@@ -89,6 +89,11 @@ class DeviceSession:
         self.name = name
         self.connected_at = time.monotonic()
         self._audio = bytearray()
+        # Última telemetría recibida. Sirve de doble propósito: diagnóstico
+        # (¿va bien la WiFi? ¿se está comiendo la memoria?) y latido, porque su
+        # ausencia prolongada delata un enlace muerto que TCP aún no ha notado.
+        self._telemetry: dict = {}
+        self._telemetry_at: Optional[float] = None
         self._turn: Optional[asyncio.Task] = None
         # Serializa los envíos: el sink del TTS y el bucle de recepción escriben
         # los dos en el mismo WebSocket, y entrelazar tramas lo corrompería.
@@ -156,6 +161,14 @@ class DeviceSession:
             await self.send(proto.state(proto.STATE_IDLE))
 
         elif frame.kind == proto.PING:
+            await self.send(proto.encode(proto.PONG))
+
+        elif frame.kind == proto.TELEMETRY:
+            self._telemetry = frame.json()
+            self._telemetry_at = time.monotonic()
+            logger.debug(f"[{self.name}] telemetría: {self._telemetry}")
+            # Se responde igual que a un PING: al dispositivo le sirve para saber
+            # que el enlace funciona en los dos sentidos, no solo de subida.
             await self.send(proto.encode(proto.PONG))
 
         elif frame.kind == proto.HELLO:
@@ -270,11 +283,20 @@ class DeviceManager:
         """Resumen para /status."""
         if not self.connected or self.session is None:
             return {"connected": False}
-        return {
+        info = {
             "connected": True,
             "name": self.session.name,
             "uptime_s": round(time.monotonic() - self.session.connected_at, 1),
         }
+        if self.session._telemetry:
+            info["telemetry"] = self.session._telemetry
+            # Cuánto hace que llegó: una telemetría vieja significa que el
+            # dispositivo dejó de latir aunque el socket siga aparentando vida.
+            if self.session._telemetry_at is not None:
+                info["telemetry_age_s"] = round(
+                    time.monotonic() - self.session._telemetry_at, 1
+                )
+        return info
 
 
 # Registro único del proceso, como el resto de estado global del asistente.

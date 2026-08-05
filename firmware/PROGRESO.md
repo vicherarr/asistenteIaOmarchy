@@ -318,6 +318,19 @@ De paso se cerró un hueco que esto destapó: `ServerConnecting` no tenía plazo
 fallo que no llegara a producir evento de desconexión dejaba el dispositivo girando en
 azul para siempre. Ahora sale a los 15 s con backoff.
 
+### Fuera de alcance por decisión del usuario
+- **OTA por WiFi: no se hace.** El dispositivo es para uso propio y el cable no molesta.
+  Era el trozo más grande y el único capaz de dejar la placa inutilizable.
+- **mDNS: no se hace.** Resolvería que la placa encuentre el asistente sola, pero el
+  problema real (si el PC cambia de IP hay que regrabar) se arregla mejor con una
+  **reserva DHCP en el router**: cero código y cero riesgo. Y no lo resolvería del todo,
+  porque el certificado va fijado en el binario: mover el asistente a otra máquina obliga
+  a regrabar de todas formas.
+- **Telemetría de batería: no se hace.** El dispositivo vive enchufado. Además no sería
+  barato: el escaneo I²C de la Fase 0 encontró solo cuatro chips y **no hay medidor de
+  carga**, así que habría que leer un divisor por ADC en un pin que no está en el mapa
+  verificado — otro spike, no una llamada.
+
 ### Pendiente de la Fase 2 (pulido, no rehacer)
 - **Reconexión:** la cadencia real la lleva el cliente del ESP-IDF, no el backoff de la
   máquina de estados, por lo del punto 2. Funciona, pero la política está en dos sitios.

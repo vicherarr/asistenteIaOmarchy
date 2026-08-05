@@ -22,7 +22,10 @@ use esp_idf_svc::wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configura
 use esp_idf_svc::ws::client::{
     EspWebSocketClient, EspWebSocketClientConfig, WebSocketClosingReason, WebSocketEventType,
 };
-use esp_idf_svc::hal::sys::{esp, esp_websocket_client_start, esp_websocket_client_stop};
+use esp_idf_svc::hal::sys::{
+    esp, esp_get_free_heap_size, esp_websocket_client_start, esp_websocket_client_stop,
+    esp_wifi_sta_get_rssi,
+};
 use esp_idf_svc::ws::FrameType;
 use esp_idf_svc::handle::RawHandle;
 use luka_proto::kind;
@@ -31,7 +34,7 @@ use std::ffi::CStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Búfer de recepción del cliente WebSocket.
 ///
@@ -60,6 +63,14 @@ const MAX_CMDS_PER_LOOP: usize = 64;
 /// es justo el tamaño que usa el servidor para la bajada. Los 100 ms de latencia
 /// que añade son irrelevantes al lado de lo que tarda el STT.
 const UPLINK_BATCH_SAMPLES: usize = 1_600;
+
+/// Cada cuánto se manda la telemetría, que hace también de latido.
+///
+/// Un WebSocket sobre TCP puede quedarse *aparentemente* vivo mucho rato después
+/// de que el otro extremo haya desaparecido (router reiniciado, PC suspendido).
+/// El latido es lo que convierte eso en una desconexión detectable, y de paso
+/// lleva las métricas para saber si el dispositivo aguanta horas.
+const TELEMETRY_EVERY: Duration = Duration::from_secs(10);
 
 pub enum NetCommand {
     ConnectWifi,
@@ -150,6 +161,8 @@ impl NetTask {
         let mut hello_sent = false;
         // Audio del micro pendiente de agrupar. Ver `UPLINK_BATCH_SAMPLES`.
         let mut uplink: Vec<i16> = Vec::with_capacity(UPLINK_BATCH_SAMPLES * 2);
+        let arranque = Instant::now();
+        let mut ultima_telemetria = Instant::now();
 
         loop {
             if connected.load(Ordering::Relaxed) && !hello_sent {
@@ -199,6 +212,13 @@ impl NetTask {
                     return;
                 }
             };
+
+            if connected.load(Ordering::Relaxed)
+                && ultima_telemetria.elapsed() >= TELEMETRY_EVERY
+            {
+                send_telemetry(&mut client, arranque);
+                ultima_telemetria = Instant::now();
+            }
 
             let mut pendiente = primera;
             let mut atendidas = 0;
@@ -540,6 +560,30 @@ fn send_bare(client: &mut Option<EspWebSocketClient<'static>>, kind: u8) {
     if let Some(bytes) = buf.as_frame() {
         if let Err(e) = c.send(FrameType::Binary(false), bytes) {
             log::warn!("no se pudo mandar {}: {e:?}", luka_proto::name(kind));
+        }
+    }
+}
+
+/// Manda el latido con diagnóstico.
+fn send_telemetry(client: &mut Option<EspWebSocketClient<'static>>, arranque: Instant) {
+    let Some(c) = client.as_mut() else { return };
+
+    // El RSSI se lee en crudo del driver: esp-idf-svc 0.52 no lo expone para la
+    // estación asociada, solo dentro de los resultados de un escaneo, y escanear
+    // para saber la potencia del enlace sería absurdo (corta el tráfico).
+    let mut rssi: core::ffi::c_int = 0;
+    let rssi = match esp!(unsafe { esp_wifi_sta_get_rssi(&mut rssi) }) {
+        Ok(()) => rssi as i32,
+        // -127 es el "sin dato" convencional del propio ESP-IDF.
+        Err(_) => -127,
+    };
+
+    let free_heap = unsafe { esp_get_free_heap_size() };
+    let buf = luka_proto::telemetry(rssi, arranque.elapsed().as_secs() as u32, free_heap);
+
+    if let Some(bytes) = buf.as_frame() {
+        if let Err(e) = c.send(FrameType::Binary(false), bytes) {
+            log::warn!("no se pudo mandar la telemetría: {e:?}");
         }
     }
 }

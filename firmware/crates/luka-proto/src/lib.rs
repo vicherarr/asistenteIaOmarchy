@@ -31,6 +31,13 @@ pub mod kind {
     pub const CANCEL: u8 = 0x04;
     /// Latido.
     pub const PING: u8 = 0x05;
+    /// `{rssi, uptime_s, free_heap}`: latido con diagnóstico.
+    ///
+    /// Hace de *heartbeat* **y** de telemetría a la vez, a propósito: el enlace
+    /// necesitaba un latido para notar que se ha muerto en silencio, y hacen
+    /// falta unas pocas métricas para saber si aguanta horas. Un solo mecanismo
+    /// que cumple las dos cosas es menos que dos que cumplen una cada uno.
+    pub const TELEMETRY: u8 = 0x06;
 
     // --- Servidor -> Dispositivo ---
     /// `{state}`: idle|listening|thinking|speaking.
@@ -72,6 +79,7 @@ pub const fn name(kind: u8) -> &'static str {
         kind::END => "END",
         kind::CANCEL => "CANCEL",
         kind::PING => "PING",
+        kind::TELEMETRY => "TELEMETRY",
         kind::STATE => "STATE",
         kind::TRANSCRIPT => "TRANSCRIPT",
         kind::REPLY => "REPLY",
@@ -261,6 +269,23 @@ pub fn hello(device: &str, fw: &str, sample_rate: u32, channels: u16) -> Buf<HEL
     buf
 }
 
+/// Capacidad de la trama de telemetría: tres números y sus etiquetas.
+pub const TELEMETRY_CAP: usize = 96;
+
+/// Latido con diagnóstico.
+///
+/// `free_heap` es lo que de verdad importa para dejarla corriendo horas: si baja
+/// sin parar, hay una fuga, y eso no se ve mirando si el enlace sigue en pie.
+pub fn telemetry(rssi: i32, uptime_s: u32, free_heap: u32) -> Buf<TELEMETRY_CAP> {
+    let mut buf = Buf::new();
+    buf.push(kind::TELEMETRY);
+    let _ = write!(
+        EscapeSink(&mut buf),
+        "{{\"rssi\":{rssi},\"uptime_s\":{uptime_s},\"free_heap\":{free_heap}}}"
+    );
+    buf
+}
+
 /// Escribe una trama de audio en un búfer prestado, sin copiar el PCM dos veces.
 ///
 /// Devuelve la porción escrita. El llamante reserva el búfer una vez y lo reutiliza
@@ -329,7 +354,7 @@ mod tests {
         for k in [kind::STATE, kind::TRANSCRIPT, kind::REPLY, kind::TTS_AUDIO, kind::TTS_END, kind::ERROR, kind::PONG] {
             assert!(is_from_server(k), "{} debería venir del servidor", name(k));
         }
-        for k in [kind::HELLO, kind::AUDIO, kind::END, kind::CANCEL, kind::PING] {
+        for k in [kind::HELLO, kind::AUDIO, kind::END, kind::CANCEL, kind::PING, kind::TELEMETRY] {
             assert!(!is_from_server(k), "{} lo manda el dispositivo", name(k));
         }
     }
@@ -338,7 +363,7 @@ mod tests {
     fn los_tipos_son_unicos() {
         let todos = [
             kind::HELLO, kind::AUDIO, kind::END, kind::CANCEL, kind::PING,
-            kind::STATE, kind::TRANSCRIPT, kind::REPLY, kind::TTS_AUDIO,
+            kind::TELEMETRY, kind::STATE, kind::TRANSCRIPT, kind::REPLY, kind::TTS_AUDIO,
             kind::TTS_END, kind::ERROR, kind::PONG,
         ];
         for (i, a) in todos.iter().enumerate() {
@@ -406,6 +431,25 @@ mod tests {
         let nombre_absurdo = core::str::from_utf8(&relleno).unwrap();
         let buf = hello(nombre_absurdo, "0.1.0", 16_000, 1);
         assert!(buf.as_frame().is_none());
+    }
+
+    #[test]
+    fn la_telemetria_es_json_valido() {
+        let buf = telemetry(-64, 3600, 4_500_000);
+        let frame = decode(buf.as_frame().unwrap()).unwrap();
+        assert_eq!(frame.kind, kind::TELEMETRY);
+        assert_eq!(
+            frame.as_str().unwrap(),
+            r#"{"rssi":-64,"uptime_s":3600,"free_heap":4500000}"#
+        );
+    }
+
+    /// El RSSI es negativo siempre; si el signo se perdiera, el diagnóstico
+    /// diría justo lo contrario de lo que pasa.
+    #[test]
+    fn la_telemetria_conserva_el_signo_del_rssi() {
+        let buf = telemetry(-90, 1, 1);
+        assert!(decode(buf.as_frame().unwrap()).unwrap().as_str().unwrap().contains(r#""rssi":-90"#));
     }
 
     #[test]

@@ -77,6 +77,28 @@ class TestSesion:
             ws.send_bytes(proto.encode(proto.PING))
             assert proto.decode(ws.receive_bytes()).kind == proto.PONG
 
+    def test_la_telemetria_se_responde_y_queda_en_el_estado(self, client):
+        """La telemetría hace de latido y de diagnóstico a la vez.
+
+        Se responde con PONG para que el dispositivo sepa que el enlace va en los
+        dos sentidos, no solo de subida, y se guarda para poder mirar luego si la
+        WiFi flojea o si la memoria del aparato se está erosionando.
+        """
+        with client.websocket_connect(f"/device/ws?token={TOKEN}") as ws:
+            ws.receive_bytes()  # STATE inicial
+            ws.send_bytes(proto.encode_json(
+                proto.TELEMETRY, rssi=-64, uptime_s=3600, free_heap=4_500_000
+            ))
+            assert proto.decode(ws.receive_bytes()).kind == proto.PONG
+
+            r = client.get("/device/status", headers={"X-API-Token": TOKEN})
+            device = r.json()["device"]
+            assert device["telemetry"]["rssi"] == -64
+            assert device["telemetry"]["free_heap"] == 4_500_000
+            # La antigüedad es lo que delata un dispositivo que dejó de latir
+            # aunque el socket siga aparentando estar vivo.
+            assert device["telemetry_age_s"] < 5
+
     def test_al_conectar_el_audio_pasa_a_both_y_al_salir_vuelve_a_pc(self, client):
         """Lo crítico: que desconectar el dispositivo no deje al asistente mudo."""
         service = client.app_state.assistant_service
