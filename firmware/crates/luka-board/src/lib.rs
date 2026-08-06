@@ -136,7 +136,86 @@ pub mod expander {
     /// Los tres botones son **activos a nivel bajo** (pull-up): en reposo leen 1 y
     /// pulsados leen 0. Es lo que da la vuelta a la lógica en `is_pressed`.
     pub const BUTTONS_ACTIVE_LOW: bool = true;
+
+    // --- Puerto 0: la cámara ---
+    //
+    // Estas tres son la razón de que el sensor no conteste al arrancar: el
+    // TCA9555 se enciende con TODO como entradas, así que quedan al aire y la
+    // cámara se queda apagada y en reset. Hay que tomarlas explícitamente.
+    //
+    // Ojo al tocar el puerto 0: **P3 es el CS de la tarjeta SD**, así que se
+    // escribe leyendo-modificando-escribiendo, nunca el registro entero.
+
+    /// Apagado del sensor, **activo a nivel alto**: a bajo, la cámara vive.
+    pub const CAM_POWER_DOWN: u8 = 5;
+    /// Selección de cámara. **Activo a nivel ALTO**, y no es un detalle menor:
+    /// con esta línea a bajo el sensor ni siquiera contesta por SCCB, así que
+    /// parece que no hay cámara. Costó un barrido de polaridades descubrirlo
+    /// (`spike_camera`), porque el port de terceros no lo documenta.
+    pub const CAM_SELECT: u8 = 6;
+    pub const CAM_SELECT_ACTIVE_HIGH: bool = true;
+    /// Reset del sensor, **activo a nivel bajo**: pulso a bajo y de vuelta a alto.
+    pub const CAM_RESET: u8 = 7;
+    /// Chip select de la tarjeta SD. Aquí solo para no pisarlo sin querer.
+    pub const SD_CS: u8 = 3;
     /// Mapa del expansor confirmado al completo (Fase 1, 2026-08-05).
+    pub const CONFIDENCE: Confidence = Confidence::Verified;
+}
+
+/// Interfaz DVP de cámara (cabecera de 24 pines de la placa).
+///
+/// # Estado
+///
+/// Waveshare tampoco publica esto: los valores vienen de un port de terceros
+/// ([jensenbox/waveshare-esp32-s3-audio]). `spike_camera` **ha confirmado el
+/// control** —el sensor contesta en `0x21` y se identifica como GC0308—, pero
+/// **los 8 bits de datos y los sincronismos siguen sin probar**: eso no se sabrá
+/// hasta capturar un fotograma.
+///
+/// [jensenbox/waveshare-esp32-s3-audio]: https://github.com/jensenbox/waveshare-esp32-s3-audio
+///
+/// # El SCCB va por el bus I²C que ya existe
+///
+/// `SIOD`/`SIOC` son los mismos GPIO11/GPIO10 del bus de control, y la dirección
+/// del sensor (`0x21`) no choca con ninguno de los cuatro chips de la placa. No
+/// hay que abrir un segundo bus.
+///
+/// # Y las líneas de control van por el expansor
+///
+/// `power_down`, `camera_select` y `hardware_reset` **no son GPIOs del ESP32**:
+/// cuelgan del TCA9555 (ver [`expander`]). Esa es la razón de que el sensor no
+/// respondiera al primer escaneo: el expansor arranca con todo como entradas, así
+/// que esas tres líneas quedan al aire y la cámara nunca sale de reset.
+pub mod camera {
+    use super::Confidence;
+
+    /// Reloj que el ESP32 le da al sensor. Sin él, el bloque digital del sensor
+    /// no arranca y **ni siquiera contesta por SCCB**.
+    pub const XCLK: u32 = 43;
+    /// Reloj de píxel, del sensor al ESP32.
+    pub const PCLK: u32 = 44;
+    /// Sincronismo vertical (nueva imagen).
+    pub const VSYNC: u32 = 21;
+    /// Referencia horizontal (hay datos válidos).
+    pub const HREF: u32 = 1;
+    /// Bus de datos de 8 bits, de D0 a D7.
+    pub const DATA: [u32; 8] = [2, 17, 18, 39, 45, 46, 47, 48];
+
+    /// Frecuencia de XCLK. 20 MHz es lo que usa el driver de Espressif y sale de
+    /// dividir los 80 MHz del APB por 4, así que es exacta y no arrastra jitter.
+    pub const XCLK_HZ: u32 = 20_000_000;
+
+    /// Dirección SCCB del sensor. La comparten GC0308 y OV7670, así que **no
+    /// basta para identificarlo**: hay que leerle el registro de identidad.
+    pub const ADDR_SENSOR: u8 = 0x21;
+    /// Registro de identidad del GC0308 y el valor que debe devolver.
+    pub const GC0308_ID_REG: u8 = 0x00;
+    pub const GC0308_ID: u8 = 0x9b;
+
+    /// Confirmado por `spike_camera`: con XCLK a 20 MHz en GPIO43 y las líneas
+    /// del expansor en su sitio, el sensor contesta en `0x21` y su registro de
+    /// identidad devuelve `0x9B`. **El sensor y el control están verificados;
+    /// los 8 bits de datos y las señales de sincronismo siguen sin probar.**
     pub const CONFIDENCE: Confidence = Confidence::Verified;
 }
 
