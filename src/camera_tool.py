@@ -39,7 +39,7 @@ def ultima_foto() -> Optional[Path]:
 
 
 async def analyze_camera(question: str = "") -> str:
-    """MIRA por la CÁMARA del altavoz (el dispositivo de la habitación) y describe lo que ve; úsala cuando pregunten qué ves, qué hay delante, o quieran que mires algo del mundo real (para la PANTALLA del ordenador usa analyze_screen).
+    """MIRA por la CÁMARA del altavoz (el dispositivo de la habitación) y describe lo que ve; úsala cuando pregunten qué ves, qué hay delante, o quieran que mires algo del mundo real (para la PANTALLA del ordenador usa analyze_screen; si además quieren VER la foto en el monitor usa después show_camera_photo).
 
     Args:
         question: qué quiere saber el usuario sobre lo que se ve, si lo concretó.
@@ -65,11 +65,17 @@ async def analyze_camera(question: str = "") -> str:
 
     _ultima_foto = path
     stage_vision_capture(str(path), question or None)
-    return "Foto tomada con la cámara del dispositivo. Analizando lo que se ve."
+    # Se le recuerda al modelo que la foto sigue disponible: en el turno
+    # siguiente, cuando el usuario dice "enséñamela", lo único que tiene del
+    # anterior es este texto. Sin la pista contestaba que no podía mostrarla.
+    return (
+        "Foto tomada con la cámara del dispositivo. Analizando lo que se ve. "
+        "La foto queda guardada: si piden verla, usa show_camera_photo."
+    )
 
 
 async def show_camera_photo() -> str:
-    """ENSEÑA en la pantalla del ordenador la última foto que tomó la cámara del dispositivo; úsala cuando pidan verla, mostrarla o abrirla.
+    """ABRE en el monitor la última foto de la cámara del dispositivo, para que el usuario la vea con sus ojos; úsala siempre que digan enséñamela, muéstramela, quiero verla, ábrela o ponla en pantalla, referido a la foto o a lo que la cámara vio (NO hace una foto nueva: para eso está analyze_camera).
     """
     foto = _ultima_foto
     if foto is None or not foto.exists():
