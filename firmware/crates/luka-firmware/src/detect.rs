@@ -47,8 +47,16 @@ const SILENCIO_NIVEL: u8 = 40;
 ///
 /// 1,2 s es el compromiso: más corto corta a quien piensa a media frase, más
 /// largo hace que Luka parezca lenta en contestar.
-const SILENCIO_MS: u64 = 1_200;
+const SILENCIO_MS: u64 = 600;
 const SILENCIO_FRAMES: u32 = (SILENCIO_MS / audio::FRAME_MS as u64) as u32;
+
+/// Confianza por encima de la cual se da por empezado un "intento": alguien ha
+/// dicho algo que al detector le suena a "Luka", aunque no llegue al umbral.
+///
+/// El anillo de calibración son 7 LEDs, o sea ~36 unidades por LED: sirve para
+/// ver que el detector reacciona, no para elegir un umbral. Esto es lo que da el
+/// número exacto. 60 deja fuera el fondo de sala y el habla normal.
+const CASI_MINIMO: u8 = 60;
 
 /// Qué hace el hilo con las tramas que le llegan.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -127,6 +135,9 @@ impl Detect {
         let mut politica = luka_wakeword::Politica::new(luka_config::device::WAKE_THRESHOLD);
         #[cfg(feature = "wakeword")]
         let mut probabilidades = [0u8; luka_wakeword::MAX_PROBABILIDADES];
+        // Pico de confianza del intento en curso (solo en modo calibración).
+        #[cfg(feature = "wakeword")]
+        let mut pico_intento: u8 = 0;
 
         crate::watchdog::subscribe("detect");
 
@@ -149,6 +160,7 @@ impl Detect {
                 if let Some(d) = detector.as_mut() {
                     d.reset();
                     politica.reset();
+                    pico_intento = 0;
                 }
                 frames_en_silencio = 0;
                 if modo != Modo::Enviando {
@@ -174,9 +186,39 @@ impl Detect {
                     if let Some(d) = detector.as_mut() {
                         for &p in d.procesar(&frame.pcm, &mut probabilidades) {
                             let desperto = politica.empujar(p);
-                            self.ring.set_confianza(politica.confianza());
+                            let confianza = politica.confianza();
+                            self.ring.set_confianza(confianza);
+
+                            // Se sigue el pico de cada intento y se loguea cuando
+                            // decae. Es lo que convierte "está sordo" en un número:
+                            // dices "Luka" desde donde sueles, y el log te dice a
+                            // cuánto llegó de verdad y cuánto le faltó al umbral.
+                            // Se salta la inferencia que dispara —ahí la ventana
+                            // ya está limpia y contarla como decaída pondría un
+                            // "casi" fantasma delante de cada despertar— y todo
+                            // el periodo de gracia, donde nada puede disparar.
+                            if luka_config::device::WAKE_CALIBRATION
+                                && !desperto
+                                && !politica.calentando()
+                            {
+                                if confianza >= CASI_MINIMO {
+                                    pico_intento = pico_intento.max(confianza);
+                                } else if pico_intento > 0 {
+                                    log::info!(
+                                        "casi: pico {pico_intento} (umbral {})",
+                                        politica.umbral()
+                                    );
+                                    pico_intento = 0;
+                                }
+                            }
+
                             if desperto {
-                                log::info!("wake word: confianza {}", politica.confianza());
+                                pico_intento = 0;
+                                log::info!(
+                                    "wake word: confianza {} (umbral {})",
+                                    politica.confianza_disparo(),
+                                    politica.umbral()
+                                );
                                 let _ = self.event_tx.try_send(Event::WakeDetected);
                                 // El turno empieza por el pre-roll: la palabra
                                 // ya se dijo, y sin esto el servidor recibiría

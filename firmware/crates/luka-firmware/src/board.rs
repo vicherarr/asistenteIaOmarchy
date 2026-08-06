@@ -144,12 +144,21 @@ const ES7210_MAINCLK: u8 = 0x01 | (0x01 << 6) | (0x01 << 7);
 
 /// Ganancia de los PGA de los micros.
 ///
-/// El driver de Espressif usa 0x1A (~30 dB) y con eso la Fase 0 medía el habla a
+/// El driver de Espressif usa 0x1A (30 dB) y con eso la Fase 0 medía el habla a
 /// unos -45 dBFS: funciona, porque el `stt_engine` normaliza con `loudnorm`, pero
-/// deja poco margen sobre el ruido de fondo. Se sube a 0x1D (~34,5 dB) para
-/// mejorar la relación señal/ruido **antes** de que el audio salga por la red,
-/// que es donde ya no se puede arreglar.
-const MIC_GAIN: u8 = 0x1D;
+/// deja poco margen sobre el ruido de fondo. Se subió a 0x1D (36 dB) para mejorar
+/// la relación señal/ruido **antes** de que el audio salga por la red, que es
+/// donde ya no se puede arreglar.
+///
+/// Ahora está en 0x1E, que es **el tope del PGA** (37,5 dB): el nibble bajo es el
+/// índice de ganancia del ES7210 y 14 es el último valor definido. Es el único
+/// sitio donde subir el volumen ayuda a oír de lejos; la ganancia digital de
+/// `audio::CAPTURE_GAIN` sube señal y ruido por igual, y el frontend de la wake
+/// word lleva PCAN, que normaliza el nivel y la anula del todo.
+///
+/// Sin riesgo de recorte: el habla de cerca ronda -33 dBFS con este ajuste, así
+/// que quedan más de 30 dB de margen hasta fondo de escala.
+const MIC_GAIN: u8 = 0x1E;
 
 pub fn es7210_init(i2c: &mut I2cDriver) -> Result<()> {
     let addr = bi2c::ADDR_ES7210;

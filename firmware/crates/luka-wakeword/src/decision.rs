@@ -45,6 +45,13 @@ pub struct Politica {
     /// Cuántas inferencias llevamos; mientras sea baja no se hace caso.
     vistas: u16,
     espera: u16,
+    /// Con cuánta confianza se disparó la última vez.
+    ///
+    /// Se guarda porque [`Politica::empujar`] **limpia la ventana al disparar**,
+    /// así que preguntar [`Politica::confianza`] después siempre da 0. Y es
+    /// justo el número que hace falta para ajustar el umbral: cuánto margen
+    /// había de verdad sobre él.
+    confianza_disparo: u8,
 }
 
 impl Default for Politica {
@@ -55,7 +62,7 @@ impl Default for Politica {
 
 impl Politica {
     pub fn new(umbral: u8) -> Self {
-        Self { umbral, ventana: [0; VENTANA], siguiente: 0, vistas: 0, espera: 0 }
+        Self { umbral, ventana: [0; VENTANA], siguiente: 0, vistas: 0, espera: 0, confianza_disparo: 0 }
     }
 
     /// Cambia el umbral en caliente, sin reiniciar el detector.
@@ -73,6 +80,26 @@ impl Politica {
         self.siguiente = 0;
         self.vistas = 0;
         self.espera = 0;
+        self.confianza_disparo = 0;
+    }
+
+    /// Si el detector aún está en el periodo de gracia y por tanto **no puede
+    /// disparar pase lo que pase**.
+    ///
+    /// Lo mira la calibración: durante estos ~3 s la confianza sube y baja como
+    /// siempre, y sin distinguirlo el log enseña "casi" que no lo eran —
+    /// confianzas muy por encima del umbral que no despertaron por el arranque,
+    /// no por falta de nivel. Eso lleva a bajar el umbral sin motivo.
+    pub fn calentando(&self) -> bool {
+        self.vistas <= INFERENCIAS_DE_GRACIA
+    }
+
+    /// Confianza que produjo el último disparo, 0 si aún no ha habido ninguno.
+    ///
+    /// Lo que hay que mirar para calibrar: si los disparos reales rondan el
+    /// umbral, está demasiado alto y se escaparán la mitad de las veces.
+    pub fn confianza_disparo(&self) -> u8 {
+        self.confianza_disparo
     }
 
     /// Media de la ventana, 0-255. Es lo que alimenta el modo calibración.
@@ -96,10 +123,13 @@ impl Politica {
         if self.vistas <= INFERENCIAS_DE_GRACIA {
             return false;
         }
-        if self.confianza() <= self.umbral {
+        let confianza = self.confianza();
+        if confianza <= self.umbral {
             return false;
         }
 
+        // Se anota ANTES de limpiar, que es la única ventana en la que existe.
+        self.confianza_disparo = confianza;
         // Al disparar se limpia la ventana: si no, las siguientes inferencias
         // seguirían viendo la media alta y el refractario solo taparía el
         // problema en vez de resolverlo.
@@ -203,6 +233,32 @@ mod tests {
         for _ in 0..INFERENCIAS_DE_GRACIA {
             assert!(!p.empujar(255));
         }
+    }
+
+    /// La regresión que se coló hasta la placa: el log de disparo consultaba
+    /// `confianza()` DESPUÉS de disparar, y como `empujar` limpia la ventana,
+    /// imprimía un 0 fijo. El número real hay que capturarlo antes.
+    #[test]
+    fn el_disparo_recuerda_su_confianza_aunque_la_ventana_se_limpie() {
+        let mut p = Politica::new(100);
+        calentar(&mut p);
+        while !p.empujar(200) {}
+
+        assert_eq!(p.confianza(), 0, "la ventana debe quedar limpia tras disparar");
+        assert!(
+            p.confianza_disparo() > p.umbral(),
+            "el disparo tuvo que superar el umbral: {} vs {}",
+            p.confianza_disparo(),
+            p.umbral()
+        );
+        assert!(p.confianza_disparo() <= 200, "no puede superar la probabilidad de entrada");
+    }
+
+    #[test]
+    fn sin_disparos_la_confianza_de_disparo_es_cero() {
+        let mut p = Politica::new(100);
+        calentar(&mut p);
+        assert_eq!(p.confianza_disparo(), 0);
     }
 
     #[test]

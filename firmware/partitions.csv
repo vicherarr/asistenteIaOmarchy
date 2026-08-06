@@ -1,0 +1,20 @@
+# Tabla de particiones de luka-speaker.
+#
+# Existe porque el binario NO CABE en la tabla por defecto de espflash, que da
+# 1 MB a la aplicación: con el intérprete de TFLite Micro, esp-nn y el modelo
+# empotrado, la imagen ronda 1,4 MB. El fallo es `image_too_big` y llega DESPUÉS
+# de conectar con la placa, así que parece un problema del dispositivo cuando en
+# realidad es del empaquetado.
+#
+# Estos valores son EXACTAMENTE los que ya tiene grabada la placa (leídos con
+# `espflash read-flash 0x8000 0xc00`), así que grabar con esta tabla no mueve
+# nada de sitio ni invalida la NVS.
+#
+# La flash es de 16 MB y aquí no hay OTA: una sola partición `factory` que se
+# queda con todo lo que sobra. Si algún día hace falta OTA, hay que partirla en
+# dos y el binario tiene que caber en la mitad.
+#
+# Name,     Type, SubType,  Offset,   Size,     Flags
+nvs,        data, nvs,      0x9000,   0x6000,
+phy_init,   data, phy,      0xf000,   0x1000,
+factory,    app,  factory,  0x10000,  0xfa0000,
