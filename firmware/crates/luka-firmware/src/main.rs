@@ -111,10 +111,19 @@ fn main() -> Result<()> {
     let (capture_tx, capture_rx) = mpsc::sync_channel(64);
     let (playback_tx, playback_rx) = mpsc::sync_channel(64);
 
-    let audio_io = audio::AudioIO::new(audio_cmd_rx, capture_tx, playback_rx, i2s, i2c.clone());
+    // Estado de la reproducción, compartido por los tres hilos: el de audio
+    // publica cuánto queda por sonar, el de red marca cuándo el servidor deja de
+    // mandar, y el supervisor junta las dos cosas para cerrar el turno.
+    let reproduccion = Arc::new(audio::Reproduccion::new());
+
+    let audio_io = audio::AudioIO::new(
+        audio_cmd_rx, capture_tx, playback_rx, i2s, i2c.clone(), reproduccion.clone(),
+    );
     audio_io.spawn()?;
 
-    let net_task = net::NetTask::new(net_cmd_rx, event_tx.clone(), playback_tx, peripherals.modem);
+    let net_task = net::NetTask::new(
+        net_cmd_rx, event_tx.clone(), playback_tx, reproduccion.clone(), peripherals.modem,
+    );
     net_task.spawn()?;
 
     // El detector se pone EN MEDIO de audio y red: es quien decide, trama a
@@ -164,6 +173,15 @@ fn main() -> Result<()> {
         while let Ok(ev) = event_rx.try_recv() {
             events.push(ev);
         }
+
+        // El turno de voz se acaba cuando NO QUEDA AUDIO QUE SONAR, no cuando el
+        // servidor dice que dejó de mandar. Con el colchón el dispositivo va por
+        // detrás, así que fiarse del `TTS_END` cortaría el final de cada
+        // respuesta —ya pasaba antes, tirando segundos de audio ya recibido.
+        if reproduccion.turno_agotado() {
+            events.push(luka_state::Event::TtsEnded);
+        }
+
         events.push(luka_state::Event::Tick);
         
         for event in events {

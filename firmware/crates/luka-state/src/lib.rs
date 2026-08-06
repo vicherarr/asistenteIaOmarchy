@@ -462,16 +462,28 @@ pub fn next(state: State, event: Event, now_ms: u64) -> (State, Actions) {
             (S::Idle, Actions::of(&[StopPlayback]))
         }
 
-        // El servidor dice que está hablando y aquí aún no había llegado audio:
-        // se le cree, para que el anillo no vaya por detrás de la realidad.
-        (S::Thinking { .. }, E::ServerSaid(Reported::Speaking)) => {
-            (S::Speaking { since_ms: now_ms }, Actions::of(&[StartPlayback]))
-        }
-
-        // El servidor volvió a reposo (turno descartado por no entenderse nada).
-        (s, E::ServerSaid(Reported::Idle)) if matches!(s, S::Thinking { .. } | S::Speaking { .. }) => {
-            (S::Idle, Actions::of(&[StopPlayback]))
-        }
+        // **El servidor no decide cuándo se abre ni cuándo se cierra el altavoz.**
+        //
+        // Antes sí: `ServerSaid(Speaking)` abría la reproducción para que el
+        // anillo no fuera por detrás, y `ServerSaid(Idle)` la cerraba. Las dos
+        // llegan en el momento equivocado, porque describen lo que hace el
+        // SERVIDOR y no lo que suena aquí:
+        //
+        // - `STATE_SPEAKING` se manda antes de generar una sola muestra, así que
+        //   abría el altavoz con la cola vacía y anulaba el colchón entero.
+        // - `STATE_IDLE` llega pegado al `TTS_END`, cuando al dispositivo aún le
+        //   quedan segundos por sonar. Cortaba el final de cada respuesta: en la
+        //   última medición, 3,2 s de audio ya recibido a la basura.
+        //
+        // Ahora `Speaking` se entra solo con `TtsStarted` —que la red retiene
+        // hasta tener colchón— y se sale con `TtsEnded`, que el supervisor manda
+        // cuando la cola se vacía de verdad. El plazo de `SPEAKING_TIMEOUT_MS`
+        // sigue de guardia por si alguna de las dos se perdiera.
+        //
+        // Desde `Thinking` sí se atiende: ahí no hay nada sonando que cortar, y
+        // es como se sale de un turno que el servidor descartó por no entender
+        // nada.
+        (S::Thinking { .. }, E::ServerSaid(Reported::Idle)) => (S::Idle, Actions::none()),
 
         // --- Fallos ---
         (S::Fault { kind, since_ms }, E::Tick) if now_ms.saturating_sub(since_ms) >= FAULT_DISPLAY_MS => {
@@ -637,6 +649,48 @@ mod tests {
         let voz: Vec<_> = por_voz.iter().collect();
         let boton: Vec<_> = por_boton.iter().collect();
         assert_eq!(voz, boton, "los dos caminos de interrupción divergieron");
+    }
+
+    /// El servidor manda `STATE_SPEAKING` **antes** de sintetizar nada. Si eso
+    /// abriera el altavoz, arrancaría con la cola vacía y el colchón no serviría
+    /// de nada — que es exactamente lo que pasaba.
+    #[test]
+    fn el_servidor_no_abre_el_altavoz_por_su_cuenta() {
+        let pensando = S::Thinking { since_ms: 0 };
+        let (despues, actions) = next(pensando, E::ServerSaid(Reported::Speaking), 1_000);
+        assert_eq!(despues, pensando, "el aviso del servidor abrió la reproducción");
+        assert!(!actions.contains(StartPlayback));
+    }
+
+    /// Y `STATE_IDLE` llega pegado al `TTS_END`, cuando aquí aún quedan segundos
+    /// por sonar. Cerrar con eso cortaba el final de cada respuesta.
+    #[test]
+    fn el_servidor_no_corta_lo_que_queda_por_sonar() {
+        let hablando = S::Speaking { since_ms: 0 };
+        let (despues, actions) = next(hablando, E::ServerSaid(Reported::Idle), 1_000);
+        assert_eq!(despues, hablando, "el aviso del servidor cortó la reproducción");
+        assert!(!actions.contains(StopPlayback));
+    }
+
+    /// Pero desde `Thinking` sí vale: no hay nada sonando que cortar, y es como
+    /// se sale de un turno que el servidor descartó por no entender nada.
+    #[test]
+    fn pensando_si_atiende_el_reposo_del_servidor() {
+        assert_eq!(next(S::Thinking { since_ms: 0 }, E::ServerSaid(Reported::Idle), 1_000).0, S::Idle);
+    }
+
+    /// Con esto, entrar y salir de `Speaking` depende solo del audio: lo abre
+    /// `TtsStarted` (que la red retiene hasta tener colchón) y lo cierra
+    /// `TtsEnded` (que el supervisor manda al vaciarse la cola).
+    #[test]
+    fn hablar_empieza_y_acaba_con_el_audio_no_con_la_red() {
+        let (state, actions) = next(S::Thinking { since_ms: 0 }, E::TtsStarted, 1_000);
+        assert_eq!(state, S::Speaking { since_ms: 1_000 });
+        assert!(actions.contains(StartPlayback));
+
+        let (state, actions) = next(state, E::TtsEnded, 5_000);
+        assert!(matches!(state, S::FollowUp { .. }));
+        assert!(actions.contains(StopPlayback));
     }
 
     // --- Ventana de seguimiento ---

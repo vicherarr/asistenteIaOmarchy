@@ -21,7 +21,9 @@ use esp_idf_hal::delay::BLOCK;
 use esp_idf_hal::i2s::{I2sBiDir, I2sDriver};
 use luka_board::audio;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender};
+use std::sync::Arc;
 
 /// Ganancia digital sobre lo capturado.
 ///
@@ -41,6 +43,70 @@ const CAPTURE_GAIN: i32 = 2;
 /// Cabe porque `CONFIG_SPIRAM_USE_MALLOC` manda las asignaciones grandes a la
 /// PSRAM, de la que hay 8 MB.
 const PLAYBACK_MAX_SAMPLES: usize = audio::SAMPLE_RATE_HZ as usize * 60;
+
+/// Colchón que se acumula antes de empezar a sonar (1,5 s).
+///
+/// Sin él, la reproducción arrancaba con la **primera** trama que llegaba —20 ms
+/// de audio— y a partir de ahí el altavoz consume 16.000 muestras por segundo
+/// sin descanso mientras la fuente entrega a ráfagas. Cualquier hipo del
+/// servidor vaciaba la cola y se oía un corte: 12 en una respuesta de 42 s.
+///
+/// El TTS del PC va a ~2× tiempo real de media, así que 1,5 s de adelanto
+/// absorben de sobra sus bajones. El precio es que Luka tarda ese segundo y
+/// medio más en romper a hablar; es un intercambio de latencia por continuidad,
+/// y la continuidad se nota más.
+pub const COLCHON_SAMPLES: u32 = audio::SAMPLE_RATE_HZ * 3 / 2;
+
+/// Estado de la reproducción, compartido entre el hilo de audio, el de red y el
+/// supervisor.
+///
+/// Existe por el colchón. Con la reproducción retrasada, el dispositivo va por
+/// detrás del servidor, así que **el `TTS_END` ya no significa "se acabó de
+/// sonar"**: significa "no viene más audio". Si al recibirlo se parase en seco
+/// se cortaría el final de cada respuesta.
+///
+/// Y no es hipotético: ya pasaba **antes** del colchón. Una medición dejó
+/// `41.520 sin consumir` al cerrar, o sea 2,6 s de respuesta tirados a la
+/// basura, porque el servidor manda `TTS_END` cuando termina *él*.
+///
+/// Con esto, el fin del turno lo decide quedarse sin audio que sonar, no un
+/// aviso de la red.
+pub struct Reproduccion {
+    /// Muestras encoladas que aún no han sonado. Lo publica el hilo de audio.
+    pendientes: AtomicU32,
+    /// El servidor ya dijo que no manda más audio. Lo pone el hilo de red.
+    fin_audio: AtomicBool,
+}
+
+impl Reproduccion {
+    pub fn new() -> Self {
+        Self { pendientes: AtomicU32::new(0), fin_audio: AtomicBool::new(false) }
+    }
+
+    pub fn set_pendientes(&self, n: usize) {
+        self.pendientes.store(n as u32, Ordering::Relaxed);
+    }
+
+    pub fn pendientes(&self) -> u32 {
+        self.pendientes.load(Ordering::Relaxed)
+    }
+
+    /// La red recibió `TTS_END`: no viene más audio.
+    pub fn marcar_fin(&self) {
+        self.fin_audio.store(true, Ordering::Relaxed);
+    }
+
+    /// Llegó audio nuevo: lo que hubiera de antes ya no es el final.
+    pub fn limpiar_fin(&self) {
+        self.fin_audio.store(false, Ordering::Relaxed);
+    }
+
+    /// ¿Se acabó el audio **y** ya ha sonado todo? Consume la marca, para que
+    /// el evento salga una sola vez.
+    pub fn turno_agotado(&self) -> bool {
+        self.pendientes() == 0 && self.fin_audio.swap(false, Ordering::Relaxed)
+    }
+}
 
 pub enum AudioCommand {
     StartCapture,
@@ -66,6 +132,7 @@ pub struct AudioIO {
     playback_rx: Receiver<Vec<i16>>,
     i2s: I2sDriver<'static, I2sBiDir>,
     shared_i2c: crate::board::SharedI2c,
+    reproduccion: Arc<Reproduccion>,
 }
 
 impl AudioIO {
@@ -75,8 +142,9 @@ impl AudioIO {
         playback_rx: Receiver<Vec<i16>>,
         i2s: I2sDriver<'static, I2sBiDir>,
         shared_i2c: crate::board::SharedI2c,
+        reproduccion: Arc<Reproduccion>,
     ) -> Self {
-        Self { cmd_rx, capture_tx, playback_rx, i2s, shared_i2c }
+        Self { cmd_rx, capture_tx, playback_rx, i2s, shared_i2c, reproduccion }
     }
 
     pub fn spawn(mut self) -> Result<()> {
@@ -110,9 +178,21 @@ impl AudioIO {
         let mut capturing = false;
         let mut playing = false;
         // Muestras NO silenciosas escritas al I2S en la reproducción en curso.
-        // Se cuentan las no nulas a propósito: escribir ceros porque la cola está
-        // vacía se ve idéntico a reproducir, y es justo la confusión a deshacer.
         let mut escritas: u64 = 0;
+        // Muestras que hubo que inventar porque la cola llegó vacía. **Esta es la
+        // métrica de verdad** para "se oye entrecortado".
+        //
+        // Contar muestras no nulas (`escritas`) no vale: el silencio entre
+        // palabras también son ceros, así que un hueco real y una pausa natural
+        // salen idénticos. Con eso se diagnosticó mal una vez —se leyó "dos
+        // tercios son ceros" como subdesbordamiento cuando era una respuesta
+        // corta repartida en un `Speaking` largo— y se estuvo a punto de
+        // descartar barge-in por el motivo equivocado.
+        let mut huecos: u64 = 0;
+        // Cuántas veces la cola se secó y volvió a llenarse. Un corte largo y
+        // cien cortes cortos dan el mismo total de muestras y **no suenan igual**.
+        let mut cortes: u32 = 0;
+        let mut en_hueco = false;
 
         // El amplificador arranca cerrado pase lo que pase.
         crate::board::silence(&self.shared_i2c);
@@ -142,6 +222,9 @@ impl AudioIO {
                         // tres se parecen. Estas dos trazas las separan.
                         log::info!("playback: abriendo (cola {} muestras)", cola.len());
                         escritas = 0;
+                        huecos = 0;
+                        cortes = 0;
+                        en_hueco = false;
                         if capturing {
                             // No debería pasar nunca: la máquina de estados lo
                             // impide y hay un test que lo fija. Si pasa, gana el
@@ -153,8 +236,12 @@ impl AudioIO {
                         }
                     }
                     AudioCommand::StopPlayback => {
+                        // `huecos` y `cortes` son el criterio de salida de
+                        // barge-in: si al activarlo suben respecto a la línea de
+                        // base, no entra.
                         log::info!(
-                            "playback: cerrando ({escritas} muestras con señal, {} sin consumir)",
+                            "playback: cerrando ({escritas} con señal, {huecos} inventadas \
+                             en {cortes} cortes, {} sin consumir)",
                             cola.len()
                         );
                         playing = false;
@@ -180,15 +267,34 @@ impl AudioIO {
                 cola.extend(pcm);
             }
 
+            // Lo que queda por sonar. El supervisor lo usa para decidir cuándo
+            // ha terminado el turno de verdad, en vez de fiarse del TTS_END.
+            self.reproduccion.set_pendientes(cola.len());
+
             // --- Escritura ---
             if playing {
                 // Lo que falte se rellena con silencio: un hueco se oye como una
                 // pausa; no escribir nada produce un chasquido por *underrun*.
                 for i in 0..audio::FRAME_SAMPLES {
-                    let sample = cola.pop_front().unwrap_or(0);
-                    if sample != 0 {
-                        escritas += 1;
-                    }
+                    let sample = match cola.pop_front() {
+                        Some(s) => {
+                            en_hueco = false;
+                            if s != 0 {
+                                escritas += 1;
+                            }
+                            s
+                        }
+                        None => {
+                            // La cola se secó: se escribe silencio porque no
+                            // escribir nada produce un chasquido por underrun.
+                            huecos += 1;
+                            if !en_hueco {
+                                cortes += 1;
+                                en_hueco = true;
+                            }
+                            0
+                        }
+                    };
                     let bytes = sample.to_le_bytes();
                     // Mono -> estéreo: la misma muestra en los dos canales.
                     tx_bytes[i * 4..i * 4 + 2].copy_from_slice(&bytes);

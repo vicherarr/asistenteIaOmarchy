@@ -686,3 +686,65 @@ parar, así que cualquier hipo abre un hueco.
 sintetizar. Precio: ~1 s más hasta que Luka empieza a hablar, que es justo lo que el corte
 por comas intentaba comprar y compró demasiado caro. Un colchón en la placa sería el
 segundo paso, y probablemente sobre: a 2× tiempo real la cola no se seca.
+
+---
+
+## ✅ El audio entrecortado — RESUELTO (2026-08-06)
+
+La reproducción se cortaba a trozos mientras Luka hablaba, con barge-in ya apagado.
+
+| | Antes | Después |
+|---|---|---|
+| Silencio inventado por cola vacía | 263.600 muestras (16,5 s) | 5.600 (0,35 s) |
+| Cortes | 12 | 3 |
+| Audio recibido y tirado al final | 41.520 (2,6 s) | 0 |
+
+### Causa: no había colchón, y el servidor mandaba sobre el altavoz
+
+`net.rs` emitía `TtsStarted` con la **primera** trama `TTS_AUDIO`, así que la
+reproducción arrancaba con 20 ms de audio. A partir de ahí el altavoz consume
+16.000 muestras por segundo sin descanso mientras la fuente entrega a ráfagas:
+cualquier bajón vaciaba la cola y se oía un corte. Ahora se acumulan **1,5 s**
+antes de arrancar (`COLCHON_SAMPLES`), o hasta que llegue `TTS_END` si la
+respuesta es tan corta que no da para tanto.
+
+Pero el colchón por sí solo **no hacía nada**, y el log lo dejó claro
+(`playback: abriendo (cola 0 muestras)`): la máquina de estados se fiaba de dos
+tramas de estado del servidor que describen lo que hace **el servidor**, no lo
+que suena en la placa.
+
+- `STATE_SPEAKING` se manda **antes** de sintetizar una sola muestra, y abría el
+  altavoz con la cola vacía. Anulaba el colchón entero.
+- `STATE_IDLE` llega pegado al `TTS_END`, cuando al dispositivo aún le quedan
+  segundos por sonar. **Cortaba el final de cada respuesta**, y esto ya pasaba
+  antes del colchón: 2,6 s de audio ya recibido a la basura, en silencio.
+
+Ahora `Speaking` se entra **solo** con `TtsStarted` (que la red retiene hasta
+tener colchón) y se sale **solo** con `TtsEnded`, que manda el supervisor cuando
+la cola se vacía de verdad. `SPEAKING_TIMEOUT_MS` sigue de guardia.
+
+> **La regla:** el servidor no decide cuándo se abre ni cuándo se cierra el
+> altavoz. Lo decide el audio que hay en la cola.
+
+### Lo que costó encontrarlo
+
+Tres diagnósticos equivocados antes del bueno, todos por deducir en vez de medir:
+
+1. «Es la inferencia de barge-in» — lo era en parte (prioridad del hilo), pero
+   quedaban cortes con barge-in apagado.
+2. «Es el TTS del PC, va por debajo de tiempo real» — solo con enumeraciones
+   (`'Cuarto, expulsión:'`, 18 caracteres); con prosa va a ~2×.
+3. «Es el contador» — el contador medía muestras no nulas, y el silencio natural
+   entre palabras también son ceros.
+
+Lo que lo cerró fue separar **huecos** (muestras inventadas por cola vacía) de
+**cortes** (cuántas veces se secó). Un corte largo y cien cortos dan el mismo
+total de muestras y no suenan igual.
+
+### Pendiente relacionado, en el PC
+
+`src/assistant_service.py:273` parte por **todas** las comas y dos puntos en
+cuanto el buffer pasa de 80 caracteres. Con enumeraciones salen fragmentos de 18
+caracteres y Kokoro tiene ~1 s de coste fijo por llamada, así que el ritmo cae a
+1× tiempo real. Con el colchón ya no se oye, pero sigue ahí. Arreglo: tamaño
+mínimo de fragmento (~120 caracteres).

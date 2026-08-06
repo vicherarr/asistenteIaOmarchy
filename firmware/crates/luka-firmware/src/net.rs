@@ -85,6 +85,7 @@ pub struct NetTask {
     cmd_rx: Receiver<NetCommand>,
     event_tx: SyncSender<Event>,
     playback_tx: SyncSender<Vec<i16>>,
+    reproduccion: Arc<crate::audio::Reproduccion>,
     modem: esp_idf_hal::modem::Modem<'static>,
 }
 
@@ -93,9 +94,10 @@ impl NetTask {
         cmd_rx: Receiver<NetCommand>,
         event_tx: SyncSender<Event>,
         playback_tx: SyncSender<Vec<i16>>,
+        reproduccion: Arc<crate::audio::Reproduccion>,
         modem: esp_idf_hal::modem::Modem<'static>,
     ) -> Self {
-        Self { cmd_rx, event_tx, playback_tx, modem }
+        Self { cmd_rx, event_tx, playback_tx, reproduccion, modem }
     }
 
     pub fn spawn(self) -> Result<()> {
@@ -110,7 +112,7 @@ impl NetTask {
     }
 
     fn run_loop(self) {
-        let Self { cmd_rx, event_tx, playback_tx, modem } = self;
+        let Self { cmd_rx, event_tx, playback_tx, reproduccion, modem } = self;
 
         log::info!("net_io: arrancando");
         let sys_loop = match EspSystemEventLoop::take() {
@@ -251,7 +253,7 @@ impl NetTask {
                                 }
                             }
                             None => {
-                                client = connect_server(&event_tx, &playback_tx, &connected);
+                                client = connect_server(&event_tx, &playback_tx, &reproduccion, &connected);
                                 if client.is_none() {
                                     let _ = event_tx.try_send(Event::ServerDown);
                                 }
@@ -358,6 +360,7 @@ fn connect_wifi(wifi: &mut BlockingWifi<EspWifi<'static>>, event_tx: &SyncSender
 fn connect_server(
     event_tx: &SyncSender<Event>,
     playback_tx: &SyncSender<Vec<i16>>,
+    reproduccion: &Arc<crate::audio::Reproduccion>,
     connected: &Arc<AtomicBool>,
 ) -> Option<EspWebSocketClient<'static>> {
     let cert = match CStr::from_bytes_with_nul(luka_config::server::TLS_CERT_PEM.as_bytes()) {
@@ -398,6 +401,7 @@ fn connect_server(
 
     let event_tx = event_tx.clone();
     let playback_tx = playback_tx.clone();
+    let reproduccion = reproduccion.clone();
     let connected = connected.clone();
     // Se pone a true con la primera trama de audio de cada respuesta, para
     // mandar `TtsStarted` una sola vez por turno.
@@ -452,7 +456,7 @@ fn connect_server(
                 let _ = event_tx.try_send(Event::ServerDown);
             }
             WebSocketEventType::Binary(data) => {
-                handle_frame(data, &event_tx, &playback_tx, &hablando);
+                handle_frame(data, &event_tx, &playback_tx, &hablando, &reproduccion);
             }
             WebSocketEventType::Text(text) => {
                 // El protocolo es binario; si llega texto, algo no cuadra.
@@ -477,6 +481,7 @@ fn handle_frame(
     event_tx: &SyncSender<Event>,
     playback_tx: &SyncSender<Vec<i16>>,
     hablando: &Arc<AtomicBool>,
+    reproduccion: &Arc<crate::audio::Reproduccion>,
 ) {
     let frame = match luka_proto::decode(data) {
         Ok(f) => f,
@@ -508,13 +513,21 @@ fn handle_frame(
             // una lectura de 16 bits desalineada es comportamiento indefinido.
             // Se decodifica byte a byte, que además fija el orden little-endian
             // del protocolo en vez de heredar el de la máquina.
+            reproduccion.limpiar_fin();
             let pcm: Vec<i16> = frame
                 .payload
                 .chunks_exact(2)
                 .map(|b| i16::from_le_bytes([b[0], b[1]]))
                 .collect();
 
-            if !hablando.swap(true, Ordering::Relaxed) {
+            // El turno de voz NO empieza con la primera trama: se deja que se
+            // acumule el colchón. Arrancar con 20 ms de audio y luego consumir a
+            // 16 kHz sin pausa es lo que hacía que cualquier hipo del servidor
+            // se oyera como un corte.
+            if !hablando.load(Ordering::Relaxed)
+                && reproduccion.pendientes() >= crate::audio::COLCHON_SAMPLES
+            {
+                hablando.store(true, Ordering::Relaxed);
                 let _ = event_tx.try_send(Event::TtsStarted);
             }
             // Si el búfer de reproducción está lleno se descarta: más vale un
@@ -526,8 +539,16 @@ fn handle_frame(
         }
 
         kind::TTS_END => {
-            hablando.store(false, Ordering::Relaxed);
-            let _ = event_tx.try_send(Event::TtsEnded);
+            // Una respuesta corta puede no haber llegado nunca al colchón. Si no
+            // se anuncia aquí, ese audio se quedaría en la cola sin sonar jamás.
+            if !hablando.swap(false, Ordering::Relaxed) {
+                let _ = event_tx.try_send(Event::TtsStarted);
+            }
+            // **No se manda TtsEnded aquí.** `TTS_END` significa "no viene más
+            // audio", no "ya ha sonado todo": con el colchón el dispositivo va
+            // por detrás del servidor. Lo manda el supervisor cuando la cola se
+            // vacía de verdad; si no, se cortaría el final de cada respuesta.
+            reproduccion.marcar_fin();
         }
 
         kind::TRANSCRIPT => {
