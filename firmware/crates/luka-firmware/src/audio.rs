@@ -109,6 +109,10 @@ impl AudioIO {
 
         let mut capturing = false;
         let mut playing = false;
+        // Muestras NO silenciosas escritas al I2S en la reproducción en curso.
+        // Se cuentan las no nulas a propósito: escribir ceros porque la cola está
+        // vacía se ve idéntico a reproducir, y es justo la confusión a deshacer.
+        let mut escritas: u64 = 0;
 
         // El amplificador arranca cerrado pase lo que pase.
         crate::board::silence(&self.shared_i2c);
@@ -132,6 +136,12 @@ impl AudioIO {
                     }
                     AudioCommand::StopCapture => capturing = false,
                     AudioCommand::StartPlayback => {
+                        // Diagnóstico: "no se oye nada" tiene tres causas muy
+                        // distintas —no llega audio, llega y no se escribe, o se
+                        // escribe con el amplificador cerrado— y desde fuera las
+                        // tres se parecen. Estas dos trazas las separan.
+                        log::info!("playback: abriendo (cola {} muestras)", cola.len());
+                        escritas = 0;
                         if capturing {
                             // No debería pasar nunca: la máquina de estados lo
                             // impide y hay un test que lo fija. Si pasa, gana el
@@ -143,6 +153,10 @@ impl AudioIO {
                         }
                     }
                     AudioCommand::StopPlayback => {
+                        log::info!(
+                            "playback: cerrando ({escritas} muestras con señal, {} sin consumir)",
+                            cola.len()
+                        );
                         playing = false;
                         cola.clear();
                         crate::board::silence(&self.shared_i2c);
@@ -172,6 +186,9 @@ impl AudioIO {
                 // pausa; no escribir nada produce un chasquido por *underrun*.
                 for i in 0..audio::FRAME_SAMPLES {
                     let sample = cola.pop_front().unwrap_or(0);
+                    if sample != 0 {
+                        escritas += 1;
+                    }
                     let bytes = sample.to_le_bytes();
                     // Mono -> estéreo: la misma muestra en los dos canales.
                     tx_bytes[i * 4..i * 4 + 2].copy_from_slice(&bytes);

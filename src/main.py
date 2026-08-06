@@ -915,8 +915,10 @@ async def device_websocket(websocket: WebSocket):
     except WebSocketDisconnect:
         logger.info("Dispositivo desconectado.")
     finally:
-        # Pase lo que pase, el asistente vuelve a hablar solo por el PC.
-        manager.detach(state.assistant_service)
+        # Pase lo que pase, el asistente vuelve a hablar solo por el PC —salvo
+        # que entretanto se haya enganchado una sesión más nueva, que es lo
+        # normal cuando el dispositivo se reinicia. Ver `DeviceManager.detach`.
+        manager.detach(session, state.assistant_service)
 
 
 @app.get("/device/status", dependencies=[Depends(verify_token)])

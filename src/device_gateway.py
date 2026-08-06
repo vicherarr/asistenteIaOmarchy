@@ -285,8 +285,27 @@ class DeviceManager:
         assistant_service.audio_target = "both"
         logger.info("Dispositivo enganchado; salida de audio: both (PC + dispositivo)")
 
-    def detach(self, assistant_service) -> None:
-        """Desengancha y **restaura el comportamiento original** (solo PC)."""
+    def detach(self, session: DeviceSession, assistant_service) -> None:
+        """Desengancha y **restaura el comportamiento original** (solo PC).
+
+        Solo si la sesión que se va es la que está registrada. Sin esa
+        comprobación había una carrera con consecuencias mudas: al reiniciarse el
+        dispositivo, su sesión nueva abre el WebSocket **antes** de que el
+        servidor procese el cierre de la vieja, y entonces el `finally` de la
+        vieja borraba el `audio_sink` de la que acababa de engancharse.
+
+            12:46:16  enganchado; salida de audio: both     <- sesión NUEVA
+            12:46:22  desconectado; salida de audio: pc     <- la VIEJA lo pisa
+            12:46:29  Sintetizando: 'Son las 12:'           <- habla, pero al PC
+
+        A partir de ahí el dispositivo se queda mudo para siempre, sin un solo
+        error en ningún log: el turno se procesa entero, se sintetiza la voz y se
+        reproduce, pero el sink al que iría ya no existe. Desde la placa se ve
+        como "entra en Speaking y no suena nada".
+        """
+        if self.session is not session:
+            logger.info("Se cerró una sesión antigua; el dispositivo actual sigue enganchado")
+            return
         self.session = None
         assistant_service.audio_sink = None
         assistant_service.audio_target = "pc"
