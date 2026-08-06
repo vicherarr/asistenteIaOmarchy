@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-import re
 import wave
 from pathlib import Path
 from typing import Optional
@@ -231,8 +230,7 @@ class DeviceSession:
             ):
                 reply += chunk
 
-            clean_reply = re.sub(r'<think>.*?</think>', '', reply, flags=re.DOTALL).strip()
-            await self.send(proto.encode_json(proto.REPLY, text=clean_reply))
+            await self.send(proto.encode_json(proto.REPLY, text=reply.strip()))
             # Esperar al TTS para que TTS_END signifique de verdad "ya no viene más
             # audio", y el dispositivo pueda cerrar su reproducción sin cortarse.
             await self.state.assistant_service.wait_for_tts_complete()
