@@ -26,6 +26,7 @@ from src.command_executor import (
     close_application
 )
 from src.vision_tool import analyze_screen, analyze_clipboard_image, take_screenshot, get_pending_vision
+from src.camera_tool import mirar_camara, mostrar_foto
 from src.document_tool import create_document, get_pending_document, build_and_save_document
 from src.litert_client import LiteRTClient
 from src.tts_engine import TTSEngine
@@ -78,6 +79,12 @@ class AssistantService:
             analyze_clipboard_image,
             take_screenshot,
             create_document,
+            # Los ojos del satélite. Se registran siempre, no solo con el
+            # dispositivo conectado: si no está, la tool lo dice con una frase
+            # útil. Registrarlas condicionalmente haría que el modelo negara
+            # tener cámara justo cuando el aparato acaba de reconectar.
+            mirar_camara,
+            mostrar_foto,
         ]
         # Tool de Gmail: solo se registra si Google está habilitado y hay credenciales
         # del usuario (~/.config/asistenteia/google/credentials.json). Si no, ni aparece,
@@ -125,6 +132,8 @@ class AssistantService:
             "analyze_screen": "Analiza la pantalla (visión)",
             "analyze_clipboard_image": "Analiza imagen del portapapeles",
             "take_screenshot": "Captura de pantalla",
+            "mirar_camara": "Mira por la cámara del dispositivo",
+            "mostrar_foto": "Enseña la última foto de la cámara",
             "create_document": "Genera un documento ODT",
             "gmail_manager": "Correo de Gmail (leer/enviar/responder)",
             "calendar_manager": "Agenda de Google Calendar (consultar/crear/mover/borrar)",
@@ -141,7 +150,8 @@ class AssistantService:
             {"key": "apps", "label": "Aplicaciones", "icon": "🚀",
              "tools": ["launch_application", "close_application"]},
             {"key": "vision", "label": "Pantalla y visión", "icon": "🖼️",
-             "tools": ["analyze_screen", "analyze_clipboard_image", "take_screenshot"]},
+             "tools": ["analyze_screen", "analyze_clipboard_image", "take_screenshot",
+                       "mirar_camara", "mostrar_foto"]},
             {"key": "docs", "label": "Documentos y portapapeles", "icon": "📄",
              "tools": ["create_document", "clipboard_manager"]},
             {"key": "musica", "label": "Música", "icon": "🎵",
