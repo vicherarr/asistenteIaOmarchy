@@ -53,10 +53,22 @@ const PRE_ROLL_FRAMES: usize = PRE_ROLL_S * 1000 / audio::FRAME_MS as usize;
 /// él.
 ///
 /// El nivel es logarítmico entre -60 y -6 dBFS, así que un punto son ~0,21 dB y
-/// estos 40 puntos son **unos 8,5 dB por encima del ruido de fondo**: suficiente
-/// para no confundir el silencio entre frases con voz, y poco para no exigir que
-/// grites.
-const MARGEN_VOZ: u8 = 40;
+/// estos 25 puntos son **unos 5 dB por encima del ruido de fondo**.
+///
+/// Estuvo en 40 (8,5 dB), elegido a ojo, y cortaba a media frase. Medido sobre
+/// el audio real de un turno: con el suelo de la sala en 51, la voz del usuario
+/// pica en 157 pero **la cola de la frase cae a 90**, contra un umbral de 91.
+/// Fallaba por un punto, y el turno se cerraba con medio "Luka" grabado.
+///
+/// El fondo del asunto es que la voz a distancia solo está ~15 dB por encima del
+/// suelo de una sala tranquila, así que pedir 8,5 se comía más de la mitad del
+/// margen disponible. Con 5 dB queda holgura para las partes flojas de una frase
+/// y sigue habiendo 15 puntos de separación con el ruido.
+///
+/// El precio: en una sala ruidosa cuesta más que el turno se cierre solo, y se
+/// apoyará más en el plazo de `LISTENING_TIMEOUT_MS`. Cortar a la gente a media
+/// frase es peor.
+const MARGEN_VOZ: u8 = 25;
 
 /// Suelo mínimo, por si la sala está tan callada que el piso medido es casi
 /// cero: por debajo de esto no se baja, o cualquier roce cerraría el turno.
