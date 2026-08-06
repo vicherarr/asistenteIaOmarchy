@@ -153,6 +153,83 @@ fn combinacion(i2c: &mut I2cDriver, pd_val: u8, sel_val: u8) -> Result<()> {
     Ok(())
 }
 
+/// Pinout que se le pasa al shim en C. Espejo de `luka_cam_pins_t`.
+#[repr(C)]
+struct LukaCamPins {
+    xclk: i32,
+    pclk: i32,
+    vsync: i32,
+    href: i32,
+    data: [i32; 8],
+    sda: i32,
+    scl: i32,
+    xclk_hz: i32,
+}
+
+extern "C" {
+    fn luka_cam_init(pins: *const LukaCamPins) -> i32;
+    fn luka_cam_capture_jpeg(out: *mut *mut u8, out_len: *mut usize, quality: i32) -> i32;
+    fn luka_cam_release(buf: *mut u8);
+    fn luka_cam_last_size(width: *mut i32, height: *mut i32);
+}
+
+/// Intenta capturar un fotograma y comprimirlo.
+///
+/// Esto es lo que confirma **el bus de datos**: que el sensor conteste por SCCB
+/// no dice nada de los ocho bits de D0-D7 ni de los sincronismos. Si el ancho y
+/// el alto salen correctos y el JPEG tiene un tamaño razonable, el interfaz DVP
+/// entero queda verificado.
+#[allow(unsafe_code)]
+fn capturar() {
+    let pins = LukaCamPins {
+        xclk: luka_board::camera::XCLK as i32,
+        pclk: luka_board::camera::PCLK as i32,
+        vsync: luka_board::camera::VSYNC as i32,
+        href: luka_board::camera::HREF as i32,
+        data: core::array::from_fn(|i| luka_board::camera::DATA[i] as i32),
+        sda: luka_board::i2c::SDA as i32,
+        scl: luka_board::i2c::SCL as i32,
+        xclk_hz: luka_board::camera::XCLK_HZ as i32,
+    };
+
+    let err = unsafe { luka_cam_init(&pins) };
+    if err != 0 {
+        log::error!("luka_cam_init falló con {err}. El sensor habla por SCCB pero");
+        log::error!("el interfaz DVP no arranca: revisa D0-D7, PCLK, VSYNC o HREF.");
+        return;
+    }
+
+    let mut buf: *mut u8 = core::ptr::null_mut();
+    let mut len: usize = 0;
+    let err = unsafe { luka_cam_capture_jpeg(&mut buf, &mut len, 12) };
+    if err != 0 || buf.is_null() {
+        log::error!("no se pudo capturar/comprimir (error {err})");
+        return;
+    }
+
+    let (mut w, mut h) = (0i32, 0i32);
+    unsafe { luka_cam_last_size(&mut w, &mut h) };
+
+    // Los dos primeros bytes de un JPEG son SIEMPRE 0xFF 0xD8. Comprobarlo
+    // distingue "hay una imagen" de "hay 50 kB de basura del tamaño correcto",
+    // que desde el log se ven idénticos.
+    let cabecera = unsafe { core::slice::from_raw_parts(buf, len.min(2)) };
+    let parece_jpeg = cabecera.len() == 2 && cabecera[0] == 0xFF && cabecera[1] == 0xD8;
+
+    log::info!("--- Fotograma capturado ---");
+    log::info!("  {w}x{h}, JPEG de {len} B");
+    if parece_jpeg {
+        log::info!("  cabecera JPEG correcta (FF D8)");
+        log::info!("");
+        log::info!("RESULTADO: el interfaz DVP funciona. Pinout CONFIRMADO al completo.");
+    } else {
+        log::error!("  la cabecera NO es la de un JPEG: {cabecera:02x?}");
+        log::error!("RESULTADO: se captura algo, pero no es una imagen válida.");
+    }
+
+    unsafe { luka_cam_release(buf) };
+}
+
 fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
@@ -292,8 +369,16 @@ fn main() -> Result<()> {
             }
         }
         log::info!("");
-        log::info!("RESULTADO: hay sensor en el bus. Lo que falta ahora son los");
-        log::info!("11 pines de datos: XCLK, PCLK, VSYNC, HREF y D0-D7.");
+        log::info!("Sensor OK. Ahora el bus de datos: capturando un fotograma.");
+
+        // **Soltar XCLK antes de seguir.** Este spike lo genera con LEDC canal 0
+        // para poder hablar por SCCB, pero el driver de cámara quiere generarlo
+        // él (con su propio temporizador). Dos periféricos sobre el mismo GPIO no
+        // acaban bien, así que aquí se cede el pin.
+        drop(xclk);
+        drop(timer);
+
+        capturar();
     }
 
     // Se queda vivo: si `main` retorna, el ESP-IDF reinicia y no da tiempo a leer.

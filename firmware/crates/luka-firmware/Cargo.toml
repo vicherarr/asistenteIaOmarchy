@@ -60,5 +60,7 @@ extra_components = [
     { remote_component = { name = "espressif/esp-tflite-micro", version = "1.3.3~1" } },
     { remote_component = { name = "espressif/esp-nn", version = "1.1.2" } },
     { remote_component = { name = "esphome/esp-micro-speech-features", version = "1.2.3" } },
+    { remote_component = { name = "espressif/esp32-camera", version = "^2.0" } },
     { component_dirs = ["../../components/luka_ww"] },
+    { component_dirs = ["../../components/luka_cam"] },
 ]

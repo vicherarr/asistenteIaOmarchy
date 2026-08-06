@@ -167,10 +167,10 @@ pub mod expander {
 /// # Estado
 ///
 /// Waveshare tampoco publica esto: los valores vienen de un port de terceros
-/// ([jensenbox/waveshare-esp32-s3-audio]). `spike_camera` **ha confirmado el
-/// control** —el sensor contesta en `0x21` y se identifica como GC0308—, pero
-/// **los 8 bits de datos y los sincronismos siguen sin probar**: eso no se sabrá
-/// hasta capturar un fotograma.
+/// ([jensenbox/waveshare-esp32-s3-audio]), y `spike_camera` los ha **confirmado
+/// al completo**: el sensor se identifica como GC0308 en `0x21` y entrega un
+/// fotograma real que comprime a un JPEG válido. Control y bus de datos, los dos
+/// verificados contra el hardware.
 ///
 /// [jensenbox/waveshare-esp32-s3-audio]: https://github.com/jensenbox/waveshare-esp32-s3-audio
 ///
@@ -212,10 +212,20 @@ pub mod camera {
     pub const GC0308_ID_REG: u8 = 0x00;
     pub const GC0308_ID: u8 = 0x9b;
 
-    /// Confirmado por `spike_camera`: con XCLK a 20 MHz en GPIO43 y las líneas
-    /// del expansor en su sitio, el sensor contesta en `0x21` y su registro de
-    /// identidad devuelve `0x9B`. **El sensor y el control están verificados;
-    /// los 8 bits de datos y las señales de sincronismo siguen sin probar.**
+    /// Resolución de captura.
+    ///
+    /// **QVGA y no VGA por una razón medida**: a 640x480 el driver rechaza cada
+    /// fotograma con `FB-SIZE: 599040 != 614400`, doce líneas de menos, de forma
+    /// consistente. Viene de la ventana de salida del GC0308, no del cableado.
+    ///
+    /// Y encaja con el uso: para describirle una escena a un modelo multimodal
+    /// sobra, y el JPEG se queda en ~6 kB, que por este enlace es un suspiro.
+    pub const WIDTH: u16 = 320;
+    pub const HEIGHT: u16 = 240;
+
+    /// Confirmado por `spike_camera` de extremo a extremo: el sensor contesta en
+    /// `0x21` con ID `0x9B`, y se captura un fotograma de 320x240 que comprime a
+    /// un JPEG con cabecera válida. Control y bus de datos, los dos verificados.
     pub const CONFIDENCE: Confidence = Confidence::Verified;
 }
 
