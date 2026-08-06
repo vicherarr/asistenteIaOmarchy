@@ -44,7 +44,27 @@ CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 # que nunca ("PSRAM DMA mode enabled", sin EV-EOF-OVF), así que solo se detecta
 # mirando la foto.
 #
-# Sospecha, sin confirmar: coherencia de caché con la PSRAM OCTAL a 80 MHz, o el
-# desalineado del búfer que hace el propio driver (Frame[0] Offset: 16). Si
-# alguien lo retoma, ahí están los hilos: bajar SPIRAM_SPEED a 40M, o
-# CONFIG_CAMERA_DMA_BUFFER_SIZE_MAX.
+# CAUSA LOCALIZADA, en el propio driver de Espressif (target/esp32s3/ll_cam.c):
+#
+#   GDMA...in.conf0.indscr_burst_en = 1;   <- solo si !psram_mode
+#   GDMA...in.conf0.in_data_burst_en = 1;  <- solo si !psram_mode
+#   GDMA...in.conf1.in_check_owner = 0;
+#   // GDMA...in.conf1.in_ext_mem_bk_size = 2;   <- COMENTADA por ellos
+#
+# Son dos cosas que se suman:
+#
+#  1. `in_ext_mem_bk_size` se queda en 0, o sea el DMA escribe a memoria externa
+#     en bloques de 16 bytes contra líneas de caché de 32: nunca cuadran. Y
+#     `ll_cam_get_dma_align()` devuelve `16 << ese campo`, así que el búfer se
+#     alinea a 16 y no a 32. Con `= 2` serían 64, múltiplo de la línea.
+#     Peor aún, la fórmula del offset suma dma_align entero cuando el puntero YA
+#     venía alineado, así que tira abajo una alineación que era correcta:
+#     malloc devolvió 0x3C170D80 (alineado a 32) y quedó en 0x3C170D90 (solo 16).
+#
+#  2. Las ráfagas se desactivan JUSTO en modo PSRAM, así que cada bloque de 16
+#     bytes es una transacción suelta al bus. De ahí que no diera abasto.
+#
+# NO se arregla porque está dentro del componente descargado y habría que
+# apropiárselo (1,3 MB versionados, sin actualizaciones). Y el beneficio es
+# pequeño: una foto VGA cuesta 375 ms y la mayor parte se va COMPRIMIENDO, no
+# capturando. Para acelerar, la palanca es `CALIDAD` en camera.rs.
