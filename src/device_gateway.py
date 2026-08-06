@@ -182,12 +182,22 @@ class DeviceSession:
 
     # ------------------------------------------------------------------ turno
     async def _cancel_turn(self) -> None:
+        """Aborta el turno en curso **y la voz que ya se estaba sintetizando**.
+
+        Cancelar `self._turn` no basta y era un fallo real: los workers de
+        síntesis y de reproducción no viven en esta tarea, viven en el
+        `AssistantService`. Sin pararlos, el TTS de la respuesta abortada seguía
+        generando audio y empujándolo por el *sink*, que lo mandaba al
+        dispositivo **ya dentro del turno siguiente**: Luka contestaba a la
+        pregunta anterior encima de la nueva.
+        """
         if self._turn and not self._turn.done():
             self._turn.cancel()
             try:
                 await self._turn
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
+            await self.state.assistant_service.cancel_audio_tasks()
 
     async def _process_turn(self) -> None:
         """Cierra el turno de habla y lanza el procesamiento."""
