@@ -137,4 +137,6 @@ fn main() {
     emit_int(&doc, "device", "led_brightness", "LUKA_LED_BRIGHTNESS");
     emit_int_default(&doc, "device", "wake_threshold", "LUKA_WAKE_THRESHOLD", 200);
     emit_bool_default(&doc, "device", "wake_calibration", "LUKA_WAKE_CALIBRATION", false);
+    emit_int_default(&doc, "device", "barge_in", "LUKA_BARGE_IN", 0);
+    emit_int_default(&doc, "device", "wake_threshold_barge", "LUKA_WAKE_THRESHOLD_BARGE", 220);
 }

@@ -34,6 +34,18 @@ led_brightness = 48
 # Bajo  = despierta a la primera y también con la tele.
 wake_threshold = 200
 
+# Interrumpir a Luka por voz mientras habla.
+#   0 = apagado (el micro no sale del hilo de audio con el altavoz sonando)
+#   1 = solo medir: escucha y registra "eco: pico N" por el log, pero NO puede
+#       interrumpir. Es la posición con la que se averigua cuánta confianza
+#       produce la propia voz de Luka antes de elegir el umbral de abajo.
+#   2 = activo
+barge_in = 0
+# Umbral de la wake word mientras Luka habla (0-255). Más alto que el normal:
+# quien interrumpe está cerca y alza la voz, y el fallo caro aquí es que Luka
+# se corte a sí misma a mitad de una respuesta larga.
+wake_threshold_barge = 220
+
 # Modo calibración: en reposo, el anillo enseña en VIOLETA cuánto se parece lo
 # que oye a "Luka". Ponte a tres metros, dilo, y mira hasta dónde sube: si llega
 # al final holgado, sube el umbral; si se queda a medias, bájalo.

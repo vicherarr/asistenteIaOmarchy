@@ -196,7 +196,18 @@ impl AudioIO {
                     // `detect` según el modo; aquí solo se garantiza lo único
                     // que no es negociable: mientras suena el altavoz, el micro
                     // no sale de este hilo.
-                    if !playing {
+                    //
+                    // Con barge-in las tramas salen TAMBIÉN mientras suena el
+                    // altavoz. Es la única capa de las tres que hay que abrir, y
+                    // no reabre el acople de la Fase 0: aquello era un lazo
+                    // cerrado (micro → altavoz → micro) con ganancia; esto es un
+                    // camino abierto que termina en el detector, que mira las
+                    // muestras y las tira. Nada de lo que entra se reproduce.
+                    //
+                    // Quien decide qué hacer con ellas sigue siendo `detect`
+                    // según el modo; aquí no se abre ninguna puerta nueva hacia
+                    // el altavoz.
+                    if !playing || luka_config::device::BARGE_IN != 0 {
                         let (pcm, level) = mono_and_level(&rx_bytes);
                         // Si el consumidor no da abasto se descarta la trama en vez
                         // de bloquear: bloquear aquí pararía también la

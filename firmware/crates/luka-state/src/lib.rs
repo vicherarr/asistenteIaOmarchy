@@ -353,6 +353,21 @@ pub fn next(state: State, event: Event, now_ms: u64) -> (State, Actions) {
             Actions::of(&[StopPlayback, SendCancel, StartCapture]),
         ),
 
+        // Interrumpir a Luka diciendo su nombre mientras habla (barge-in).
+        //
+        // Mismas acciones y **mismo orden** que el botón de arriba, que es lo que
+        // mantiene en pie el invariante: el altavoz se calla ANTES de abrir el
+        // micro. Que el detector pueda oír durante la reproducción no cambia eso;
+        // solo cambia quién puede pedir la interrupción.
+        //
+        // Que llegue este evento en `Speaking` ya implica que el firmware está
+        // compilado con barge-in activo: con `BARGE_IN` en 0 o en 1 el hilo
+        // `detect` no lo emite nunca desde este estado.
+        (S::Speaking { .. }, E::WakeDetected) => (
+            S::Listening { since_ms: now_ms, hands_free: true },
+            Actions::of(&[StopPlayback, SendCancel, StartCapture]),
+        ),
+
         // Pensando: pulsar el botón aborta la espera y vuelve a escuchar.
         (S::Thinking { .. }, E::ButtonPressed) => {
             (S::Listening { since_ms: now_ms, hands_free: false }, Actions::of(&[SendCancel, StartCapture]))
@@ -509,16 +524,46 @@ mod tests {
         assert_eq!(next(manos_libres, E::ButtonReleased, 3_000).0, manos_libres);
     }
 
-    /// La palabra no puede colarse mientras Luka habla: sería su propia voz
-    /// saliendo por el altavoz a un palmo del micro. El detector se para en
-    /// esos estados, pero la máquina de estados no se fía y lo ignora también.
+    /// Pensando no tiene altavoz abierto ni nada que interrumpir: la palabra ahí
+    /// solo puede ser ruido, y se ignora.
     #[test]
-    fn la_palabra_se_ignora_mientras_luka_habla_o_piensa() {
-        for state in [S::Speaking { since_ms: 0 }, S::Thinking { since_ms: 0 }] {
-            let (despues, actions) = next(state, E::WakeDetected, 1_000);
-            assert_eq!(despues, state, "{state:?} atendió a la wake word");
-            assert!(actions.is_empty());
-        }
+    fn la_palabra_se_ignora_mientras_luka_piensa() {
+        let state = S::Thinking { since_ms: 0 };
+        let (despues, actions) = next(state, E::WakeDetected, 1_000);
+        assert_eq!(despues, state, "{state:?} atendió a la wake word");
+        assert!(actions.is_empty());
+    }
+
+    /// Barge-in: decir "Luka" mientras habla la interrumpe.
+    ///
+    /// Sustituye a la mitad `Speaking` del test anterior, que daba por imposible
+    /// oír durante la reproducción. Lo que aquella prohibición protegía —que el
+    /// micro no se abra con el altavoz sonando— lo sigue garantizando el orden
+    /// de las acciones, que es lo que se comprueba aquí y en el test exhaustivo.
+    #[test]
+    fn la_palabra_interrumpe_a_luka_callando_antes_el_altavoz() {
+        let (state, actions) = next(S::Speaking { since_ms: 0 }, E::WakeDetected, 1_000);
+        assert_eq!(state, S::Listening { since_ms: 1_000, hands_free: true });
+
+        let orden: Vec<_> = actions.iter().collect();
+        assert_eq!(orden.as_slice(), &[StopPlayback, SendCancel, StartCapture]);
+
+        // Y se cancela el turno viejo: sin esto el servidor seguiría mandando la
+        // voz de la respuesta interrumpida encima de la pregunta nueva.
+        assert!(actions.contains(SendCancel));
+    }
+
+    /// Interrumpir por voz y por botón tienen que hacer exactamente lo mismo.
+    /// Si divergen, uno de los dos caminos acabará olvidándose de callar.
+    #[test]
+    fn interrumpir_por_voz_y_por_boton_hacen_lo_mismo() {
+        let hablando = S::Speaking { since_ms: 0 };
+        let (_, por_voz) = next(hablando, E::WakeDetected, 1_000);
+        let (_, por_boton) = next(hablando, E::ButtonPressed, 1_000);
+
+        let voz: Vec<_> = por_voz.iter().collect();
+        let boton: Vec<_> = por_boton.iter().collect();
+        assert_eq!(voz, boton, "los dos caminos de interrupción divergieron");
     }
 
     #[test]

@@ -180,6 +180,13 @@ fn main() -> Result<()> {
                 modo_detect.set(match current_state {
                     luka_state::State::Idle => detect::Modo::Detectando,
                     luka_state::State::Listening { .. } => detect::Modo::Enviando,
+                    // Hablando se escucha solo si barge-in está compilado; con
+                    // 0 se para el detector igual que antes de la Fase 4.
+                    luka_state::State::Speaking { .. }
+                        if luka_config::device::BARGE_IN != 0 =>
+                    {
+                        detect::Modo::Interrumpiendo
+                    }
                     _ => detect::Modo::Parado,
                 });
             }

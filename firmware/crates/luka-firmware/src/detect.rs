@@ -69,6 +69,12 @@ pub enum Modo {
     Detectando = 1,
     /// En turno: las tramas van a la red y se vigila el silencio.
     Enviando = 2,
+    /// Luka está hablando y se escucha por si la interrumpen.
+    ///
+    /// Se busca la palabra igual que en [`Modo::Detectando`], pero con el umbral
+    /// de barge-in —más alto— y sin guardar pre-roll. Las tramas se tiran tras
+    /// pasar por el detector: aquí el micro no va a ninguna parte.
+    Interrumpiendo = 3,
 }
 
 /// Palanca compartida con el supervisor. Es un atómico y no un canal porque el
@@ -89,6 +95,7 @@ impl ModoCompartido {
         match self.0.load(Ordering::Relaxed) {
             1 => Modo::Detectando,
             2 => Modo::Enviando,
+            3 => Modo::Interrumpiendo,
             _ => Modo::Parado,
         }
     }
@@ -161,6 +168,15 @@ impl Detect {
                     d.reset();
                     politica.reset();
                     pico_intento = 0;
+                    // Escuchar con el altavoz sonando es más difícil, así que el
+                    // listón sube. Se cambia aquí y no en cada trama porque el
+                    // reset acaba de dejar la ventana limpia: es el único
+                    // instante en el que cambiar el umbral no puede hacer que
+                    // una media a medio llenar cruce el listón nuevo de golpe.
+                    politica.set_umbral(match modo {
+                        Modo::Interrumpiendo => luka_config::device::WAKE_THRESHOLD_BARGE,
+                        _ => luka_config::device::WAKE_THRESHOLD,
+                    });
                 }
                 frames_en_silencio = 0;
                 if modo != Modo::Enviando {
@@ -229,6 +245,50 @@ impl Detect {
                     }
 
                     pre_roll.push_back(frame.pcm);
+                }
+
+                Modo::Interrumpiendo => {
+                    // **Sin pre-roll, a propósito.** Durante la reproducción el
+                    // anillo se habría llenado con la voz de Luka; volcárselo al
+                    // servidor al interrumpir sería darle de comer su propia
+                    // respuesta como si fuera la pregunta. El turno empieza
+                    // limpio, ya con el altavoz callado.
+                    #[cfg(feature = "wakeword")]
+                    if let Some(d) = detector.as_mut() {
+                        for &p in d.procesar(&frame.pcm, &mut probabilidades) {
+                            if politica.empujar(p) {
+                                let activo = luka_config::device::BARGE_IN >= 2;
+                                log::info!(
+                                    "barge-in: {} (confianza {}, umbral {})",
+                                    if activo { "INTERRUMPE" } else { "solo medición, NO interrumpe" },
+                                    politica.confianza_disparo(),
+                                    politica.umbral()
+                                );
+                                pico_intento = 0;
+                                if activo {
+                                    let _ = self.event_tx.try_send(Event::WakeDetected);
+                                }
+                                continue;
+                            }
+
+                            // En modo medición se registra hasta dónde llega la
+                            // confianza con Luka hablando. Casi siempre es su
+                            // propio eco, y es justo el número que decide si
+                            // WAKE_THRESHOLD_BARGE está bien puesto.
+                            if luka_config::device::BARGE_IN == 1 && !politica.calentando() {
+                                let confianza = politica.confianza();
+                                if confianza >= CASI_MINIMO {
+                                    pico_intento = pico_intento.max(confianza);
+                                } else if pico_intento > 0 {
+                                    log::info!(
+                                        "eco: pico {pico_intento} (umbral {})",
+                                        politica.umbral()
+                                    );
+                                    pico_intento = 0;
+                                }
+                            }
+                        }
+                    }
                 }
 
                 Modo::Enviando => {

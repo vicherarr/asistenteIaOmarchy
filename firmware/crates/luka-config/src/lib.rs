@@ -75,6 +75,34 @@ pub mod device {
     ///
     /// Apagado por defecto porque en uso normal el reposo debe ser discreto.
     pub const WAKE_CALIBRATION: bool = super::parse_u32(env!("LUKA_WAKE_CALIBRATION")) != 0;
+
+    /// Interrumpir a Luka diciendo "Luka" mientras habla. Tres posiciones:
+    ///
+    /// - `0` — apagado. El micro no sale del hilo de audio mientras suena el
+    ///   altavoz, exactamente como hasta la Fase 3.
+    /// - `1` — **solo medir**. El detector escucha durante la reproducción y
+    ///   registra por el log hasta dónde llega la confianza, pero no puede
+    ///   despertar pase lo que pase. Es la posición con la que se averigua
+    ///   cuánto se parece a "Luka" la propia voz de Luka, que es el único dato
+    ///   con el que se puede elegir [`WAKE_THRESHOLD_BARGE`] sin adivinar.
+    /// - `2` — activo.
+    ///
+    /// Esto **no es el acople de la Fase 0**, y la diferencia es la que permite
+    /// que exista: aquel era un lazo cerrado (micro → altavoz → micro) que se
+    /// realimentaba hasta el pitido. Aquí lo capturado va al detector y **se
+    /// tira**; nada de lo que entra por el micro se reproduce. El camino es
+    /// abierto y no hay nada que pueda diverger. Lo que sí puede pasar es que
+    /// Luka se dispare oyéndose a sí misma, que corta una respuesta y no rompe
+    /// nada.
+    pub const BARGE_IN: u8 = super::parse_u32(env!("LUKA_BARGE_IN")) as u8;
+
+    /// Umbral de la wake word **mientras Luka habla**, más alto que el normal.
+    ///
+    /// Quien interrumpe está cerca y alza la voz; la de Luka llega al micro
+    /// atenuada y coloreada por el altavoz. Pedir más aquí cuesta tener que
+    /// decirlo con algo más de intención, y a cambio evita el fallo que se paga:
+    /// cortarse a sí misma a mitad de una respuesta larga.
+    pub const WAKE_THRESHOLD_BARGE: u8 = super::parse_u32(env!("LUKA_WAKE_THRESHOLD_BARGE")) as u8;
 }
 
 /// Resumen apto para log: confirma que la config llegó **sin filtrar secretos**.
