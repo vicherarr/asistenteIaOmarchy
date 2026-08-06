@@ -511,6 +511,17 @@ class AssistantService:
                 return res
         return None
 
+    def without_reasoning(self, text: str) -> str:
+        """El texto sin el razonamiento del modelo, para enviarlo fuera del proceso.
+
+        Misma lógica que se usa para decidir qué se habla, pero con nombre público
+        porque el destinatario no siempre es el TTS: la pasarela de dispositivos
+        también tiene que limpiar la trama REPLY. Tener dos filtros distintos ya
+        salió mal una vez —el del gateway era un regex sobre bloques cerrados que
+        no cubría el razonamiento implícito—, así que hay uno solo.
+        """
+        return self._strip_think_for_tts(text)
+
     def _strip_think_for_tts(self, text: str) -> str:
         """Devuelve solo el texto hablable, quitando el razonamiento del modelo.
 

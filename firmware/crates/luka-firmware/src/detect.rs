@@ -35,13 +35,41 @@ use std::sync::Arc;
 const PRE_ROLL_S: usize = 1;
 const PRE_ROLL_FRAMES: usize = PRE_ROLL_S * 1000 / audio::FRAME_MS as usize;
 
-/// Nivel (0-255, el mismo que alimenta el vúmetro) por debajo del cual se
-/// considera que no hay voz.
+/// Cuánto tiene que destacar la voz **sobre el ruido de la sala** para que
+/// cuente como voz.
 ///
-/// El nivel es logarítmico entre -60 y -6 dBFS, así que 40 son unos -51 dBFS:
-/// por encima del ruido de sala de estos micros y por debajo de cualquiera
-/// hablando, aunque sea desde lejos.
-const SILENCIO_NIVEL: u8 = 40;
+/// Antes esto era un nivel absoluto (40, unos -51 dBFS) y resultó ser frágil de
+/// la peor manera: al subir el PGA del ES7210 al tope, el suelo de ruido de una
+/// sala normal se puso por encima de 40 y **el detector de silencio dejó de
+/// dispararse por completo**. Ningún turno se cerraba por callarse; todos
+/// agotaban los 15 s de `LISTENING_TIMEOUT_MS`, así que entre que terminabas de
+/// hablar y Luka empezaba a pensar pasaban quince segundos. No hubo ningún
+/// error en el log: simplemente una condición que ya no se cumplía nunca.
+///
+/// Medirlo contra el suelo real de la sala lo hace inmune a eso: cambiar la
+/// ganancia, el micro o la habitación mueve el suelo y el umbral se mueve con
+/// él.
+///
+/// El nivel es logarítmico entre -60 y -6 dBFS, así que un punto son ~0,21 dB y
+/// estos 40 puntos son **unos 8,5 dB por encima del ruido de fondo**: suficiente
+/// para no confundir el silencio entre frases con voz, y poco para no exigir que
+/// grites.
+const MARGEN_VOZ: u8 = 40;
+
+/// Suelo mínimo, por si la sala está tan callada que el piso medido es casi
+/// cero: por debajo de esto no se baja, o cualquier roce cerraría el turno.
+const SILENCIO_MINIMO: u8 = 25;
+
+/// Techo del umbral. Una sala muy ruidosa no puede empujarlo tan arriba que
+/// haga falta gritar para que el turno siga abierto: antes que eso, que se
+/// cierre por el plazo de 15 s, que al menos es un comportamiento conocido.
+const SILENCIO_MAXIMO: u8 = 140;
+
+/// Cada cuántas tramas sube un punto el suelo estimado (~0,2 s con tramas de
+/// 20 ms). Baja al instante y sube despacio a propósito: así una voz de fondo
+/// no eleva el suelo de forma permanente —lo bajaría el primer hueco—, pero un
+/// ventilador que arranca queda incorporado en unos segundos.
+const PISO_SUBIDA_CADA: u32 = 10;
 
 /// Cuánto silencio seguido cierra un turno de manos libres.
 ///
@@ -57,6 +85,12 @@ const SILENCIO_FRAMES: u32 = (SILENCIO_MS / audio::FRAME_MS as u64) as u32;
 /// ver que el detector reacciona, no para elegir un umbral. Esto es lo que da el
 /// número exacto. 60 deja fuera el fondo de sala y el habla normal.
 const CASI_MINIMO: u8 = 60;
+
+/// Nivel por debajo del cual se considera que ya no hay voz, dado el suelo de
+/// ruido medido en la sala.
+fn umbral_silencio(piso_ruido: u8) -> u8 {
+    piso_ruido.saturating_add(MARGEN_VOZ).clamp(SILENCIO_MINIMO, SILENCIO_MAXIMO)
+}
 
 /// Qué hace el hilo con las tramas que le llegan.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -135,6 +169,10 @@ impl Detect {
         let mut pre_roll: VecDeque<Vec<i16>> = VecDeque::with_capacity(PRE_ROLL_FRAMES);
         let mut frames_en_silencio: u32 = 0;
         let mut modo_anterior = Modo::Parado;
+        // Arranca alto para que la primera trama de reposo lo baje de golpe al
+        // valor real, en vez de tardar en converger desde abajo.
+        let mut piso_ruido: u8 = 255;
+        let mut piso_subida: u32 = 0;
 
         #[cfg(feature = "wakeword")]
         let mut detector = self.abrir_detector();
@@ -181,6 +219,15 @@ impl Detect {
                 frames_en_silencio = 0;
                 if modo != Modo::Enviando {
                     pre_roll.clear();
+                } else {
+                    // Al abrir turno se dice con qué números se va a decidir el
+                    // final. Sin esto, un umbral que ya no se cumple nunca no
+                    // produce ningún error: solo turnos que tardan quince
+                    // segundos en cerrarse, que es como se manifestó el fallo.
+                    log::info!(
+                        "turno abierto: piso de ruido {piso_ruido}, silencio por debajo de {}",
+                        umbral_silencio(piso_ruido)
+                    );
                 }
                 modo_anterior = modo;
             }
@@ -191,6 +238,21 @@ impl Detect {
                 }
 
                 Modo::Detectando => {
+                    // El suelo de ruido se mide SOLO aquí: en reposo el altavoz
+                    // está callado y, casi siempre, nadie está hablando. Medirlo
+                    // durante el turno lo contaminaría con la propia voz que se
+                    // intenta distinguir de él.
+                    if frame.level < piso_ruido {
+                        piso_ruido = frame.level;
+                        piso_subida = 0;
+                    } else {
+                        piso_subida += 1;
+                        if piso_subida >= PISO_SUBIDA_CADA {
+                            piso_subida = 0;
+                            piso_ruido = piso_ruido.saturating_add(1);
+                        }
+                    }
+
                     // El anillo en reposo no enseña el nivel del micro, así que
                     // aquí no se toca: lo que se enseña, si acaso, es la
                     // confianza del detector (modo calibración).
@@ -294,7 +356,7 @@ impl Detect {
                 Modo::Enviando => {
                     self.ring.set_level(frame.level);
 
-                    if frame.level < SILENCIO_NIVEL {
+                    if frame.level < umbral_silencio(piso_ruido) {
                         frames_en_silencio += 1;
                         if frames_en_silencio == SILENCIO_FRAMES {
                             // `==` y no `>=`: se manda una sola vez. Con `>=`

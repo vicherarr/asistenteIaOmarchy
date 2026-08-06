@@ -240,7 +240,14 @@ class DeviceSession:
             ):
                 reply += chunk
 
-            await self.send(proto.encode_json(proto.REPLY, text=reply.strip()))
+            # El razonamiento no viaja al dispositivo. Que `assistant_service` ya
+            # lo filtre para el TTS no cubre esto: son dos cosas distintas, la
+            # voz y el texto de la trama, y el stream que se acumula aquí es el
+            # crudo. Sin este filtro la REPLY llega con el <think> entero.
+            await self.send(proto.encode_json(
+                proto.REPLY,
+                text=self.state.assistant_service.without_reasoning(reply).strip(),
+            ))
             # Esperar al TTS para que TTS_END signifique de verdad "ya no viene más
             # audio", y el dispositivo pueda cerrar su reproducción sin cortarse.
             await self.state.assistant_service.wait_for_tts_complete()
