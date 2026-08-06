@@ -748,3 +748,57 @@ cuanto el buffer pasa de 80 caracteres. Con enumeraciones salen fragmentos de 18
 caracteres y Kokoro tiene ~1 s de coste fijo por llamada, así que el ritmo cae a
 1× tiempo real. Con el colchón ya no se oye, pero sigue ahí. Arreglo: tamaño
 mínimo de fragmento (~120 caracteres).
+
+---
+
+## ⛔ Barge-in — DESCARTADO, con números (2026-08-06)
+
+Segundo y último intento, esta vez con el colchón de reproducción ya puesto. La
+primera vez se aparcó "porque le cuesta al chip"; ahora hay medida.
+
+Misma placa, misma pregunta, servidor sano en las dos (comprobado en
+`journalctl`), normalizado porque las respuestas duran distinto:
+
+| | `barge_in = 0` | `barge_in = 1` |
+|---|---|---|
+| Reproducción | 55,6 s | 17,5 s |
+| Silencio inventado | 5.600 | 70.080 |
+| Cortes | 3 | 14 |
+| **Huecos por segundo** | **101** | **4.005** (40×) |
+| **Cortes por segundo** | **0,05** | **0,80** (15×) |
+
+El **25 %** de la reproducción con barge-in fue silencio inventado. El colchón
+ayudó —arrancó con 24.000 muestras encoladas y no se descartó nada al final—
+pero absorbe **tropiezos**, no un **déficit sostenido**: la inferencia son 10 ms
+de cada 30 y eso vacía 1,5 s de holgura sin despeinarse.
+
+### El hallazgo que sí merece guardarse: el problema NO es acústico
+
+En 17,5 s de reproducción, pasado el calentamiento y **con la placa como única
+fuente de sonido**, no salió **ni una sola línea `eco:`**. Es decir: la voz de
+Luka nunca superó confianza 60, con el umbral de barge-in en 220.
+
+**Luka no se dispararía a sí misma.** El miedo de partida —que despertase
+oyéndose decir su propio nombre— resultó infundado, y con él se cae también la
+sospecha del acople: el micro va al detector y se tira, no hay lazo.
+
+Todo el obstáculo es CPU. Si algún día sobra, barge-in funciona.
+
+### Si alguien lo retoma
+
+Lo único que cerraría una brecha de 40× es **no ejecutar el intérprete salvo
+cuando alguien habla encima**: partir `luka_ww.cc` para alimentar el frontend
+siempre (tiene estado, no se le puede dejar de dar señal) y correr el intérprete
+solo por encima del nivel de eco, aprendido durante el periodo de gracia.
+Acústicamente está demostrado que funcionaría. Lo que **no está medido** es si el
+frontend solo es lo bastante barato.
+
+Descartado por decisión, no por falta de camino.
+
+**No sirve**, aunque aparezca en notas viejas: procesar una trama de cada dos.
+El frontend de microWakeWord espera señal continua; con la mitad del audio
+recibe características que el modelo no vio nunca y **no dispararía jamás, sin
+ningún error en el log**.
+
+El código y la palanca de tres posiciones (0/1/2) se quedan: retomarlo no exige
+revertir nada, y el modo 1 es el instrumento con el que se midió esto.
