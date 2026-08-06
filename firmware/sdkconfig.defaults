@@ -33,3 +33,18 @@ CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=n
 # --- TLS PSRAM ---
 CONFIG_MBEDTLS_CUSTOM_MEM_ALLOC=y
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+
+# --- Cámara: DMA directo a PSRAM, PROBADO Y DESCARTADO ---
+# CONFIG_CAMERA_PSRAM_DMA=y existe, aplica al S3 y sobre el papel quita el
+# embudo: sin ella el driver usa un búfer interno de 30 kB y copia con la CPU,
+# que es lo que obliga a tener XCLK a 10 MHz en vez de 20.
+#
+# En esta placa NO funciona: con ella activada la imagen sale en bandas de
+# basura, peor que el fallo que venía a arreglar. El log en cambio se veía mejor
+# que nunca ("PSRAM DMA mode enabled", sin EV-EOF-OVF), así que solo se detecta
+# mirando la foto.
+#
+# Sospecha, sin confirmar: coherencia de caché con la PSRAM OCTAL a 80 MHz, o el
+# desalineado del búfer que hace el propio driver (Frame[0] Offset: 16). Si
+# alguien lo retoma, ahí están los hilos: bajar SPIRAM_SPEED a 40M, o
+# CONFIG_CAMERA_DMA_BUFFER_SIZE_MAX.
