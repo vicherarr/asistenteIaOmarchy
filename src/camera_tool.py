@@ -24,7 +24,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from src.vision_tool import stage_vision_capture
+from src.vision_tool import stage_vision_capture, get_pending_vision
 
 logger = logging.getLogger(__name__)
 
@@ -39,12 +39,18 @@ def ultima_foto() -> Optional[Path]:
 
 
 async def analyze_camera(question: str = "") -> str:
-    """MIRA por la CÁMARA del altavoz (el dispositivo de la habitación) y describe lo que ve; úsala cuando pregunten qué ves, qué hay delante, o quieran que mires algo del mundo real (para la PANTALLA del ordenador usa analyze_screen; si además quieren VER la foto en el monitor usa después show_camera_photo).
+    """TOMA UNA FOTO NUEVA con la cámara del altavoz y describe lo que ve AHORA; úsala SIEMPRE que pregunten qué ves, qué hay delante o quieran que mires algo del mundo real, INCLUSO SI YA MIRASTE ANTES — la escena cambia y una descripción vieja no sirve, nunca respondas de memoria (para la PANTALLA del ordenador usa analyze_screen).
 
     Args:
         question: qué quiere saber el usuario sobre lo que se ve, si lo concretó.
     """
     global _ultima_foto
+
+    # Tirar una captura huérfana de un turno anterior que no llegó a analizarse.
+    # `_pending_vision` es un global del módulo de visión: si un turno la deja ahí
+    # y se cancela, la recoge el turno SIGUIENTE y describe la foto vieja. Es una
+    # de las dos formas en que esto acababa hablando siempre de la primera foto.
+    get_pending_vision()
 
     # Importación diferida: sin dispositivo conectado este módulo no debe
     # arrastrar la pasarela, y así la tool existe aunque el satélite no esté.
@@ -65,17 +71,22 @@ async def analyze_camera(question: str = "") -> str:
 
     _ultima_foto = path
     stage_vision_capture(str(path), question or None)
-    # Se le recuerda al modelo que la foto sigue disponible: en el turno
-    # siguiente, cuando el usuario dice "enséñamela", lo único que tiene del
-    # anterior es este texto. Sin la pista contestaba que no podía mostrarla.
+    # El texto que devuelve una tool es lo ÚNICO que el modelo conserva de ella
+    # en el turno siguiente, así que aquí se decide cómo se comporta después.
+    #
+    # La versión anterior decía "la foto queda guardada", y con eso arreglaba que
+    # supiera enseñarla... pero le enseñaba a la vez que no hacía falta hacer otra:
+    # a la segunda pregunta describía la primera foto de memoria. Se dice lo justo
+    # para MOSTRAR, dejando claro que para VOLVER A MIRAR hay que capturar de nuevo.
     return (
-        "Foto tomada con la cámara del dispositivo. Analizando lo que se ve. "
-        "La foto queda guardada: si piden verla, usa show_camera_photo."
+        "Foto NUEVA tomada con la cámara. Analizando lo que se ve ahora. "
+        "Para enseñársela en pantalla, show_camera_photo; "
+        "para volver a mirar más tarde, hay que llamar otra vez a analyze_camera."
     )
 
 
 async def show_camera_photo() -> str:
-    """ABRE en el monitor la última foto de la cámara del dispositivo, para que el usuario la vea con sus ojos; úsala siempre que digan enséñamela, muéstramela, quiero verla, ábrela o ponla en pantalla, referido a la foto o a lo que la cámara vio (NO hace una foto nueva: para eso está analyze_camera).
+    """ABRE en el monitor la foto que se acaba de tomar, para que el usuario la vea con sus ojos; solo para ENSEÑAR una foto ya tomada (enséñamela, muéstramela, quiero verla, ábrela, ponla en pantalla). NO mira ni describe ni toma nada: si preguntan qué se ve ahora, es analyze_camera.
     """
     foto = _ultima_foto
     if foto is None or not foto.exists():
