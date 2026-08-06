@@ -25,8 +25,17 @@ typedef struct {
     int vsync;
     int href;
     int data[8]; /* D0..D7 */
-    int sda; /* SCCB: el bus I2C que ya existe */
-    int scl;
+    /* Puerto I2C **ya inicializado** por el firmware, no pines sueltos.
+     *
+     * El SCCB del sensor cuelga del mismo bus que los codecs y el expansor. Si
+     * el driver de cámara abre su propio bus sobre esos pines, hay dos
+     * periféricos manejando las mismas líneas: el ES7210 se corrompe y el
+     * micrófono se queda MUDO en cuanto alguien vuelve a tocar el I2C —que es
+     * lo que hace el firmware al abrir un turno, cerrando el amplificador.
+     *
+     * El síntoma era desconcertante: la palabra "Luka" se oía (venía del
+     * pre-roll, grabado antes) y a partir de ahí solo silencio. */
+    int sccb_port;
     int xclk_hz;
 } luka_cam_pins_t;
 

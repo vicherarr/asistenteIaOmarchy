@@ -17,8 +17,11 @@ int luka_cam_init(const luka_cam_pins_t *p) {
         .pin_pwdn = -1, /* Cuelgan del TCA9555, no de un GPIO: los mueve Rust */
         .pin_reset = -1,
         .pin_xclk = p->xclk,
-        .pin_sccb_sda = p->sda,
-        .pin_sccb_scl = p->scl,
+        /* -1 = "no abras un bus, usa el que ya hay". Es lo que evita la
+         * colisión con los codecs. */
+        .pin_sccb_sda = -1,
+        .pin_sccb_scl = -1,
+        .sccb_i2c_port = p->sccb_port,
 
         .pin_d7 = p->data[7],
         .pin_d6 = p->data[6],

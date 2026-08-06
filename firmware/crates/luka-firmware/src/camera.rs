@@ -32,8 +32,7 @@ struct Pins {
     vsync: i32,
     href: i32,
     data: [i32; 8],
-    sda: i32,
-    scl: i32,
+    sccb_port: i32,
     xclk_hz: i32,
 }
 
@@ -51,8 +50,8 @@ fn pines() -> Pins {
         vsync: c::VSYNC as i32,
         href: c::HREF as i32,
         data: core::array::from_fn(|i| c::DATA[i] as i32),
-        sda: luka_board::i2c::SDA as i32,
-        scl: luka_board::i2c::SCL as i32,
+        // El bus que el firmware ya abrió (I2C0), no pines sueltos.
+        sccb_port: 0,
         xclk_hz: c::XCLK_HZ as i32,
     }
 }

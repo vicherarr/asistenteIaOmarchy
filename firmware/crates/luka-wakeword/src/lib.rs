@@ -42,11 +42,20 @@ static MODELO: ModeloAlineado<{ include_bytes!("../modelo/luka.tflite").len() }>
 
 /// Arena de tensores por defecto.
 ///
-/// Los modelos de microWakeWord piden entre 30 y 50 kB. Se pide de más a
-/// propósito: quedarse corto no se ve al compilar, sino como un fallo al
-/// arrancar, y 64 kB en un chip con 8 MB de PSRAM no es un problema.
+/// **Son 64 kB de RAM INTERNA, no de PSRAM**, y ese matiz costó caro: el arena
+/// intenta primero la interna porque en PSRAM la inferencia va mucho más lenta,
+/// así que pedir de más no es gratis. Medido, este modelo usa **25,5 kB**, y los
+/// 38 que sobraban se los quitaba a quien viniera después.
+///
+/// A quien vino después fue la WiFi, en cuanto la cámara entró en escena y se
+/// llevó otros 30 kB de DMA: `Expected to init 10 rx buffer, actual is 4` y el
+/// dispositivo sin red. El error no menciona el wake word por ningún lado.
+///
+/// 40 kB dejan un 55 % de margen sobre lo medido, que cubre de sobra reentrenar
+/// el modelo, y devuelven 24 kB al resto del sistema. Si algún día el modelo
+/// crece y no cabe, el log lo dice al arrancar: "el arena se queda corto".
 #[cfg(target_os = "espidf")]
-pub const ARENA_POR_DEFECTO: usize = 64 * 1024;
+pub const ARENA_POR_DEFECTO: usize = 40 * 1024;
 
 #[cfg(target_os = "espidf")]
 mod ffi {
