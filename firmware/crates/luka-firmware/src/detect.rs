@@ -75,9 +75,15 @@ const PISO_SUBIDA_CADA: u32 = 10;
 
 /// Cuánto silencio seguido cierra un turno de manos libres.
 ///
-/// 1,2 s es el compromiso: más corto corta a quien piensa a media frase, más
-/// largo hace que Luka parezca lenta en contestar.
-const SILENCIO_MS: u64 = 600;
+/// El compromiso: más corto corta a quien piensa a media frase, más largo hace
+/// que Luka parezca lenta en contestar. Estuvo en 1,2 s, se bajó a 0,6 s
+/// buscando rapidez y resultó cortar demasiado pronto —la pausa natural entre
+/// dos ideas de la misma frase dura más que eso—, así que se sube a 1 s.
+///
+/// Ojo: esto es el margen desde que **dejas de hablar**, no lo que tarda en
+/// contestar. A eso hay que sumarle el STT y el arranque del modelo, que hoy
+/// rondan 2 s más.
+const SILENCIO_MS: u64 = 1_000;
 const SILENCIO_FRAMES: u32 = (SILENCIO_MS / audio::FRAME_MS as u64) as u32;
 
 /// Confianza por encima de la cual se da por empezado un "intento": alguien ha
