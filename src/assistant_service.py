@@ -576,7 +576,20 @@ class AssistantService:
             return False
         if clean_stream:
             return True
-        return len(t) > 15
+        if len(t) > 15:
+            return True
+
+        # Corta, pero puede ser perfectamente válida: "Eres Victor.", "Son las
+        # tres.", "Sí.". Medir solo la longitud las confundía con residuo y
+        # disparaba el fallback, que además interpreta como orden de terminal
+        # cualquier frase con "qué" o "dime" y contesta "Ejecutando comando en la
+        # terminal". Una respuesta buena acababa sustituida por un disparate.
+        #
+        # Lo que distingue una frase de un residuo no es el largo: es estar
+        # terminada. Un resto de tool call se corta a media palabra o arrastra
+        # paréntesis y marcadores; una respuesta acaba en punto.
+        residuo = "(" in t or "call" in t.lower() or "<|" in t
+        return not residuo and t[-1] in ".!?"
 
     async def process_transcription_stream(
         self,
