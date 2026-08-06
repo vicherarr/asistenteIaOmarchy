@@ -180,6 +180,9 @@ fn main() -> Result<()> {
                 modo_detect.set(match current_state {
                     luka_state::State::Idle => detect::Modo::Detectando,
                     luka_state::State::Listening { .. } => detect::Modo::Enviando,
+                    // Ventana de seguimiento: el micro escucha, pero solo el
+                    // nivel. Ni wake word ni envío a la red.
+                    luka_state::State::FollowUp { .. } => detect::Modo::Esperando,
                     // Hablando se escucha solo si barge-in está compilado; con
                     // 0 se para el detector igual que antes de la Fase 4.
                     luka_state::State::Speaking { .. }

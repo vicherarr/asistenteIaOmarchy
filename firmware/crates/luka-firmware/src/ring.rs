@@ -130,6 +130,7 @@ fn encode_state(state: State) -> u32 {
         State::Thinking { .. } => 6,
         State::Speaking { .. } => 7,
         State::Fault { .. } => 8,
+        State::FollowUp { .. } => 9,
     }
 }
 
@@ -143,6 +144,7 @@ fn decode_state(encoded: u32, fault_encoded: u32, since_ms: u64) -> State {
         5 => State::Listening { since_ms, hands_free: false },
         6 => State::Thinking { since_ms },
         7 => State::Speaking { since_ms },
+        9 => State::FollowUp { since_ms },
         8 => {
             let kind = match fault_encoded {
                 1 => Fault::WifiAssoc,

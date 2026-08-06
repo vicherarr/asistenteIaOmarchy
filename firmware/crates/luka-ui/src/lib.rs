@@ -283,6 +283,21 @@ pub fn frame(state: State, t_ms: u64, level: u8) -> Ring {
             [Rgb::GREEN.scaled(k); COUNT]
         }
 
+        // Ventana de seguimiento: el micro sigue atento aunque no se esté
+        // grabando todavía.
+        //
+        // **Que esto se vea no es cosmético.** Un micro abierto sin señal en el
+        // salón es un problema de privacidad, no un detalle de interfaz: quien
+        // pasa por delante tiene derecho a saberlo sin haber leído el código.
+        //
+        // Cian porque es el color de escuchar, igual que el vúmetro del turno;
+        // tenue y respirando despacio porque todavía no está grabando a nadie.
+        // Ni se confunde con el faro blanco del reposo ni con el turno abierto.
+        State::FollowUp { .. } => {
+            let k = 25 + (breathe(t_ms, 1_600) as u16 * 70 / 255) as u8;
+            [Rgb::CYAN.scaled(k); COUNT]
+        }
+
         State::Fault { kind, .. } => fault_blinks(kind, t_ms),
     }
 }
@@ -295,7 +310,7 @@ mod tests {
     use luka_state::Fault;
     use std::vec::Vec;
 
-    const TODOS_LOS_ESTADOS: [State; 9] = [
+    const TODOS_LOS_ESTADOS: [State; 10] = [
         State::Booting,
         State::WifiConnecting { since_ms: 0 },
         State::ServerConnecting { since_ms: 0, attempt: 0 },
@@ -304,12 +319,42 @@ mod tests {
         State::Listening { since_ms: 0, hands_free: false },
         State::Thinking { since_ms: 0 },
         State::Speaking { since_ms: 0 },
+        State::FollowUp { since_ms: 0 },
         State::Fault { kind: Fault::Audio, since_ms: 0 },
     ];
 
     /// Cuántos LEDs están encendidos en un fotograma.
     fn encendidos(ring: &Ring) -> usize {
         ring.iter().filter(|c| !c.is_off()).count()
+    }
+
+    /// La ventana de seguimiento **tiene que verse**, y verse distinta del
+    /// reposo.
+    ///
+    /// No es una preferencia estética: durante esos segundos el micro está
+    /// atento, y quien pasa por delante tiene que poder saberlo sin haber leído
+    /// el código. Si se confundiera con el reposo, sería un micro abierto sin
+    /// avisar en el salón de casa.
+    #[test]
+    fn la_ventana_de_seguimiento_se_ve_y_no_parece_reposo() {
+        // El anillo entero encendido, en cualquier momento de la respiración.
+        for t in [0u64, 400, 800, 1_200, 1_600, 3_000] {
+            let ventana = frame(State::FollowUp { since_ms: 0 }, t, 0);
+            assert_eq!(encendidos(&ventana), COUNT, "la ventana se apagó en t={t}");
+        }
+
+        // El reposo enciende un solo punto (el faro); la ventana, los siete.
+        let reposo = frame(State::Idle, 0, 0);
+        let ventana = frame(State::FollowUp { since_ms: 0 }, 0, 0);
+        assert_ne!(encendidos(&reposo), encendidos(&ventana), "no se distingue del reposo");
+
+        // Y tenue: si deslumbrara, se apagaría el dispositivo por la noche y con
+        // él la señal de privacidad que justifica que exista.
+        let mas_brillante = (0..2_000).step_by(100).map(|t| {
+            let r = frame(State::FollowUp { since_ms: 0 }, t, 0)[0];
+            r.r.max(r.g).max(r.b)
+        }).max().unwrap();
+        assert!(mas_brillante < 128, "la ventana llega a {mas_brillante}/255; demasiado");
     }
 
     /// El anillo de calibración tiene que ser monótono y distinguirse del

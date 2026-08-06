@@ -32,6 +32,24 @@ pub const SPEAKING_TIMEOUT_MS: u64 = 60_000;
 /// Cuánto se enseña un fallo en el anillo antes de volver a intentarlo.
 pub const FAULT_DISPLAY_MS: u64 = 3_000;
 
+/// Cuánto sigue atento el micro después de que Luka termine de hablar.
+///
+/// Existe para no tener que decir "Luka" otra vez a la pregunta siguiente, que
+/// es lo que rompe la conversación: se contesta a una respuesta, no se abre un
+/// expediente nuevo.
+///
+/// Corto a propósito. Cubre la réplica inmediata —"¿y eso qué significa?"— y
+/// poco más: cada segundo de ventana es un segundo de micro atento en el salón,
+/// y el precio de alargarla lo paga la sala, no la conversación.
+pub const FOLLOW_UP_MS: u64 = 3_500;
+
+/// Sordera obligatoria al abrir la ventana.
+///
+/// Al callar el altavoz, lo que entra por el micro durante un instante **sigue
+/// siendo la voz de Luka**: la cola del amplificador y la reverberación de la
+/// habitación llegan tarde. Sin esta guarda, Luka se contestaría a sí misma.
+pub const FOLLOW_UP_GUARD_MS: u64 = 300;
+
 /// Primer reintento de conexión y techo del *backoff* exponencial.
 pub const BACKOFF_MIN_MS: u64 = 500;
 pub const BACKOFF_MAX_MS: u64 = 30_000;
@@ -97,6 +115,17 @@ pub enum State {
     Thinking { since_ms: u64 },
     /// Reproduciendo la voz de Luka.
     Speaking { since_ms: u64 },
+    /// Luka acaba de terminar de hablar y el micro sigue atento.
+    ///
+    /// Aquí **no se busca la palabra**: basta con que alguien hable. Es lo que
+    /// permite contestar a una respuesta sin volver a invocarla, y por eso dura
+    /// poco: pasado el plazo se vuelve a [`State::Idle`] y hace falta "Luka"
+    /// otra vez.
+    ///
+    /// El altavoz ya está callado cuando se entra —lo cierra el `TtsEnded` que
+    /// trae aquí—, así que esto no reabre el problema del acople por ninguna
+    /// parte.
+    FollowUp { since_ms: u64 },
     /// Mostrando un fallo antes de decidir qué hacer.
     Fault { kind: Fault, since_ms: u64 },
 }
@@ -105,7 +134,14 @@ impl State {
     /// ¿Hay enlace con el asistente? Lo usa el anillo y también el sitio al que se
     /// vuelve tras enseñar un fallo.
     pub const fn is_online(&self) -> bool {
-        matches!(self, Self::Idle | Self::Listening { .. } | Self::Thinking { .. } | Self::Speaking { .. })
+        matches!(
+            self,
+            Self::Idle
+                | Self::Listening { .. }
+                | Self::Thinking { .. }
+                | Self::Speaking { .. }
+                | Self::FollowUp { .. }
+        )
     }
 }
 
@@ -129,6 +165,10 @@ pub enum Event {
     /// Se acabó de hablar: el micro lleva un rato sin recoger voz. Solo cierra
     /// los turnos de manos libres.
     SilenceDetected,
+    /// Alguien ha empezado a hablar. **No** es la palabra: es solo nivel de voz,
+    /// y por eso únicamente se atiende en [`State::FollowUp`], donde ya se sabe
+    /// que la conversación estaba abierta hace un segundo.
+    SpeechDetected,
     /// El servidor confirma su estado (trama `STATE`).
     ServerSaid(Reported),
     /// Llegó la primera trama de audio del TTS.
@@ -378,7 +418,36 @@ pub fn next(state: State, event: Event, now_ms: u64) -> (State, Actions) {
             (S::Speaking { since_ms: now_ms }, Actions::of(&[StartPlayback]))
         }
 
-        (S::Speaking { .. }, E::TtsEnded) => (S::Idle, Actions::of(&[StopPlayback])),
+        // Terminar de hablar ya no devuelve a reposo: deja el micro atento un
+        // rato para poder contestar sin volver a decir "Luka".
+        (S::Speaking { .. }, E::TtsEnded) => {
+            (S::FollowUp { since_ms: now_ms }, Actions::of(&[StopPlayback]))
+        }
+
+        // --- Ventana de seguimiento ---
+
+        // Hablar durante la ventana abre turno directamente. La guarda descarta
+        // los primeros instantes, donde lo que se oye es la cola del propio
+        // altavoz llegando tarde.
+        (S::FollowUp { since_ms }, E::SpeechDetected)
+            if now_ms.saturating_sub(since_ms) >= FOLLOW_UP_GUARD_MS =>
+        {
+            (S::Listening { since_ms: now_ms, hands_free: true }, Actions::of(&[StartCapture]))
+        }
+
+        // Y la palabra y el botón siguen valiendo dentro de la ventana: quien la
+        // dice por costumbre no tiene por qué saber que no hacía falta.
+        (S::FollowUp { .. }, E::WakeDetected) => {
+            (S::Listening { since_ms: now_ms, hands_free: true }, Actions::of(&[StartCapture]))
+        }
+        (S::FollowUp { .. }, E::ButtonPressed) => {
+            (S::Listening { since_ms: now_ms, hands_free: false }, Actions::of(&[StartCapture]))
+        }
+
+        // Si nadie habla, se cierra sola. El micro atento tiene que tener plazo.
+        (S::FollowUp { since_ms }, E::Tick) if now_ms.saturating_sub(since_ms) >= FOLLOW_UP_MS => {
+            (S::Idle, Actions::none())
+        }
 
         // `TTS_END` sin una sola trama de audio: Luka contestó sin voz (o el audio
         // se perdió). No hay nada que reproducir, pero el turno ha terminado.
@@ -449,6 +518,9 @@ mod tests {
             (E::ButtonReleased, 3_000),
             (E::TtsStarted, 4_000),
             (E::TtsEnded, 8_000),
+            // Terminar de hablar deja el micro atento; se vuelve a reposo al
+            // vencer la ventana, no antes.
+            (E::Tick, 8_000 + FOLLOW_UP_MS),
         ]);
         assert_eq!(state, S::Idle);
     }
@@ -489,6 +561,7 @@ mod tests {
             (E::SilenceDetected, 4_000),
             (E::TtsStarted, 5_000),
             (E::TtsEnded, 9_000),
+            (E::Tick, 9_000 + FOLLOW_UP_MS),
         ]);
         assert_eq!(state, S::Idle);
     }
@@ -564,6 +637,98 @@ mod tests {
         let voz: Vec<_> = por_voz.iter().collect();
         let boton: Vec<_> = por_boton.iter().collect();
         assert_eq!(voz, boton, "los dos caminos de interrupción divergieron");
+    }
+
+    // --- Ventana de seguimiento ---
+
+    #[test]
+    fn tras_hablar_se_queda_escuchando_un_rato() {
+        let (state, actions) = next(S::Speaking { since_ms: 0 }, E::TtsEnded, 5_000);
+        assert_eq!(state, S::FollowUp { since_ms: 5_000 });
+        assert!(actions.contains(StopPlayback), "el altavoz tiene que quedar cerrado");
+    }
+
+    /// Se puede contestar sin volver a invocarla, que es el motivo de existir de
+    /// todo esto.
+    #[test]
+    fn hablar_en_la_ventana_abre_turno_sin_decir_luka() {
+        let ventana = S::FollowUp { since_ms: 0 };
+        let (state, actions) = next(ventana, E::SpeechDetected, FOLLOW_UP_GUARD_MS);
+        assert_eq!(state, S::Listening { since_ms: FOLLOW_UP_GUARD_MS, hands_free: true });
+        assert!(actions.contains(StartCapture));
+    }
+
+    /// Lo primero que se oye tras callar el altavoz es el propio altavoz: la
+    /// cola del amplificador y el eco de la sala. Sin la guarda, Luka se
+    /// contestaría a sí misma en bucle.
+    #[test]
+    fn el_seguimiento_ignora_la_voz_durante_la_guarda() {
+        let ventana = S::FollowUp { since_ms: 0 };
+        let (state, actions) = next(ventana, E::SpeechDetected, FOLLOW_UP_GUARD_MS - 1);
+        assert_eq!(state, ventana, "abrió turno con su propio eco");
+        assert!(actions.is_empty());
+    }
+
+    /// El invariante del módulo: nada se queda colgado para siempre. Un micro
+    /// atento sin plazo sería lo peor que podría quedarse abierto.
+    #[test]
+    fn la_ventana_de_seguimiento_expira_sola() {
+        let ventana = S::FollowUp { since_ms: 1_000 };
+        assert_eq!(next(ventana, E::Tick, 1_000 + FOLLOW_UP_MS - 1).0, ventana);
+        assert_eq!(next(ventana, E::Tick, 1_000 + FOLLOW_UP_MS).0, S::Idle);
+    }
+
+    /// Quien dice "Luka" por costumbre no tiene por qué saber que no hacía falta.
+    #[test]
+    fn en_seguimiento_la_palabra_y_el_boton_siguen_valiendo() {
+        let ventana = S::FollowUp { since_ms: 0 };
+
+        let (state, actions) = next(ventana, E::WakeDetected, 1_000);
+        assert_eq!(state, S::Listening { since_ms: 1_000, hands_free: true });
+        assert!(actions.contains(StartCapture));
+
+        let (state, actions) = next(ventana, E::ButtonPressed, 1_000);
+        assert_eq!(state, S::Listening { since_ms: 1_000, hands_free: false });
+        assert!(actions.contains(StartCapture));
+    }
+
+    /// Un turno que no se entendió NO abre ventana. Es lo que impide que una
+    /// sala ruidosa encadene turnos vacíos para siempre, y sale gratis: sin voz
+    /// que reproducir no se pasa por `Speaking`.
+    #[test]
+    fn un_turno_sin_voz_no_abre_ventana() {
+        assert_eq!(next(S::Thinking { since_ms: 0 }, E::TtsEnded, 1_000).0, S::Idle);
+    }
+
+    /// El nivel de voz solo significa algo justo después de hablar Luka. En
+    /// reposo abriría turno cada vez que alguien tosiera en el salón.
+    #[test]
+    fn el_nivel_de_voz_no_abre_turno_fuera_de_la_ventana() {
+        for state in TODOS_LOS_ESTADOS {
+            if matches!(state, S::FollowUp { .. }) {
+                continue;
+            }
+            let (despues, _) = next(state, E::SpeechDetected, 100_000);
+            assert_eq!(despues, state, "{state:?} abrió turno solo por oír voz");
+        }
+    }
+
+    /// El camino completo de la conversación encadenada: se invoca una vez y se
+    /// contestan dos preguntas.
+    #[test]
+    fn se_encadena_una_segunda_pregunta_sin_invocarla() {
+        let state = run(&[
+            (E::Booted, 0),
+            (E::WifiUp, 100),
+            (E::ServerUp, 200),
+            (E::WakeDetected, 1_000),
+            (E::SilenceDetected, 4_000),
+            (E::TtsStarted, 5_000),
+            (E::TtsEnded, 9_000),
+            // Sin decir "Luka": basta con hablar.
+            (E::SpeechDetected, 9_000 + FOLLOW_UP_GUARD_MS),
+        ]);
+        assert!(matches!(state, S::Listening { hands_free: true, .. }), "no encadenó: {state:?}");
     }
 
     #[test]
@@ -793,7 +958,8 @@ mod tests {
         }
     }
 
-    const TODOS_LOS_ESTADOS: [State; 10] = [
+    const TODOS_LOS_ESTADOS: [State; 11] = [
+        S::FollowUp { since_ms: 0 },
         S::Booting,
         S::WifiConnecting { since_ms: 0 },
         S::ServerConnecting { since_ms: 0, attempt: 0 },
@@ -806,7 +972,8 @@ mod tests {
         S::Fault { kind: Fault::Audio, since_ms: 0 },
     ];
 
-    const TODOS_LOS_EVENTOS: [Event; 15] = [
+    const TODOS_LOS_EVENTOS: [Event; 16] = [
+        E::SpeechDetected,
         E::Booted,
         E::WifiUp,
         E::WifiDown,

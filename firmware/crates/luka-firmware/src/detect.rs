@@ -88,10 +88,33 @@ const SILENCIO_FRAMES: u32 = (SILENCIO_MS / audio::FRAME_MS as u64) as u32;
 /// número exacto. 60 deja fuera el fondo de sala y el habla normal.
 const CASI_MINIMO: u8 = 60;
 
+/// Cuánto tiene que destacar la voz sobre el ruido para **abrir** un turno en la
+/// ventana de seguimiento.
+///
+/// Deliberadamente más exigente que [`MARGEN_VOZ`], que es el de **mantener**
+/// uno abierto. La asimetría es lo que separa "sigo hablando" de "alguien ha
+/// empezado a hablar": con el mismo listón en los dos sitios, una conversación
+/// de fondo o la tele abrirían turnos toda la tarde, porque para eso basta con
+/// no bajar del umbral, mientras que abrir exige subir hasta él.
+///
+/// 70 puntos son ~15 dB sobre el suelo de la sala: alguien hablando de verdad,
+/// no alguien hablando en la habitación de al lado.
+const MARGEN_VOZ_INICIO: u8 = 70;
+
+/// Tramas seguidas por encima del umbral que hacen falta para dar por empezada
+/// una frase (100 ms). Un portazo o el choque de un vaso duran menos.
+const FRAMES_VOZ_INICIO: u32 = 5;
+
 /// Nivel por debajo del cual se considera que ya no hay voz, dado el suelo de
 /// ruido medido en la sala.
 fn umbral_silencio(piso_ruido: u8) -> u8 {
     piso_ruido.saturating_add(MARGEN_VOZ).clamp(SILENCIO_MINIMO, SILENCIO_MAXIMO)
+}
+
+/// Nivel a partir del cual se da por empezada una frase en la ventana de
+/// seguimiento.
+fn umbral_voz_inicio(piso_ruido: u8) -> u8 {
+    piso_ruido.saturating_add(MARGEN_VOZ_INICIO).clamp(SILENCIO_MINIMO, SILENCIO_MAXIMO)
 }
 
 /// Qué hace el hilo con las tramas que le llegan.
@@ -111,6 +134,13 @@ pub enum Modo {
     /// de barge-in —más alto— y sin guardar pre-roll. Las tramas se tiran tras
     /// pasar por el detector: aquí el micro no va a ninguna parte.
     Interrumpiendo = 3,
+    /// Ventana de seguimiento: Luka acaba de callar y se espera respuesta.
+    ///
+    /// **No corre el modelo.** Solo compara el nivel, que ya viene calculado
+    /// desde el hilo de audio para el vúmetro, así que no cuesta un ciclo nuevo.
+    /// Esa es la diferencia con [`Modo::Interrumpiendo`], que sí infiere y por
+    /// eso hay que pagarlo.
+    Esperando = 4,
 }
 
 /// Palanca compartida con el supervisor. Es un atómico y no un canal porque el
@@ -132,6 +162,7 @@ impl ModoCompartido {
             1 => Modo::Detectando,
             2 => Modo::Enviando,
             3 => Modo::Interrumpiendo,
+            4 => Modo::Esperando,
             _ => Modo::Parado,
         }
     }
@@ -212,6 +243,7 @@ impl Detect {
     fn run_loop(&mut self) {
         let mut pre_roll: VecDeque<Vec<i16>> = VecDeque::with_capacity(PRE_ROLL_FRAMES);
         let mut frames_en_silencio: u32 = 0;
+        let mut frames_con_voz: u32 = 0;
         let mut modo_anterior = Modo::Parado;
         // Arranca alto para que la primera trama de reposo lo baje de golpe al
         // valor real, en vez de tardar en converger desde abajo.
@@ -261,6 +293,7 @@ impl Detect {
                     });
                 }
                 frames_en_silencio = 0;
+                frames_con_voz = 0;
                 if modo != Modo::Enviando {
                     pre_roll.clear();
                 } else {
@@ -398,6 +431,38 @@ impl Detect {
                                 }
                             }
                         }
+                    }
+                }
+
+                Modo::Esperando => {
+                    // El pre-roll se sigue llenando: cuando esto dispare, la
+                    // primera sílaba de la frase YA se ha dicho. Es el mismo
+                    // motivo que en la wake word, y aquí el anillo está limpio
+                    // —el altavoz lleva callado desde que se entró—, así que
+                    // volcarlo no arrastra la voz de Luka.
+                    if pre_roll.len() == PRE_ROLL_FRAMES {
+                        pre_roll.pop_front();
+                    }
+                    pre_roll.push_back(frame.pcm);
+
+                    if frame.level >= umbral_voz_inicio(piso_ruido) {
+                        frames_con_voz += 1;
+                        if frames_con_voz == FRAMES_VOZ_INICIO {
+                            // `==` y no `>=`: una sola vez. La máquina de estados
+                            // saldrá de la ventana con esto, pero hasta que lo
+                            // haga siguen entrando tramas por aquí.
+                            log::info!(
+                                "seguimiento: voz a nivel {} (umbral {})",
+                                frame.level,
+                                umbral_voz_inicio(piso_ruido)
+                            );
+                            let _ = self.event_tx.try_send(Event::SpeechDetected);
+                            self.volcar_pre_roll(&mut pre_roll);
+                        }
+                    } else {
+                        // Tiene que ser voz SEGUIDA: un golpe aislado no abre
+                        // turno, y el contador vuelve a cero al primer hueco.
+                        frames_con_voz = 0;
                     }
                 }
 
