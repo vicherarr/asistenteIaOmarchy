@@ -278,6 +278,7 @@ impl Detect {
                             if luka_config::device::WAKE_CALIBRATION
                                 && !desperto
                                 && !politica.calentando()
+                                && !politica.en_refractario()
                             {
                                 if confianza >= CASI_MINIMO {
                                     pico_intento = pico_intento.max(confianza);
@@ -337,7 +338,10 @@ impl Detect {
                             // confianza con Luka hablando. Casi siempre es su
                             // propio eco, y es justo el número que decide si
                             // WAKE_THRESHOLD_BARGE está bien puesto.
-                            if luka_config::device::BARGE_IN == 1 && !politica.calentando() {
+                            if luka_config::device::BARGE_IN == 1
+                                && !politica.calentando()
+                                && !politica.en_refractario()
+                            {
                                 let confianza = politica.confianza();
                                 if confianza >= CASI_MINIMO {
                                     pico_intento = pico_intento.max(confianza);

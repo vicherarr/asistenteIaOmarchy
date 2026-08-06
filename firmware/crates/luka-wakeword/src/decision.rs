@@ -83,6 +83,19 @@ impl Politica {
         self.confianza_disparo = 0;
     }
 
+    /// Si se acaba de disparar y aún corre el refractario.
+    ///
+    /// Importa para medir, no para decidir: al disparar se limpia la ventana,
+    /// pero las probabilidades altas que quedan de **esa misma palabra** la
+    /// vuelven a llenar enseguida, así que la confianza sube otra vez sin que
+    /// nadie haya dicho nada nuevo. Quien esté registrando picos tiene que
+    /// saltarse este tramo o apuntará el rebote de un disparo como si fuera un
+    /// evento aparte —que es exactamente lo que ensució la primera medición de
+    /// barge-in y estuvo a punto de descartar la función entera.
+    pub fn en_refractario(&self) -> bool {
+        self.espera > 0
+    }
+
     /// Si el detector aún está en el periodo de gracia y por tanto **no puede
     /// disparar pase lo que pase**.
     ///
