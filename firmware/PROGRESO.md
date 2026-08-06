@@ -620,3 +620,69 @@ Interrumpir es un lujo; que Luka suene bien, no.
   segunda pasada de visión, y el `sleep(3.0)` de la ruta de terminal).
 - **Colchón antes de reproducir.** Aparcado: con `barge_in = 0` el audio va bien. Se
   retoma si vuelven los cortes.
+
+---
+
+## ⛔ Barge-in — APARCADO por decisión (2026-08-06)
+
+Se intentó dos veces y se para aquí. **No por no saber hacerlo**: oír con el altavoz
+sonando funcionaba, y el riesgo de acople estaba descartado por diseño (el micro va al
+detector y se tira; no hay lazo). Se para porque **cuesta más CPU de la que este chip
+tiene libre** mientras además baja 32 KB/s de TLS y mueve el I²S full-duplex.
+
+`barge_in = 0` en `cfg.toml`. El código sigue en su sitio y la palanca tiene tres
+posiciones (0 apagado / 1 solo medir / 2 activo), así que retomarlo no exige revertir
+nada.
+
+**Lo que se descartó por el camino, para no repetirlo:**
+
+- **El arena de TFLite NO está en PSRAM.** Se comprobó: `arena=25548/65536 B (interna)`.
+  Esa hipótesis —que la inferencia robara ancho de banda del bus PSRAM a la cola de
+  reproducción y a mbedtls— era buena, y era falsa. De paso: pide 64 kB y usa 25,5.
+- **Decimar tramas ("una de cada dos") NO es una opción**, aunque aparezca como idea en
+  notas anteriores. El frontend de microWakeWord tiene estado y espera señal continua;
+  con la mitad del audio recibe características que el modelo no vio nunca y **no
+  dispararía jamás, sin un solo error en el log**.
+
+**Lo que quedaría por hacer si se retoma**, por orden:
+1. Quitar la reserva de memoria del hilo de tiempo real (`mono_and_level` pide un `Vec`
+   cada 20 ms dentro del bucle que escribe al I²S, y lo libera otro núcleo; el montón del
+   ESP-IDF tiene cerrojo global y compite con lwIP/mbedtls). Fondo de búferes reutilizables.
+2. Volver a medir contra una línea de base limpia.
+3. Solo si no basta: separar frontend e intérprete en `luka_ww.cc` y ejecutar el
+   intérprete **solo cuando el nivel del micro supera el eco de la propia Luka**, umbral
+   aprendido durante el periodo de gracia. Bajaría el ciclo de trabajo a casi cero y de
+   paso impediría que Luka se dispare a sí misma.
+
+## 🔎 El TTS del PC va por debajo de tiempo real (sin arreglar)
+
+Buscando la línea de base de barge-in salió un problema mayor y **ajeno al dispositivo**:
+la reproducción sufre cortes aunque barge-in esté apagado.
+
+Medido en la placa: `354455 con señal, 263600 inventadas en 12 cortes` en una
+reproducción de 42,8 s. **16,5 segundos de silencio** que el hilo de audio tuvo que
+inventar porque la cola llegó vacía.
+
+La causa está en `src/assistant_service.py:273`:
+
+```python
+if len(text_buffer) > 80:
+    pattern = re.compile(r'([.!?:])(?=\s|$)|(\n)|,(?=\s)')
+```
+
+En cuanto el buffer pasa de 80 caracteres parte **por todas las comas y dos puntos a la
+vez**, no solo lo justo para soltar un trozo, y la respuesta acaba hecha astillas. Kokoro
+tiene un coste fijo por llamada de ~1 s, así que:
+
+| Fragmento | Habla | Tarda | Ritmo |
+|---|---|---|---|
+| 73 caracteres | ~4 s | 2 s | **2× tiempo real** |
+| 18 caracteres | ~1 s | 1 s | **1× tiempo real** |
+
+Con astillas el coste fijo **es** el fragmento. El altavoz consume a tiempo real sin
+parar, así que cualquier hipo abre un hueco.
+
+**Arreglo propuesto:** tamaño mínimo de fragmento (~120-150 caracteres) antes de
+sintetizar. Precio: ~1 s más hasta que Luka empieza a hablar, que es justo lo que el corte
+por comas intentaba comprar y compró demasiado caro. Un colchón en la placa sería el
+segundo paso, y probablemente sobre: a 2× tiempo real la cola no se seca.
