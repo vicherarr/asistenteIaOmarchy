@@ -814,7 +814,7 @@ PC. Funciona de extremo a extremo.
 |---|---|
 | Sensor identificado y despierto | ✅ GC0308, `0x21`, ID `0x9B` |
 | Interfaz DVP (D0-D7, PCLK, VSYNC, HREF) | ✅ verificado capturando |
-| Captura + JPEG en la placa | ✅ 320x240, ~5 kB, 70 ms |
+| Captura + JPEG en la placa | ✅ **640x480** (el máximo del sensor), ~12-19 kB |
 | Subida al PC (`IMAGE` 0x07) | ✅ entera en una trama |
 | Petición desde el servidor (`CAPTURE` 0x88) | ✅ |
 | Tools de voz | ✅ `analyze_camera`, `show_camera_photo` |
@@ -873,13 +873,35 @@ anterior es el texto que devolvió la tool. Si ese texto no dice que la foto sig
 guardada, contesta que no puede mostrarla. Las tools de este proyecto se cruzan
 entre sí a propósito; las de cámara también, ahora.
 
+### 5. VGA: el diagnóstico fácil era el equivocado
+
+A 640x480 el driver rechazaba cada fotograma (`FB-SIZE: 599040 != 614400`) y se
+apuntó que era **la ventana de salida del GC0308**. Falso. El log lo decía en
+otra línea que no se miró: `EV-EOF-OVF`, o sea "llegan más rápido de lo que
+puedo copiarlos".
+
+El arreglo es bajar XCLK, no bajar resolución. En el S3 se divide de los 80 MHz
+del APB, así que solo valen divisores exactos:
+
+| XCLK | Resultado |
+|---|---|
+| 20 MHz | `FB-SIZE` corto, fotogramas rechazados |
+| 16 MHz | tamaño correcto pero **mitad inferior corrupta** |
+| **10 MHz** | limpio |
+
+**Los 16 MHz son la lección que hay que guardar**: el log daba la captura por
+buena —tamaño correcto, cabecera JPEG válida, todos los indicadores en verde— y
+solo mirando la imagen se veía que la mitad de abajo era ruido de colores. Un
+tamaño correcto no significa una imagen correcta.
+
+El cuello de botella de fondo es `PSRAM DMA mode disabled`: el driver no vuelca
+directo a PSRAM, usa un búfer interno de 30 kB y copia. Ahí está el hilo del que
+tirar si algún día se quiere más ritmo (vídeo, o VGA a más fps).
+
 ### Pendiente
 
-- **El color tira a magenta**: balance de blancos de fábrica del GC0308. Para
+- **El color tira a cálido**: balance de blancos de fábrica del GC0308. Para
   "qué hay delante" da igual; si le preguntan colores, mentirá.
-- **VGA no funciona**: a 640x480 el driver rechaza cada fotograma con
-  `FB-SIZE: 599040 != 614400`, doce líneas de menos, consistente. Es la ventana
-  de salida del sensor. QVGA sobra para describir escenas.
 - **La tarjeta SD** sigue sin usar (SDMMC 1 bit: clk 40, cmd 42, d0 41, cs en P3
   del expansor).
 
