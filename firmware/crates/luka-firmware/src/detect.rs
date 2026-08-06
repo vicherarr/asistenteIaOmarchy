@@ -24,6 +24,8 @@
 use crate::audio::CapturedFrame;
 use crate::net::NetCommand;
 use crate::ring::RingState;
+use esp_idf_hal::cpu::Core;
+use esp_idf_hal::task::thread::ThreadSpawnConfiguration;
 use luka_board::audio;
 use luka_state::Event;
 use std::collections::VecDeque;
@@ -154,14 +156,56 @@ impl Detect {
         Self { capture_rx, net_tx, event_tx, ring, modo }
     }
 
+    /// Pila holgada: el intérprete de TFLite tiene pila propia de trabajo y
+    /// quedarse corto aquí se manifiesta como un reinicio por desbordamiento,
+    /// que no dice de quién es la culpa.
+    const PILA: usize = 16384;
+
+    /// Prioridad del hilo, **deliberadamente por debajo** de la de la red.
+    ///
+    /// El defecto de pthreads en el ESP-IDF es 5, que es exactamente la misma
+    /// que la tarea del cliente WebSocket. Mientras el detector solo corría en
+    /// reposo daba igual, pero al ponerlo a escuchar también durante la
+    /// reproducción (barge-in), sus ráfagas de ~10 ms cada 30 dejaron a la red
+    /// sin llegar a tiempo:
+    ///
+    /// ```text
+    /// E websocket_client: Could not lock ws-client within 1000 timeout
+    /// E transport_base: esp_tls_conn_read error, Connection reset by peer
+    /// ```
+    ///
+    /// El enlace se caía a los ~25 s de cualquier respuesta larga, y desde
+    /// fuera se oía como que Luka se cortaba a sí misma a media frase. Nada en
+    /// ese log dice "CPU": parece un problema de red y no lo es.
+    ///
+    /// Con 4, cualquier trama que llegue expulsa a la inferencia. Reconocer la
+    /// palabra unos milisegundos más tarde no lo nota nadie; perder el enlace,
+    /// sí.
+    const PRIORIDAD: u8 = 4;
+
     pub fn spawn(mut self) -> anyhow::Result<()> {
-        std::thread::Builder::new()
+        // Segunda medida, independiente de la prioridad: anclar al núcleo 1. La
+        // pila de WiFi y lwIP vive en el 0, así que la inferencia deja de
+        // competir con ella en vez de solo perder la carrera educadamente.
+        ThreadSpawnConfiguration {
+            name: Some(c"detect"),
+            stack_size: Self::PILA,
+            priority: Self::PRIORIDAD,
+            pin_to_core: Some(Core::Core1),
+            ..Default::default()
+        }
+        .set()?;
+
+        let spawned = std::thread::Builder::new()
             .name("detect".into())
-            // Holgada: el intérprete de TFLite tiene pila propia de trabajo y
-            // quedarse corto aquí se manifiesta como un reinicio por
-            // desbordamiento, que no dice de quién es la culpa.
-            .stack_size(16384)
-            .spawn(move || self.run_loop())?;
+            .stack_size(Self::PILA)
+            .spawn(move || self.run_loop());
+
+        // Restaurar SIEMPRE, aunque el spawn haya fallado: esta configuración es
+        // global al proceso y la heredaría el siguiente hilo que se cree, que no
+        // tiene por qué querer ni esta prioridad ni este núcleo.
+        ThreadSpawnConfiguration::default().set()?;
+        spawned?;
         Ok(())
     }
 
