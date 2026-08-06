@@ -19,6 +19,7 @@
 
 mod audio;
 mod board;
+mod camera;
 mod detect;
 mod net;
 mod ring;
@@ -42,6 +43,46 @@ const _: () = assert!(bi2c::SDA == 11 && bi2c::SCL == 10);
 /// MCLK = 256 x 16 kHz = 4.096 MHz. Es la relación para la que están calculados
 /// los coeficientes de reloj de AMBOS codecs; cambiarla obliga a recalcularlos.
 const MCLK_MULTIPLE: MclkMultiple = MclkMultiple::M256;
+
+/// Despierta el sensor de cámara **con el reloj corriendo**.
+///
+/// Las tres líneas de control cuelgan del expansor I²C, así que el driver de
+/// cámara no puede tocarlas: tiene que hacerlo el firmware. Y el orden importa —
+/// soltar el reset sin XCLK deja al sensor colgado, y el fallo aparece más tarde
+/// como un `ESP_FAIL` de `esp_camera_init` que no menciona el reloj.
+///
+/// El reloj se genera aquí solo para esto y se suelta al salir: a partir de ese
+/// momento lo mantiene el propio driver, con su propio temporizador.
+fn encender_camara(
+    i2c: &mut I2cDriver,
+    timer: esp_idf_hal::ledc::TIMER0,
+    channel: esp_idf_hal::ledc::CHANNEL0,
+    xclk_pin: esp_idf_hal::gpio::Gpio43,
+) -> Result<()> {
+    use esp_idf_hal::ledc::{config::TimerConfig, LedcDriver, LedcTimerDriver, Resolution};
+
+    let timer = LedcTimerDriver::new(
+        timer,
+        &TimerConfig::new()
+            .frequency(luka_board::camera::XCLK_HZ.Hz().into())
+            // 1 bit basta para un reloj: solo hay que alternar, y menos
+            // resolución permite más frecuencia.
+            .resolution(Resolution::Bits1),
+    )
+    .context("temporizador de XCLK")?;
+
+    let mut xclk = LedcDriver::new(channel, &timer, xclk_pin).context("XCLK")?;
+    xclk.set_duty(1).context("arrancando XCLK")?;
+
+    board::camera_power_on(i2c)?;
+
+    // Se sueltan el canal y el temporizador: el driver de cámara quiere el pin
+    // para sí, con su propio temporizador. Dos periféricos sobre el mismo GPIO
+    // no acaban bien.
+    drop(xclk);
+    drop(timer);
+    Ok(())
+}
 
 fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
@@ -68,12 +109,33 @@ fn main() -> Result<()> {
         let mut guard = i2c.lock().expect("el mutex del I2C no debería estar envenenado");
         board::init_expander(&mut guard).context("inicializando el TCA9555")?;
         board::es7210_init(&mut guard).context("inicializando el ES7210")?;
+        // La cámara se enciende aquí porque el bus I2C lo posee este hilo. Un
+        // fallo NO puede tumbar el arranque: sin cámara, todo lo demás funciona.
+        //
+        // **El reset hay que soltarlo con XCLK ya corriendo.** Sin reloj el
+        // sensor se queda colgado y luego `esp_camera_init` falla con un
+        // ESP_FAIL pelado que no dice nada. El spike acertaba por accidente
+        // —generaba el reloj para poder hablar por SCCB— y la primera versión de
+        // esto no, así que la cámara no arrancaba y el error no explicaba por qué.
+        //
+        // El reloj se genera aquí solo durante el reset; a partir de entonces lo
+        // mantiene el propio driver de cámara con su temporizador.
+        match encender_camara(&mut guard, peripherals.ledc.timer0, peripherals.ledc.channel0, peripherals.pins.gpio43) {
+            Ok(()) => log::info!("cámara: sensor despierto"),
+            Err(e) => log::warn!("no se pudo encender la cámara: {e:#}"),
+        }
         board::es8311_init(&mut guard).context("inicializando el ES8311")?;
 
         let botones = board::read_buttons(&mut guard).context("leyendo los botones")?;
         log::info!("Botones en reposo: {botones:?} (ninguno debería estar pulsado)");
     }
     
+    // **Antes que la red.** El driver de cámara pide 30 kB contiguos de RAM
+    // interna con capacidad DMA, y en cuanto arrancan WiFi y TLS la interna
+    // queda fragmentada y ya no los hay. Inicializar aquí cuesta nada y evita un
+    // ESP_FAIL que no menciona la memoria por ningún lado.
+    let camara_viva = camera::init();
+
     let std_config = StdConfig::new(
         Config::default(),
         StdClkConfig::from_sample_rate_hz(luka_board::audio::SAMPLE_RATE_HZ)
@@ -121,8 +183,14 @@ fn main() -> Result<()> {
     );
     audio_io.spawn()?;
 
+    // Canal de peticiones de foto. Capacidad 1: si ya hay una en curso, la
+    // siguiente se descarta en vez de encolarse. Nadie quiere tres fotos
+    // seguidas de hace medio minuto.
+    let (camara_tx, camara_rx) = mpsc::sync_channel(1);
+
     let net_task = net::NetTask::new(
-        net_cmd_rx, event_tx.clone(), playback_tx, reproduccion.clone(), peripherals.modem,
+        net_cmd_rx, event_tx.clone(), playback_tx, reproduccion.clone(), camara_tx,
+        peripherals.modem,
     );
     net_task.spawn()?;
 
@@ -138,6 +206,8 @@ fn main() -> Result<()> {
         modo_detect.clone(),
     );
     detect_task.spawn()?;
+
+    camera::Camera::new(camara_rx, net_cmd_tx.clone(), camara_viva).spawn()?;
     
     // Iniciar
     let _ = event_tx.try_send(luka_state::Event::Booted);

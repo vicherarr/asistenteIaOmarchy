@@ -38,6 +38,19 @@ pub mod kind {
     /// falta unas pocas métricas para saber si aguanta horas. Un solo mecanismo
     /// que cumple las dos cosas es menos que dos que cumplen una cada uno.
     pub const TELEMETRY: u8 = 0x06;
+    /// JPEG de la cámara, **entero en una trama**.
+    ///
+    /// Sin trocear porque no hace falta: a 320x240 y calidad 12 el GC0308 da
+    /// unos 6 kB, y el tope de trama son 64. Hay diez veces de margen, y trocear
+    /// algo que cabe solo añade estado que mantener y reensamblar.
+    ///
+    /// Si algún día se sube a VGA o a más calidad y deja de caber, el camino es
+    /// trocear —no subir el tope—, porque el otro extremo también lo comprueba.
+    /// El emisor prefiere no mandar nada antes que mandar media imagen.
+    ///
+    /// La carga es el JPEG en crudo: ya lleva dentro sus dimensiones, así que no
+    /// hace falta cabecera aparte.
+    pub const IMAGE: u8 = 0x07;
 
     // --- Servidor -> Dispositivo ---
     /// `{state}`: idle|listening|thinking|speaking.
@@ -54,6 +67,8 @@ pub mod kind {
     pub const ERROR: u8 = 0x86;
     /// Respuesta al latido.
     pub const PONG: u8 = 0x87;
+    /// "Hazme una foto y mándamela." Sin carga útil.
+    pub const CAPTURE: u8 = 0x88;
 }
 
 /// Valores del campo `state` de las tramas [`kind::STATE`].
@@ -80,6 +95,7 @@ pub const fn name(kind: u8) -> &'static str {
         kind::CANCEL => "CANCEL",
         kind::PING => "PING",
         kind::TELEMETRY => "TELEMETRY",
+        kind::IMAGE => "IMAGE",
         kind::STATE => "STATE",
         kind::TRANSCRIPT => "TRANSCRIPT",
         kind::REPLY => "REPLY",
@@ -87,6 +103,7 @@ pub const fn name(kind: u8) -> &'static str {
         kind::TTS_END => "TTS_END",
         kind::ERROR => "ERROR",
         kind::PONG => "PONG",
+        kind::CAPTURE => "CAPTURE",
         _ => "desconocido",
     }
 }
@@ -351,10 +368,10 @@ mod tests {
 
     #[test]
     fn los_tipos_del_servidor_llevan_el_bit_alto() {
-        for k in [kind::STATE, kind::TRANSCRIPT, kind::REPLY, kind::TTS_AUDIO, kind::TTS_END, kind::ERROR, kind::PONG] {
+        for k in [kind::STATE, kind::TRANSCRIPT, kind::REPLY, kind::TTS_AUDIO, kind::TTS_END, kind::ERROR, kind::PONG, kind::CAPTURE] {
             assert!(is_from_server(k), "{} debería venir del servidor", name(k));
         }
-        for k in [kind::HELLO, kind::AUDIO, kind::END, kind::CANCEL, kind::PING, kind::TELEMETRY] {
+        for k in [kind::HELLO, kind::AUDIO, kind::END, kind::CANCEL, kind::PING, kind::TELEMETRY, kind::IMAGE] {
             assert!(!is_from_server(k), "{} lo manda el dispositivo", name(k));
         }
     }
@@ -363,8 +380,8 @@ mod tests {
     fn los_tipos_son_unicos() {
         let todos = [
             kind::HELLO, kind::AUDIO, kind::END, kind::CANCEL, kind::PING,
-            kind::TELEMETRY, kind::STATE, kind::TRANSCRIPT, kind::REPLY, kind::TTS_AUDIO,
-            kind::TTS_END, kind::ERROR, kind::PONG,
+            kind::TELEMETRY, kind::IMAGE, kind::STATE, kind::TRANSCRIPT, kind::REPLY,
+            kind::TTS_AUDIO, kind::TTS_END, kind::ERROR, kind::PONG, kind::CAPTURE,
         ];
         for (i, a) in todos.iter().enumerate() {
             for b in &todos[i + 1..] {
@@ -471,6 +488,22 @@ mod tests {
     fn el_audio_que_no_cabe_se_rechaza() {
         let mut out = [0u8; 3];
         assert!(audio_into(&mut out, &[1, 2, 3]).is_none());
+    }
+
+    /// La imagen va entera en una trama, y eso solo vale mientras quepa.
+    ///
+    /// A 320x240 y calidad 12 el GC0308 da unos 6 kB contra un tope de 64: diez
+    /// veces de margen. Este test existe para que, si alguien sube la resolución
+    /// o la calidad y deja de caber, se entere aquí y no con una imagen truncada
+    /// llegando al servidor.
+    #[test]
+    fn una_imagen_tipica_cabe_de_sobra_en_una_trama() {
+        const JPEG_TIPICO: usize = 6 * 1024;
+        assert!(
+            JPEG_TIPICO * 4 < MAX_FRAME_BYTES,
+            "el margen se ha comido: {JPEG_TIPICO} B de imagen contra {MAX_FRAME_BYTES} de tope. \
+             Si la resolución ha subido, toca trocear."
+        );
     }
 
     #[test]

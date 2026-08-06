@@ -932,6 +932,25 @@ async def device_status(state: AppState = Depends(get_app_state)):
     }
 
 
+@app.post("/device/capture", dependencies=[Depends(verify_token)])
+async def device_capture():
+    """Pide una foto a la cámara del dispositivo y devuelve dónde ha quedado.
+
+    Existe para poder probar la cadena entera —captura, compresión, subida— sin
+    depender de que el modelo decida llamar a la tool. Cuando la tool exista,
+    seguirá siendo la forma de comprobar el hardware por separado.
+    """
+    from src.device_gateway import manager
+
+    if not manager.connected or manager.session is None:
+        raise HTTPException(status_code=409, detail="No hay ningún dispositivo conectado")
+
+    path = await manager.session.request_capture()
+    if path is None:
+        raise HTTPException(status_code=504, detail="El dispositivo no mandó la foto a tiempo")
+    return {"path": str(path), "bytes": path.stat().st_size}
+
+
 @app.post("/device/audio-sink", dependencies=[Depends(verify_token)])
 async def set_audio_sink(request: AudioSinkRequest, state: AppState = Depends(get_app_state)):
     """Cambia en caliente dónde suena la voz de Luka: pc | device | both."""

@@ -22,6 +22,7 @@ END = 0x03            # fin del turno de habla: procesa lo acumulado
 CANCEL = 0x04         # aborta el turno en curso
 PING = 0x05           # latido
 TELEMETRY = 0x06      # {rssi, uptime_s, free_heap}: latido con diagnóstico
+IMAGE = 0x07          # JPEG de la cámara, entero (a 320x240 son ~6 kB)
 
 # --- Servidor -> Dispositivo ---
 STATE = 0x81          # {state}: idle|listening|thinking|speaking
@@ -31,13 +32,15 @@ TTS_AUDIO = 0x84      # PCM16LE de la voz de Luka
 TTS_END = 0x85        # fin de la respuesta hablada
 ERROR = 0x86          # {code, message}
 PONG = 0x87           # respuesta al latido
+CAPTURE = 0x88        # "hazme una foto y mándamela"; sin carga útil
 
 # Nombres legibles, para logs y mensajes de error que se entiendan.
 NAMES: dict[int, str] = {
     HELLO: "HELLO", AUDIO: "AUDIO", END: "END", CANCEL: "CANCEL", PING: "PING",
-    TELEMETRY: "TELEMETRY",
+    TELEMETRY: "TELEMETRY", IMAGE: "IMAGE",
     STATE: "STATE", TRANSCRIPT: "TRANSCRIPT", REPLY: "REPLY",
     TTS_AUDIO: "TTS_AUDIO", TTS_END: "TTS_END", ERROR: "ERROR", PONG: "PONG",
+    CAPTURE: "CAPTURE",
 }
 
 # Estados que el servidor comunica al dispositivo. Coinciden con los que pinta el

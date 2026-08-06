@@ -79,6 +79,8 @@ pub enum NetCommand {
     SendEnd,
     SendCancel,
     SendAudio(Vec<i16>),
+    /// JPEG de la cámara, ya comprimido y listo para salir tal cual.
+    SendImage(Vec<u8>),
 }
 
 pub struct NetTask {
@@ -86,6 +88,7 @@ pub struct NetTask {
     event_tx: SyncSender<Event>,
     playback_tx: SyncSender<Vec<i16>>,
     reproduccion: Arc<crate::audio::Reproduccion>,
+    camara_tx: SyncSender<()>,
     modem: esp_idf_hal::modem::Modem<'static>,
 }
 
@@ -95,9 +98,10 @@ impl NetTask {
         event_tx: SyncSender<Event>,
         playback_tx: SyncSender<Vec<i16>>,
         reproduccion: Arc<crate::audio::Reproduccion>,
+        camara_tx: SyncSender<()>,
         modem: esp_idf_hal::modem::Modem<'static>,
     ) -> Self {
-        Self { cmd_rx, event_tx, playback_tx, reproduccion, modem }
+        Self { cmd_rx, event_tx, playback_tx, reproduccion, camara_tx, modem }
     }
 
     pub fn spawn(self) -> Result<()> {
@@ -112,7 +116,7 @@ impl NetTask {
     }
 
     fn run_loop(self) {
-        let Self { cmd_rx, event_tx, playback_tx, reproduccion, modem } = self;
+        let Self { cmd_rx, event_tx, playback_tx, reproduccion, camara_tx, modem } = self;
 
         log::info!("net_io: arrancando");
         let sys_loop = match EspSystemEventLoop::take() {
@@ -253,7 +257,7 @@ impl NetTask {
                                 }
                             }
                             None => {
-                                client = connect_server(&event_tx, &playback_tx, &reproduccion, &connected);
+                                client = connect_server(&event_tx, &playback_tx, &reproduccion, &camara_tx, &connected);
                                 if client.is_none() {
                                     let _ = event_tx.try_send(Event::ServerDown);
                                 }
@@ -294,6 +298,22 @@ impl NetTask {
                         uplink.extend_from_slice(&pcm);
                         if uplink.len() >= UPLINK_BATCH_SAMPLES {
                             flush_uplink(&mut client, &mut uplink);
+                        }
+                    }
+                    NetCommand::SendImage(jpeg) => {
+                        // Va entera: a 320x240 son ~6 kB contra un tope de 64.
+                        // La cámara ya comprobó que cabe antes de mandarla aquí.
+                        let mut trama = Vec::with_capacity(1 + jpeg.len());
+                        trama.push(kind::IMAGE);
+                        trama.extend_from_slice(&jpeg);
+                        if let Some(c) = client.as_mut() {
+                            if let Err(e) = c.send(FrameType::Binary(false), &trama) {
+                                log::warn!("no se pudo subir la imagen: {e:?}");
+                            } else {
+                                log::info!("imagen enviada ({} B)", jpeg.len());
+                            }
+                        } else {
+                            log::warn!("imagen descartada: no hay enlace");
                         }
                     }
                 }
@@ -361,6 +381,7 @@ fn connect_server(
     event_tx: &SyncSender<Event>,
     playback_tx: &SyncSender<Vec<i16>>,
     reproduccion: &Arc<crate::audio::Reproduccion>,
+    camara_tx: &SyncSender<()>,
     connected: &Arc<AtomicBool>,
 ) -> Option<EspWebSocketClient<'static>> {
     let cert = match CStr::from_bytes_with_nul(luka_config::server::TLS_CERT_PEM.as_bytes()) {
@@ -402,6 +423,7 @@ fn connect_server(
     let event_tx = event_tx.clone();
     let playback_tx = playback_tx.clone();
     let reproduccion = reproduccion.clone();
+    let camara_tx = camara_tx.clone();
     let connected = connected.clone();
     // Se pone a true con la primera trama de audio de cada respuesta, para
     // mandar `TtsStarted` una sola vez por turno.
@@ -456,7 +478,7 @@ fn connect_server(
                 let _ = event_tx.try_send(Event::ServerDown);
             }
             WebSocketEventType::Binary(data) => {
-                handle_frame(data, &event_tx, &playback_tx, &hablando, &reproduccion);
+                handle_frame(data, &event_tx, &playback_tx, &hablando, &reproduccion, &camara_tx);
             }
             WebSocketEventType::Text(text) => {
                 // El protocolo es binario; si llega texto, algo no cuadra.
@@ -482,6 +504,7 @@ fn handle_frame(
     playback_tx: &SyncSender<Vec<i16>>,
     hablando: &Arc<AtomicBool>,
     reproduccion: &Arc<crate::audio::Reproduccion>,
+    camara_tx: &SyncSender<()>,
 ) {
     let frame = match luka_proto::decode(data) {
         Ok(f) => f,
@@ -535,6 +558,17 @@ fn handle_frame(
             // de desfase respecto al anillo.
             if playback_tx.try_send(pcm).is_err() {
                 log::warn!("audio de bajada descartado: el búfer va lleno");
+            }
+        }
+
+        kind::CAPTURE => {
+            // No se captura aquí: esto corre DENTRO del callback del cliente
+            // WebSocket, y bloquearlo 100 ms comprimiendo un JPEG es exactamente
+            // como se tumbó el enlace con el barge-in. Solo se avisa al hilo de
+            // la cámara, que tiene su propia prioridad.
+            log::info!("← CAPTURE: se pide una foto");
+            if camara_tx.try_send(()).is_err() {
+                log::warn!("petición de foto descartada: la cámara está ocupada");
             }
         }
 

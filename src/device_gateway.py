@@ -99,6 +99,8 @@ class DeviceSession:
         # los dos en el mismo WebSocket, y entrelazar tramas lo corrompería.
         self._send_lock = asyncio.Lock()
         self._closed = False
+        # Quien esté esperando una foto. `None` si nadie la pidió.
+        self._image_waiter: Optional[asyncio.Future] = None
 
     # ---------------------------------------------------------------- envío
     async def send(self, frame: bytes) -> None:
@@ -160,6 +162,9 @@ class DeviceSession:
             await self._cancel_turn()
             await self.send(proto.state(proto.STATE_IDLE))
 
+        elif frame.kind == proto.IMAGE:
+            await self._handle_image(frame.payload)
+
         elif frame.kind == proto.PING:
             await self.send(proto.encode(proto.PONG))
 
@@ -179,6 +184,47 @@ class DeviceSession:
 
         else:
             logger.warning(f"[{self.name}] trama inesperada: {frame.name}")
+
+    # ----------------------------------------------------------------- cámara
+    async def request_capture(self, timeout: float = 8.0) -> Optional[Path]:
+        """Pide una foto al dispositivo y espera a que llegue.
+
+        Devuelve la ruta del JPEG, o `None` si no llegó a tiempo. El plazo cubre
+        de sobra lo que tarda: capturar y comprimir son ~100 ms en la placa y
+        subir 6 kB por el enlace, un suspiro. Si se agota, es que el dispositivo
+        no tiene cámara o no está.
+        """
+        # Se renueva por petición: así una foto vieja que llegue tarde no se
+        # cuela como respuesta a la siguiente.
+        self._image_waiter = asyncio.get_running_loop().create_future()
+        await self.send(proto.encode(proto.CAPTURE))
+        try:
+            return await asyncio.wait_for(self._image_waiter, timeout)
+        except asyncio.TimeoutError:
+            logger.warning(f"[{self.name}] la foto no llegó en {timeout}s")
+            return None
+        finally:
+            self._image_waiter = None
+
+    async def _handle_image(self, payload: bytes) -> None:
+        # Un JPEG empieza SIEMPRE por FF D8. Comprobarlo distingue "hay imagen"
+        # de "hay N bytes de basura del tamaño correcto", que desde el log se ven
+        # exactamente igual.
+        if len(payload) < 4 or payload[0] != 0xFF or payload[1] != 0xD8:
+            logger.warning(f"[{self.name}] IMAGE de {len(payload)} B que no es un JPEG")
+            return
+
+        path = settings.TEMP_DIR / f"device_cam_{int(time.time() * 1000)}.jpg"
+        path.write_bytes(payload)
+        logger.info(f"[{self.name}] foto recibida: {len(payload)} B -> {path}")
+
+        waiter = self._image_waiter
+        if waiter is not None and not waiter.done():
+            waiter.set_result(path)
+        else:
+            # Nadie la esperaba: se guarda igual, pero se dice, porque significa
+            # que llegó tarde o que alguien pidió una foto y se fue.
+            logger.info(f"[{self.name}] la foto llegó sin que nadie la esperara")
 
     # ------------------------------------------------------------------ turno
     async def _cancel_turn(self) -> None:

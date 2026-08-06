@@ -40,6 +40,10 @@ fn write_all(i2c: &mut I2cDriver, addr: u8, regs: &[(u8, u8)]) -> Result<()> {
 
 // ============================= TCA9555 =============================
 
+// Puerto 0: la cámara (P5/P6/P7) y el CS de la SD (P3).
+const REG_OUTPUT_0: u8 = 0x02;
+const REG_CONFIG_0: u8 = 0x06;
+// Puerto 1: amplificador (P8) y botones (P9-P11).
 const REG_INPUT_1: u8 = 0x01;
 const REG_OUTPUT_1: u8 = 0x03;
 const REG_POLARITY_1: u8 = 0x05;
@@ -68,6 +72,44 @@ pub fn init_expander(i2c: &mut I2cDriver) -> Result<()> {
     write_reg(i2c, bi2c::ADDR_TCA9555, REG_CONFIG_1, cfg)?;
 
     log::info!("TCA9555: amplificador APAGADO, botones como entradas");
+    Ok(())
+}
+
+/// Saca el sensor de cámara de reposo y de reset.
+///
+/// Sus tres líneas de control **no son GPIOs del ESP32**: cuelgan del TCA9555,
+/// que arranca con todo como entradas. Al aire, la cámara se queda apagada y en
+/// reset, y entonces **ni siquiera contesta por SCCB**: parece que no hay cámara
+/// conectada. Costó un spike entero descubrirlo.
+///
+/// `camera_select` es **activo a nivel alto**, cosa que no documenta el port de
+/// terceros del que sale el pinout y que salió de probar las cuatro
+/// combinaciones de polaridad.
+///
+/// Se lee-modifica-escribe siempre: en este mismo puerto vive el CS de la
+/// tarjeta SD, y escribir el registro entero lo pisaría.
+pub fn camera_power_on(i2c: &mut I2cDriver) -> Result<()> {
+    use luka_board::expander::{CAM_POWER_DOWN, CAM_RESET, CAM_SELECT};
+
+    let pd = 1u8 << CAM_POWER_DOWN;
+    let rst = 1u8 << CAM_RESET;
+    let sel = 1u8 << CAM_SELECT;
+
+    // Valores antes que direcciones, igual que con el amplificador: al revés, el
+    // pin pasaría un instante como salida con un valor indeterminado.
+    let out = read_reg(i2c, bi2c::ADDR_TCA9555, REG_OUTPUT_0)?;
+    write_reg(i2c, bi2c::ADDR_TCA9555, REG_OUTPUT_0, (out & !pd & !rst) | sel)?;
+
+    let cfg = read_reg(i2c, bi2c::ADDR_TCA9555, REG_CONFIG_0)?;
+    write_reg(i2c, bi2c::ADDR_TCA9555, REG_CONFIG_0, cfg & !pd & !rst & !sel)?;
+
+    // El reset necesita anchura antes de soltarlo.
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    let out = read_reg(i2c, bi2c::ADDR_TCA9555, REG_OUTPUT_0)?;
+    write_reg(i2c, bi2c::ADDR_TCA9555, REG_OUTPUT_0, out | rst)?;
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    log::info!("TCA9555: cámara encendida y fuera de reset");
     Ok(())
 }
 
