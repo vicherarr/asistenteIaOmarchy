@@ -529,3 +529,94 @@ git diff --name-only origin/master..master | grep -E 'cfg\.toml$|certs/|\.env'
 
 Ambos deben salir vacíos. Ojo: no basta con mirar la contraseña — **el SSID tampoco debe
 aparecer** en nada versionado.
+
+---
+
+## ✅ Fase 4 — Conversación encadenada (2026-08-06)
+
+Se pidieron tres cosas: interrumpir a Luka mientras habla, contestarle sin repetir la
+palabra, y que narre las tareas largas. **Se entregó la segunda**; la primera se probó,
+se midió y se apagó; la tercera no se ha empezado.
+
+### Lo que funciona
+
+| | Estado |
+|---|---|
+| Oír de lejos (umbral 150, PGA al tope) | ✅ verificado con voz real |
+| El turno se cierra al callarte (~0,6 s) | ✅ |
+| Encadenar una segunda pregunta sin decir "Luka" | ✅ ventana de 3,5 s |
+| El anillo avisa de que el micro sigue atento | ✅ cian tenue, respirando |
+| Interrumpir por voz mientras habla (barge-in) | ⛔ **apagado**, `barge_in = 0` |
+| Narrar tareas agénticas largas | ⏳ sin empezar |
+
+**Tests en host: 96.**
+
+### Los cuatro fallos del día, y qué los hacía caros
+
+Ninguno daba un error. Los cuatro se manifestaban como "la placa va rara", y los cuatro
+se cerraron con **una traza que convirtió una impresión en un número**. Es el patrón que
+conviene repetir.
+
+**1. El umbral de silencio absoluto.** `SILENCIO_NIVEL = 40` era un nivel fijo. Al subir
+el PGA del ES7210 al tope, el suelo de ruido de una sala normal (medido: **40-53**) se
+puso por encima, y la condición dejó de cumplirse **nunca**. Ningún turno se cerraba por
+callarse; todos agotaban los 15 s de `LISTENING_TIMEOUT_MS`. Desde fuera: "tarda quince
+segundos en contestar". Ahora el umbral es relativo al suelo medido en reposo.
+
+> Un umbral absoluto contra una señal cuya ganancia se toca es una bomba de relojería.
+
+**2. El detector le robaba la CPU a la red.** Con barge-in, el hilo `detect` corría con
+la prioridad por defecto de pthreads (5) — **la misma que la tarea del cliente
+WebSocket**. El enlace moría a los ~25 s de cualquier respuesta larga con
+`Could not lock ws-client within 1000 timeout`, que **no menciona la CPU por ningún
+lado**. Se aisló apagando `barge_in` y dejando todo lo demás igual. Arreglado con
+prioridad 4 y anclando el hilo al núcleo 1 (WiFi/lwIP viven en el 0).
+
+> Añadir trabajo continuo en un estado donde antes no había ninguno no es un cambio de
+> una línea, aunque la línea sea `if !playing || BARGE_IN != 0`.
+
+**3. La sesión vieja dejaba muda a la nueva.** Al reiniciarse la placa, su sesión nueva
+abría el WebSocket **antes** de que el servidor procesara el cierre de la vieja, y el
+`finally` de la vieja llamaba a `detach()` sin comprobar de quién era: borraba el
+`audio_sink` de la sesión viva. A partir de ahí, mudo para siempre y **sin un solo error
+en ningún log** — el turno se transcribe, el LLM contesta, el TTS sintetiza y reproduce;
+solo que el destino ya no existe. Lo destapó `playback: cerrando (0 muestras con señal)`.
+
+> Cada `espflash flash` y cada `espflash monitor` **reinician la placa**. Eso disparó esta
+> carrera una docena de veces mientras se buscaba otra cosa, y arruinó tres mediciones.
+
+**4. El instrumento contaba el rebote del disparo.** La primera medición de barge-in casi
+descarta la función: los picos que parecían "Luka oyéndose a sí misma" eran la cola de la
+interrupción del usuario medio segundo después, porque al disparar se limpia la ventana
+pero las probabilidades altas de esa misma palabra la vuelven a llenar. Leído mal, el
+margen parecía de 9 puntos sobre 255; excluyendo el refractario, ~80.
+
+> Antes de creerse una medición, comprobar que el instrumento no está midiendo su propio
+> eco.
+
+### Por qué barge-in está apagado
+
+No es el acople de la Fase 0 y conviene no confundirlos: aquello era un **lazo cerrado**
+(micro → altavoz → micro) que diverge; en barge-in lo capturado va al detector y **se
+tira**. No hay realimentación posible.
+
+Lo que sí hay es coste. Aun con la prioridad arreglada, el audio salía entrecortado:
+`playback: cerrando (71048 muestras con señal)` sobre 203.680 huecos escritos. Con
+`barge_in = 0` suena limpio. **El diagnóstico es firme porque se hizo el bisect**, no por
+deducción.
+
+Para retomarlo hace falta: procesar **una trama de cada dos**, **no reservar memoria** en
+el hilo de audio (hoy `mono_and_level` pide un `Vec` cada 20 ms dentro del bucle de tiempo
+real), y un criterio de salida explícito — si suben los subdesbordamientos, no entra.
+Interrumpir es un lujo; que Luka suene bien, no.
+
+### Lo que queda
+
+- **Narrar tareas largas.** Bloqueado por un detalle concreto: `(Idle, TtsStarted)` y
+  `(Idle, ServerSaid(Speaking))` **no existen** en la FSM, así que hoy el servidor no
+  puede hablar por iniciativa propia — el audio llegaría y se tiraría sin abrir el
+  amplificador. Con esa transición y la ventana de seguimiento ya hecha, el transporte
+  está resuelto; falta decidir **dónde** narra el servidor (redacción de documento,
+  segunda pasada de visión, y el `sleep(3.0)` de la ruta de terminal).
+- **Colchón antes de reproducir.** Aparcado: con `barge_in = 0` el audio va bien. Se
+  retoma si vuelven los cortes.
