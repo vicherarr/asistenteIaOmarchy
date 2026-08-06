@@ -918,3 +918,61 @@ vigila el micro del PC y la entrada de voz es el satélite.
 **Esto lo esquiva, no lo arregla.** Que un dispositivo de audio roto pueda tumbar
 el asistente entero es un fallo de robustez: el fallo debería quedar contenido en
 su hilo.
+
+---
+
+# 📍 Dónde estamos (2026-08-06, cierre del día)
+
+## Funciona
+
+| | |
+|---|---|
+| Despertar diciendo "Luka" desde lejos | ✅ umbral 150, PGA al tope |
+| Cerrar el turno al callarte (~1 s) | ✅ relativo al ruido de la sala |
+| Encadenar otra pregunta sin repetir "Luka" | ✅ ventana de 3,5 s, anillo cian |
+| Enlace estable en respuestas largas | ✅ prioridad y núcleo del hilo `detect` |
+| Audio sin cortes | ✅ colchón de 1,5 s + el servidor no manda sobre el altavoz |
+| Mirar por la cámara y describir la escena | ✅ VGA 640x480 |
+| Enseñar la foto en el PC | ✅ `show_camera_photo` |
+
+## Descartado, con medida y por decisión
+
+**Barge-in** (interrumpir a Luka mientras habla). 40× más huecos de audio por
+segundo; el 25 % de la reproducción salía como silencio inventado. **El problema
+no es acústico** —la voz de Luka nunca superó confianza 60 con el umbral en 220,
+así que no se dispararía a sí misma— sino de CPU. `barge_in = 0`. No retomar sin
+que lo pidan.
+
+## Pendiente, por orden de lo que más molesta
+
+1. **Se tiran tramas de la voz del usuario.** 78-85 descartes por turno mientras
+   SUBE lo que dices: trozos de tus frases que el STT nunca ve, sin ningún error.
+   Sin investigar. Sospecha principal: la reserva de memoria por trama en el hilo
+   de tiempo real (`mono_and_level` pide un `Vec` cada 20 ms). Arreglo: fondo de
+   búferes reutilizables.
+2. **El micro del PC tumba el asistente entero** con SIGSEGV en ALSA/portaudio.
+   Esquivado con `WAKE_WORD_ENABLED=False`, **no arreglado**.
+3. **Gemma-4 transcribe mal el habla rápida.** Despacio va perfecto. El audio
+   llega limpio y sin saturar: está medido. Es del reconocimiento, no de la placa.
+4. **El troceado del TTS** (`assistant_service.py:273`) parte por todas las comas
+   pasados 80 caracteres; con enumeraciones Kokoro cae a 1× tiempo real. El
+   colchón lo tapa, pero sigue ahí.
+5. **Narrar tareas agénticas**: la tercera petición del día, sin empezar. La
+   bloquea que `(Idle, TtsStarted)` no exista en la máquina de estados.
+6. **El color de la cámara** (balance de blancos) y **la tarjeta SD**, sin tocar.
+
+## Cómo se trabaja aquí (lo que hoy costó aprender)
+
+- **Medir antes de cambiar.** Hoy hubo cuatro diagnósticos equivocados seguidos,
+  todos por deducir en vez de medir. Los cuatro se cerraron con una traza que
+  convertía una impresión en un número.
+- **Bisecar cuando algo funcionaba antes.** Quitar UNA cosa y dejar el resto
+  igual resolvió barge-in y la cámara-que-dejaba-mudo-al-micro. Las dos veces,
+  después de horas buscando por otro lado. Si el usuario dice "esta mañana iba
+  bien", la primera pregunta es qué se tocó desde entonces.
+- **Los indicadores en verde no son la prueba.** El JPEG a 16 MHz tenía tamaño
+  correcto y cabecera válida, y media imagen era ruido de colores. Hay que mirar
+  la cosa, no sus metadatos.
+- **Grabar y monitorizar REINICIAN la placa** y tiran el WebSocket. Para juzgar a
+  oído, sin monitor abierto. Para medir, una captura en segundo plano a fichero.
+- **El puerto serie cambia** entre `/dev/ttyACM0` y `ACM1` al re-enumerar.
