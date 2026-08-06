@@ -1,5 +1,12 @@
 """Los ojos del dispositivo: mirar por la cámara del ESP32 y enseñar la foto.
 
+Los nombres van en INGLÉS y siguiendo el patrón de las demás (`analyze_screen`,
+`take_screenshot`). No es cosmética: con nombres en español el modelo los
+generaba mal —emitió `call:mirarara` por `mirar_camara`, comiéndose el `_cam`—,
+la llamada no parseaba y acababa improvisando que no tiene ojos. Un nombre que
+no encaja con el patrón del resto del catálogo es un nombre que el modelo
+escribe mal.
+
 Se apoya entero en lo que ya existe. `stage_vision_capture` y la segunda pasada
 de `AssistantService` son exactamente las mismas que usa `analyze_screen` para
 las capturas de pantalla, así que aquí solo hay que conseguir la imagen y
@@ -21,8 +28,8 @@ from src.vision_tool import stage_vision_capture
 
 logger = logging.getLogger(__name__)
 
-# Última foto que mandó el dispositivo. La guarda `mirar_camara` para que
-# `mostrar_foto` pueda enseñarla sin volver a pedirla: "mírala" y "enséñamela"
+# Última foto que mandó el dispositivo. La guarda `analyze_camera` para que
+# `show_camera_photo` pueda enseñarla sin volver a pedirla: "mírala" y "enséñamela"
 # son dos frases seguidas, no dos fotos distintas.
 _ultima_foto: Optional[Path] = None
 
@@ -31,11 +38,11 @@ def ultima_foto() -> Optional[Path]:
     return _ultima_foto
 
 
-async def mirar_camara(pregunta: str = "") -> str:
+async def analyze_camera(question: str = "") -> str:
     """MIRA por la CÁMARA del altavoz (el dispositivo de la habitación) y describe lo que ve; úsala cuando pregunten qué ves, qué hay delante, o quieran que mires algo del mundo real (para la PANTALLA del ordenador usa analyze_screen).
 
     Args:
-        pregunta: qué quiere saber el usuario sobre lo que se ve, si lo concretó.
+        question: qué quiere saber el usuario sobre lo que se ve, si lo concretó.
     """
     global _ultima_foto
 
@@ -57,11 +64,11 @@ async def mirar_camara(pregunta: str = "") -> str:
         return "El dispositivo está conectado pero no me ha mandado la foto. ¿Está la cámara bien conectada?"
 
     _ultima_foto = path
-    stage_vision_capture(str(path), pregunta or None)
+    stage_vision_capture(str(path), question or None)
     return "Foto tomada con la cámara del dispositivo. Analizando lo que se ve."
 
 
-async def mostrar_foto() -> str:
+async def show_camera_photo() -> str:
     """ENSEÑA en la pantalla del ordenador la última foto que tomó la cámara del dispositivo; úsala cuando pidan verla, mostrarla o abrirla.
     """
     foto = _ultima_foto
