@@ -262,6 +262,17 @@ class DeviceSession:
             await self.send(proto.state(proto.STATE_THINKING))
             pcm16_to_wav(pcm, wav_path)
 
+            # Copia de diagnóstico del último turno. `transcribe` borra el
+            # fichero que se le pasa, así que sin esto no hay forma de saber si
+            # una transcripción mala viene de un audio malo o del STT — y son
+            # dos problemas en sitios muy distintos.
+            #
+            # Siempre el mismo nombre: es la última, no un archivo histórico.
+            try:
+                (settings.TEMP_DIR / "device_last_turn.wav").write_bytes(wav_path.read_bytes())
+            except Exception as e:  # noqa: BLE001 — el diagnóstico nunca tumba el turno
+                logger.debug(f"no se pudo guardar la copia de diagnóstico: {e}")
+
             # `transcribe` borra el fichero que se le pasa, así que el temporal es suyo.
             text = await self.state.stt_engine.transcribe(wav_path)
             if not text or len(text.strip()) < 2:
