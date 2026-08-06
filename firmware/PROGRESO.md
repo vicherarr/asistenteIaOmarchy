@@ -802,3 +802,97 @@ ningún error en el log**.
 
 El código y la palanca de tres posiciones (0/1/2) se quedan: retomarlo no exige
 revertir nada, y el modo 1 es el instrumento con el que se midió esto.
+
+---
+
+## ✅ Cámara GC0308 — funcionando (2026-08-06)
+
+Pedirle a Luka que mire por la cámara del dispositivo y que enseñe la foto en el
+PC. Funciona de extremo a extremo.
+
+| | |
+|---|---|
+| Sensor identificado y despierto | ✅ GC0308, `0x21`, ID `0x9B` |
+| Interfaz DVP (D0-D7, PCLK, VSYNC, HREF) | ✅ verificado capturando |
+| Captura + JPEG en la placa | ✅ 320x240, ~5 kB, 70 ms |
+| Subida al PC (`IMAGE` 0x07) | ✅ entera en una trama |
+| Petición desde el servidor (`CAPTURE` 0x88) | ✅ |
+| Tools de voz | ✅ `analyze_camera`, `show_camera_photo` |
+
+### Pinout (de un port de terceros, verificado con spike)
+
+XCLK 43, PCLK 44, VSYNC 21, HREF 1, D0-D7 = 2, 17, 18, 39, 45, 46, 47, 48.
+SCCB en el bus I²C que ya existe (11/10). Control por el **TCA9555**:
+`power_down` P5, `camera_select` P6 (**activo ALTO**), `hardware_reset` P7.
+
+### Las cuatro trampas, todas con errores que no mencionaban la causa
+
+**1. No contestaba por SCCB.** Faltaban dos cosas a la vez: reloj en XCLK y
+sacarla de reset por el expansor, que arranca con todo como entradas. Y
+`camera_select` resultó ser activo a nivel ALTO, cosa que no documenta nadie:
+salió de barrer las cuatro combinaciones de polaridad, cuatro sondeos de 100 ms.
+
+**2. `esp_camera_init` fallaba con `ESP_FAIL` pelado.** El reset hay que soltarlo
+**con XCLK ya corriendo**. El spike acertaba por accidente, porque generaba el
+reloj para poder hablar por SCCB.
+
+**3. Sin memoria.** El driver pide 30 kB **contiguos de interna con capacidad
+DMA**, que no se sirven desde PSRAM:
+
+    cam_dma_config: DMA buffer 30720 Byte malloc failed,
+    the current largest free block: 11264 Byte
+
+Hay que inicializar la cámara **antes que la red**. Y luego la WiFi se quedó sin
+sus búferes (`Expected to init 10 rx buffer, actual is 4`), que se arregló
+bajando el arena del wake word de 64 kB a 40 — pedía 64 de **interna** y usa
+25,5.
+
+**4. La cámara dejaba mudo al micrófono.** El peor de todos. Su SCCB cuelga del
+mismo bus que el ES7210, y el driver abría **su propio bus** sobre esos pines. Al
+abrir turno el firmware toca el I²C —cierra el amplificador por si acaso— y ahí
+se corrompía el ADC de los micros.
+
+El síntoma despistaba muchísimo: **"Luka" SÍ se transcribía** —venía del
+pre-roll, grabado antes de abrir el turno— y a partir de ahí solo silencio. Se
+persiguió el STT, el umbral de silencio y hasta se propuso cambiar de motor de
+transcripción. Lo cerró un bisect: cámara fuera, todo lo demás igual.
+
+> Arreglo: `pin_sccb_sda/scl = -1` y `sccb_i2c_port = 0`. "No abras un bus, usa
+> el que ya hay."
+
+### Y dos del lado servidor
+
+**El modelo escribía mal el nombre de la tool.** `mirar_camara` salía como
+`call:mirarara`, se comía el `_cam`, la llamada no parseaba y el modelo
+improvisaba que no tiene ojos. Causa: nombres en español teniendo las otras
+veinte en inglés. **Un nombre que rompe el patrón del catálogo es un nombre que
+el modelo escribe mal.** Ahora `analyze_camera` y `show_camera_photo`.
+
+**"Enséñamela" llega en un turno nuevo**, y lo único que el modelo conserva del
+anterior es el texto que devolvió la tool. Si ese texto no dice que la foto sigue
+guardada, contesta que no puede mostrarla. Las tools de este proyecto se cruzan
+entre sí a propósito; las de cámara también, ahora.
+
+### Pendiente
+
+- **El color tira a magenta**: balance de blancos de fábrica del GC0308. Para
+  "qué hay delante" da igual; si le preguntan colores, mentirá.
+- **VGA no funciona**: a 640x480 el driver rechaza cada fotograma con
+  `FB-SIZE: 599040 != 614400`, doce líneas de menos, consistente. Es la ventana
+  de salida del sensor. QVGA sobra para describir escenas.
+- **La tarjeta SD** sigue sin usar (SDMMC 1 bit: clk 40, cmd 42, d0 41, cs en P3
+  del expansor).
+
+## ⚠️ El micro del PC tumba el asistente
+
+`wake_word_listener` no puede abrir la entrada de audio del ordenador
+(`PaErrorCode -9999`) y portaudio acaba pisando memoria liberada dentro de ALSA:
+**SIGSEGV que se lleva el proceso entero**. Hoy hubo volcados a las 13:12, 13:28,
+14:02, 18:27 y 18:28.
+
+Apagado con `WAKE_WORD_ENABLED=False`, que además tiene sentido: ese oyente
+vigila el micro del PC y la entrada de voz es el satélite.
+
+**Esto lo esquiva, no lo arregla.** Que un dispositivo de audio roto pueda tumbar
+el asistente entero es un fallo de robustez: el fallo debería quedar contenido en
+su hilo.
