@@ -43,15 +43,11 @@ int luka_cam_init(const luka_cam_pins_t *p) {
          * pedir PIXFORMAT_JPEG haría que el driver lo rechazara o lo emulara por
          * detrás sin control. Se comprime explícitamente en `capture_jpeg`. */
         .pixel_format = PIXFORMAT_RGB565,
-        /* QVGA y no VGA: a 640x480 el driver rechaza cada fotograma con
-         * "FB-SIZE: 599040 != 614400", justo 12 líneas de menos. Es consistente
-         * —no es ruido de cableado— y viene de la ventana de salida del GC0308,
-         * que no cuadra con lo que el driver espera para VGA.
+        /* VGA: el máximo del GC0308, que es un sensor de 0,3 MP.
          *
-         * 320x240 sobra para lo que se busca: describirle una escena a un modelo
-         * multimodal. Y de paso el JPEG baja a ~15 kB, que por este enlace es
-         * medio segundo en vez de dos. */
-        .frame_size = FRAMESIZE_QVGA,
+         * Requiere XCLK a 16 MHz y no a 20 (ver luka_board::camera::XCLK_HZ): a
+         * 20 el driver no daba abasto copiando y rechazaba cada fotograma. */
+        .frame_size = FRAMESIZE_VGA,
 
         /* Un solo búfer y en PSRAM: no se hace vídeo, se hace una foto suelta.
          * Dos búferes solo servirían para gastar 600 kB más. */

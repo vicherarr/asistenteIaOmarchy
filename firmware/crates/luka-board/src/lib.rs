@@ -201,9 +201,24 @@ pub mod camera {
     /// Bus de datos de 8 bits, de D0 a D7.
     pub const DATA: [u32; 8] = [2, 17, 18, 39, 45, 46, 47, 48];
 
-    /// Frecuencia de XCLK. 20 MHz es lo que usa el driver de Espressif y sale de
-    /// dividir los 80 MHz del APB por 4, así que es exacta y no arrastra jitter.
-    pub const XCLK_HZ: u32 = 20_000_000;
+    /// Frecuencia de XCLK.
+    ///
+    /// **10 MHz, y no los 20 del principio.** A VGA el driver no daba abasto
+    /// copiando: `EV-EOF-OVF`, y la imagen salía con **la mitad inferior
+    /// corrupta** —ruido de colores— aunque el tamaño fuera correcto. El log no
+    /// lo delataba; hubo que mirar la foto.
+    ///
+    /// La causa está en `PSRAM DMA mode disabled`: el driver no vuelca directo a
+    /// PSRAM, usa un búfer interno de 30 kB y copia. A VGA son 614 kB por
+    /// fotograma y a 20 MHz no llega. A 16 tampoco. A 10 sí.
+    ///
+    /// El precio son menos fotogramas por segundo, que aquí da igual: se hacen
+    /// fotos sueltas, no vídeo.
+    ///
+    /// En el S3 el XCLK se divide de los 80 MHz del APB, así que solo valen
+    /// divisores exactos: 20, 16, 10, 8. Bajar un escalón da margen sin bajar de
+    /// resolución.
+    pub const XCLK_HZ: u32 = 10_000_000;
 
     /// Dirección SCCB del sensor. La comparten GC0308 y OV7670, así que **no
     /// basta para identificarlo**: hay que leerle el registro de identidad.
@@ -214,14 +229,15 @@ pub mod camera {
 
     /// Resolución de captura.
     ///
-    /// **QVGA y no VGA por una razón medida**: a 640x480 el driver rechaza cada
-    /// fotograma con `FB-SIZE: 599040 != 614400`, doce líneas de menos, de forma
-    /// consistente. Viene de la ventana de salida del GC0308, no del cableado.
+    /// VGA, que es **el máximo absoluto del GC0308**: es un sensor de 0,3 MP y no
+    /// da más de 640x480.
     ///
-    /// Y encaja con el uso: para describirle una escena a un modelo multimodal
-    /// sobra, y el JPEG se queda en ~6 kB, que por este enlace es un suspiro.
-    pub const WIDTH: u16 = 320;
-    pub const HEIGHT: u16 = 240;
+    /// Estuvo en QVGA porque a VGA el driver rechazaba cada fotograma
+    /// (`FB-SIZE: 599040 != 614400`). Se atribuyó a la ventana de salida del
+    /// sensor y era falso: era que **no daba abasto copiando**, y se arregla
+    /// bajando XCLK (ver [`XCLK_HZ`]), no bajando resolución.
+    pub const WIDTH: u16 = 640;
+    pub const HEIGHT: u16 = 480;
 
     /// Confirmado por `spike_camera` de extremo a extremo: el sensor contesta en
     /// `0x21` con ID `0x9B`, y se captura un fotograma de 320x240 que comprime a
