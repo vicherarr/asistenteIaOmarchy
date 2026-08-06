@@ -110,21 +110,9 @@ impl AudioIO {
         let mut capturing = false;
         let mut playing = false;
         // Muestras NO silenciosas escritas al I2S en la reproducción en curso.
+        // Se cuentan las no nulas a propósito: escribir ceros porque la cola está
+        // vacía se ve idéntico a reproducir, y es justo la confusión a deshacer.
         let mut escritas: u64 = 0;
-        // Muestras que hubo que inventar porque la cola llegó vacía. **Esta es la
-        // métrica de verdad** para "se oye entrecortado".
-        //
-        // Contar muestras no nulas (`escritas`) no vale: el silencio entre
-        // palabras también son ceros, así que un hueco real y una pausa natural
-        // salen idénticos. Con eso se diagnosticó mal una vez —se leyó "dos
-        // tercios son ceros" como subdesbordamiento cuando era una respuesta
-        // corta repartida en un `Speaking` largo— y se estuvo a punto de
-        // descartar barge-in por el motivo equivocado.
-        let mut huecos: u64 = 0;
-        // Cuántas veces la cola se secó y volvió a llenarse. Un corte largo y
-        // cien cortes cortos dan el mismo total de muestras y **no suenan igual**.
-        let mut cortes: u32 = 0;
-        let mut en_hueco = false;
 
         // El amplificador arranca cerrado pase lo que pase.
         crate::board::silence(&self.shared_i2c);
@@ -154,9 +142,6 @@ impl AudioIO {
                         // tres se parecen. Estas dos trazas las separan.
                         log::info!("playback: abriendo (cola {} muestras)", cola.len());
                         escritas = 0;
-                        huecos = 0;
-                        cortes = 0;
-                        en_hueco = false;
                         if capturing {
                             // No debería pasar nunca: la máquina de estados lo
                             // impide y hay un test que lo fija. Si pasa, gana el
@@ -168,12 +153,8 @@ impl AudioIO {
                         }
                     }
                     AudioCommand::StopPlayback => {
-                        // `huecos` y `cortes` son el criterio de salida de
-                        // barge-in: si al activarlo suben respecto a la línea de
-                        // base, no entra.
                         log::info!(
-                            "playback: cerrando ({escritas} con señal, {huecos} inventadas \
-                             en {cortes} cortes, {} sin consumir)",
+                            "playback: cerrando ({escritas} muestras con señal, {} sin consumir)",
                             cola.len()
                         );
                         playing = false;
@@ -204,25 +185,10 @@ impl AudioIO {
                 // Lo que falte se rellena con silencio: un hueco se oye como una
                 // pausa; no escribir nada produce un chasquido por *underrun*.
                 for i in 0..audio::FRAME_SAMPLES {
-                    let sample = match cola.pop_front() {
-                        Some(s) => {
-                            en_hueco = false;
-                            if s != 0 {
-                                escritas += 1;
-                            }
-                            s
-                        }
-                        None => {
-                            // La cola se secó: se escribe silencio porque no
-                            // escribir nada produce un chasquido por underrun.
-                            huecos += 1;
-                            if !en_hueco {
-                                cortes += 1;
-                                en_hueco = true;
-                            }
-                            0
-                        }
-                    };
+                    let sample = cola.pop_front().unwrap_or(0);
+                    if sample != 0 {
+                        escritas += 1;
+                    }
                     let bytes = sample.to_le_bytes();
                     // Mono -> estéreo: la misma muestra en los dos canales.
                     tx_bytes[i * 4..i * 4 + 2].copy_from_slice(&bytes);
