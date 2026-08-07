@@ -28,12 +28,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.config import settings  # noqa: E402
 from src.litert_client import LiteRTClient  # noqa: E402
 
-# Preguntas que en producción tiran de tool y que reventaron con el bug.
+# Preguntas que en producción tiran de tool y que reventaron con el bug. Se escriben
+# como las dice el usuario de verdad, con el "Luka," delante: el prompt influye en si el
+# modelo encadena otra llamada o contesta.
 CASOS = [
-    ("¿quién fue Albert Einstein?", "informativa, suele usar web_search + read_web_page"),
-    ("¿qué hora es?", "usa la terminal"),
-    ("¿cuánta memoria RAM tengo?", "usa la terminal"),
+    ("Luka, ¿quién es Albert Einstein?", "informativa, encadena web_search + read_web_page"),
+    ("Luka, ¿qué hora es?", "usa la terminal"),
+    ("Luka, ¿cuánta memoria RAM tengo?", "usa la terminal"),
 ]
+
+# El fallo que se escapó era INTERMITENTE: pasó el smoke test a la primera y falló las
+# dos veces siguientes con voz real. Una sola pasada no prueba nada.
+REPETICIONES = 3
 
 # Respuesta demasiado corta = el muñón que delataba el fallo.
 MIN_CHARS = 25
@@ -83,8 +89,14 @@ async def main() -> int:
 
     nombres_de_tools = {t.__name__ for t in tools}
 
+    # El system prompt, montado igual que en producción: assistant_service le añade la
+    # fecha y hora actuales. Si el smoke test usa un prompt distinto al real, mide otra
+    # cosa — y el modelo es sensible a estas instrucciones.
+    from src.assistant_service import AssistantService
+
     prompt_path = settings.PROJECT_ROOT / "config" / "system_prompt.txt"
     system_prompt = prompt_path.read_text(encoding="utf-8")
+    system_prompt += AssistantService._now_context()
 
     print("Cargando el modelo...")
     client = LiteRTClient()
@@ -93,46 +105,52 @@ async def main() -> int:
         return 1
 
     fallos = 0
+    total = 0
     for pregunta, pista in CASOS:
         print(f"\n─── {pregunta}   ({pista})")
-        texto = ""
-        async for chunk in client.chat_stream(
-            prompt=pregunta, tools=tools, system_prompt=system_prompt, history=[]
-        ):
-            texto += chunk
-        texto = texto.strip()
-        usadas = list(client.last_turn_tools_used)
+        for intento in range(1, REPETICIONES + 1):
+            total += 1
+            texto = ""
+            async for chunk in client.chat_stream(
+                prompt=pregunta, tools=tools, system_prompt=system_prompt, history=[]
+            ):
+                texto += chunk
+            texto = texto.strip()
+            usadas = list(client.last_turn_tools_used)
 
-        print(f"    tools ejecutadas : {usadas or 'ninguna'}")
-        print(f"    respuesta ({len(texto)} chars): {texto[:200]!r}")
+            problemas = []
+            if len(texto) < MIN_CHARS:
+                problemas.append(f"respuesta cortada ({len(texto)} chars)")
+            if any(f in texto for f in FALLBACKS):
+                problemas.append("cayó en el fallback genérico")
+            if "?" in usadas:
+                problemas.append("hay tools registradas como '?'")
+            if client.last_turn_tools_disabled:
+                problemas.append("el motor se quedó SIN herramientas (parse error)")
+            # Marcador de tool call que se fuga como texto en vez de ejecutarse: el
+            # modelo intentaba encadenar otra llamada y el stream moría ahí.
+            if "<|tool_call" in texto or "call:" in texto:
+                problemas.append("marcador de tool call fugado como texto")
+            # El modelo a veces ESCRIBE la llamada en Python en vez de ejecutarla
+            # (execute_system_command("date")). Sin esto pasaba por buena solo por
+            # tener longitud suficiente.
+            fugadas = _extract_bare_tool_calls(texto, nombres_de_tools)
+            if fugadas:
+                problemas.append(
+                    f"tool call fugada como texto: {', '.join(c['name'] for c in fugadas)}"
+                )
 
-        problemas = []
-        if len(texto) < MIN_CHARS:
-            problemas.append(f"respuesta cortada ({len(texto)} chars)")
-        if any(f in texto for f in FALLBACKS):
-            problemas.append("cayó en el fallback genérico")
-        if "?" in usadas:
-            problemas.append("hay tools registradas como '?'")
-        if client.last_turn_tools_disabled:
-            problemas.append("el motor se quedó SIN herramientas (parse error)")
-        # El modelo a veces ESCRIBE la llamada en vez de ejecutarla
-        # (execute_system_command("date") como texto). Sin esta comprobación el caso
-        # pasaba por bueno solo por tener longitud suficiente.
-        fugadas = _extract_bare_tool_calls(texto, nombres_de_tools)
-        if fugadas:
-            problemas.append(
-                f"tool call fugada como texto: {', '.join(c['name'] for c in fugadas)}"
-            )
-
-        if problemas:
-            fallos += 1
-            print(f"    ❌ {'; '.join(problemas)}")
-        else:
-            print("    ✅ bien")
+            marca = "❌" if problemas else "✅"
+            print(f"  {marca} intento {intento}/{REPETICIONES} · tools={usadas or 'ninguna'} "
+                  f"· {len(texto)} chars")
+            print(f"       {texto[:160]!r}")
+            if problemas:
+                fallos += 1
+                print(f"       → {'; '.join(problemas)}")
 
     print("\n" + "=" * 50)
     if fallos:
-        print(f"TOOL CALLING ROTO: {fallos}/{len(CASOS)} casos con problemas.")
+        print(f"TOOL CALLING ROTO: {fallos}/{total} intentos con problemas.")
         return 1
     print(f"TOOL CALLING OK: {len(CASOS)}/{len(CASOS)} casos bien.")
     return 0
