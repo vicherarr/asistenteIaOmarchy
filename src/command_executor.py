@@ -70,6 +70,9 @@ MUSIC_CONTROL_MAP = {
 
 PLAYERCTL_ACTIONS = {"next", "previous", "pause", "play", "stop", "play-pause"}
 
+# "en youtube", "por youtube", "el vídeo de..." → reproducir en el navegador.
+_YOUTUBE_RE = re.compile(r"\b(?:en|por|de|desde)?\s*you\s*tube\b|\bel v[íi]deo de\b", re.IGNORECASE)
+
 # El propio asistente aparece en `playerctl -l`; nunca es el reproductor de música
 # que el usuario quiere controlar.
 _IGNORED_PLAYERS = {"asistenteia"}
@@ -275,16 +278,28 @@ async def execute_system_command(command: str) -> str:
     """
     command = _sanitize_tool_args(command)
 
-    # Normalizar comandos playerctl sin --player para que apunten al reproductor que
-    # está sonando. Antes se forzaba Spotify, lo que dejaba muerto el control cuando la
-    # música venía de otro sitio (p.ej. YouTube en el navegador).
+    # Cualquier playerctl de control se reencamina al reproductor que esté sonando, se
+    # pida sin --player o con "--player=spotify" explícito.
+    #
+    # Esto se resuelve AQUÍ y no en el system prompt a propósito. El árbol de decisión
+    # enseña `execute_system_command("playerctl --player=spotify <acción>")`, y medirlo
+    # demostró que tocar esa línea degrada el tool calling de forma general: al
+    # sustituirla por music_control, "¿qué hora es?" pasó de 3/3 a 0/3 escribiendo la
+    # llamada como texto en vez de ejecutarla (9 intentos, tres redacciones distintas).
+    # El prompt es frágil y no se puede testear; el código sí. Así que el prompt se
+    # queda como estaba y la corrección de reproductor vive aquí, con tests.
     _pc_match = re.match(
-        r'^playerctl\s+(' + '|'.join(PLAYERCTL_ACTIONS) + r')$', command.strip()
+        r'^playerctl\s+(?:--player=\S+\s+)?(' + '|'.join(PLAYERCTL_ACTIONS) + r')$',
+        command.strip(),
     )
     if _pc_match:
         action = _pc_match.group(1)
         player = await _active_player()
         if player:
+            # Con música en el navegador, playerctl no basta: Chromium acepta 'pause'
+            # por MPRIS pero ignora 'play' y no implementa 'next'.
+            if player.startswith("chromium"):
+                return await music_control(action)
             command = f"playerctl --player={player} {action}"
             logger.info(f"playerctl normalizado a: {command}")
         else:
@@ -434,6 +449,19 @@ async def play_specific_music(query: str) -> str:
             f"play_specific_music recibió palabra de control '{query}' → redirigiendo a music_control {action}"
         )
         return await music_control(action)
+
+    # "ponme X en YouTube" → al navegador, no a Spotify.
+    #
+    # El desvío se hace AQUÍ y no en el árbol de decisión del system prompt porque
+    # medirlo demostró que este modelo no tolera editar ese árbol: cualquier variante
+    # del punto 3 o del 4 rompía llamadas SIN relación con la música. "¿Qué hora es?"
+    # pasó de 3/3 a 0/15 (cinco redacciones distintas), escribiendo
+    # execute_system_command("date") como texto en vez de ejecutarlo. Con el prompt
+    # intacto vuelve a 3/3. Ver scripts/smoke-tools.sh.
+    if _YOUTUBE_RE.search(query):
+        limpia = _YOUTUBE_RE.sub(" ", query).strip(" ,.;-")
+        logger.info(f"'{query}' pide YouTube → play_youtube_music('{limpia or query}')")
+        return await play_youtube_music(limpia or query)
 
     # Buscamos de forma muy abierta
     search_query = f"Spotify artist track album {query}"

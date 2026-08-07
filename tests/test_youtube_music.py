@@ -287,6 +287,119 @@ async def test_active_player_prefiere_el_que_suena():
         assert await _active_player() == "chromium.instance123"
 
 
+# --- Enrutado a YouTube (se hace en código, no en el prompt) ------------------
+#
+# El árbol de decisión del system prompt se queda INTACTO: medirlo demostró que este
+# modelo no tolera editarlo. Cualquier variante del punto 3 o del 4 rompía llamadas sin
+# relación con la música — "¿qué hora es?" pasó de 3/3 a 0/15 escribiendo la llamada
+# como texto. Así que "en YouTube" lo detecta play_specific_music, adonde el prompt ya
+# enruta, y delega.
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("peticion,esperado", [
+    ("iron maiden en youtube", "iron maiden"),
+    ("Fear of the Dark en YouTube", "Fear of the Dark"),
+    ("el vídeo de la cabra", "la cabra"),
+])
+async def test_peticion_de_youtube_va_al_navegador(peticion, esperado):
+    from src.command_executor import play_specific_music
+
+    with patch("src.command_executor.play_youtube_music",
+               AsyncMock(return_value="Reproduciendo.")) as yt:
+        await play_specific_music(peticion)
+
+    # Se quita "en youtube" de la búsqueda: si no, contamina el término.
+    assert yt.await_args.args[0] == esperado.lower()
+
+
+@pytest.mark.asyncio
+async def test_musica_normal_sigue_yendo_a_spotify():
+    """Sin mencionar YouTube, el comportamiento es el de siempre."""
+    from src.command_executor import play_specific_music
+
+    with patch("src.command_executor.play_youtube_music", AsyncMock()) as yt, \
+         patch("src.command_executor.web_search", AsyncMock(return_value="")), \
+         patch("src.command_executor.CommandExecutor") as ejecutor:
+        ejecutor.return_value.execute = AsyncMock(return_value=(False, ""))
+        ejecutor.return_value.spawn = AsyncMock()
+        await play_specific_music("musica de estopa")
+
+    yt.assert_not_awaited()
+
+
+def test_no_confunde_youtubers_con_youtube():
+    from src.command_executor import _YOUTUBE_RE
+
+    assert _YOUTUBE_RE.search("pon a youtubers de humor") is None
+    assert _YOUTUBE_RE.search("musica de los 90") is None
+
+
+# --- Redirección de playerctl (se hace en código, no en el prompt) ------------
+#
+# El árbol de decisión sigue enseñando execute_system_command("playerctl
+# --player=spotify <acción>") porque cambiar esa línea degradaba el tool calling en
+# general: "¿qué hora es?" pasó de 3/3 a 0/3. Así que la corrección de reproductor
+# vive aquí, donde se puede medir.
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("comando", [
+    "playerctl next",
+    "playerctl --player=spotify next",
+])
+async def test_playerctl_se_reencamina_al_reproductor_activo(comando):
+    from src.command_executor import execute_system_command
+
+    with patch("src.command_executor._active_player", AsyncMock(return_value="vlc")), \
+         patch("src.command_executor.open_terminal_and_run_command",
+               AsyncMock(return_value="ok")) as terminal:
+        await execute_system_command(comando)
+
+    assert terminal.await_args.args[0] == "playerctl --player=vlc next"
+
+
+@pytest.mark.asyncio
+async def test_playerctl_sobre_chromium_va_por_cdp():
+    """Chromium ignora 'play' y no tiene 'next' por MPRIS: hay que ir por el navegador."""
+    from src.command_executor import execute_system_command
+
+    with patch("src.command_executor._active_player",
+               AsyncMock(return_value="chromium.instance1")), \
+         patch("src.command_executor.music_control",
+               AsyncMock(return_value="Siguiente canción.")) as control, \
+         patch("src.command_executor.open_terminal_and_run_command",
+               AsyncMock()) as terminal:
+        resultado = await execute_system_command("playerctl --player=spotify next")
+
+    control.assert_awaited_once_with("next")
+    terminal.assert_not_awaited()
+    assert resultado == "Siguiente canción."
+
+
+@pytest.mark.asyncio
+async def test_playerctl_sin_reproductor_lo_dice():
+    from src.command_executor import execute_system_command
+
+    with patch("src.command_executor._active_player", AsyncMock(return_value=None)), \
+         patch("src.command_executor.open_terminal_and_run_command",
+               AsyncMock()) as terminal:
+        resultado = await execute_system_command("playerctl pause")
+
+    assert "No hay ningún reproductor" in resultado
+    terminal.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_un_comando_normal_no_se_toca():
+    """La redirección solo aplica a playerctl; el resto pasa intacto."""
+    from src.command_executor import execute_system_command
+
+    with patch("src.command_executor.open_terminal_and_run_command",
+               AsyncMock(return_value="ok")) as terminal:
+        await execute_system_command("date")
+
+    assert terminal.await_args.args[0] == "date"
+
+
 @pytest.mark.asyncio
 async def test_active_player_ignora_al_propio_asistente():
     """`playerctl -l` incluye 'asistenteia'; no es música del usuario."""
