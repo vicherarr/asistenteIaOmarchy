@@ -33,14 +33,6 @@ from src.utils import strip_markdown
 from src.wake_word_listener import SherpaWakeWordListener
 
 try:
-    from src.bt_button_listener import BtButtonListener, BtButtonListenerError
-    BT_LISTENER_AVAILABLE = True
-except ImportError:
-    BT_LISTENER_AVAILABLE = False
-    BtButtonListener = None  # type: ignore
-    BtButtonListenerError = Exception  # type: ignore
-
-try:
     from src.mpris_dummy_player import MprisDummyPlayer, MprisPlayerError
     MPRIS_AVAILABLE = True
 except ImportError:
@@ -204,7 +196,6 @@ class AppState:
         self.is_recording: bool = False
         self.paused_players: list[str] = []
         self.wake_word_listener: Optional[SherpaWakeWordListener] = None
-        self.bt_button_listener: Optional["BtButtonListener"] = None  # type: ignore
         self.mpris_dummy_player: Optional["MprisDummyPlayer"] = None  # type: ignore
         self.mpris_proxy_process: Optional[asyncio.subprocess.Process] = None
         self._last_avrcp_toggle_time: float = 0.0
@@ -336,28 +327,6 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"No se pudo iniciar SherpaWakeWordListener: {e}")
 
-    # Configurar e iniciar el listener de botones Bluetooth (AVRCP)
-    if BT_LISTENER_AVAILABLE:
-        try:
-            state.bt_button_listener = BtButtonListener()
-
-            async def on_bt_play():
-                logger.info("Botón PLAY del HOME SPA-133 detectado. Activando escucha...")
-                await toggle_listen(state)
-
-            async def on_bt_pause():
-                logger.info("Botón PAUSE del HOME SPA-133 detectado. Cancelando...")
-                await cancel_processing(state)
-
-            state.bt_button_listener.on_play = on_bt_play
-            state.bt_button_listener.on_pause = on_bt_pause
-            await state.bt_button_listener.start()
-            logger.info(f"Listener de botones BT iniciado: {state.bt_button_listener.device_name}")
-        except BtButtonListenerError as e:
-            logger.warning(f"No se pudo iniciar el listener de botones BT: {e}")
-    else:
-        logger.info("python-evdev no disponible. Listener de botones BT omitido.")
-
     # Configurar Dummy MPRIS Player para interceptar comandos AVRCP
     if MPRIS_AVAILABLE:
         try:
@@ -416,11 +385,6 @@ async def lifespan(app: FastAPI):
         if state.wake_word_listener:
             logger.info("Deteniendo SherpaWakeWordListener...")
             state.wake_word_listener.stop()
-
-        # Detener BtButtonListener si está activo
-        if state.bt_button_listener:
-            logger.info("Deteniendo BtButtonListener...")
-            await state.bt_button_listener.stop()
 
         # Detener Dummy MPRIS Player y mpris-proxy
         if state.mpris_dummy_player:
