@@ -21,9 +21,27 @@ Uso (el servicio tiene el modelo en la GPU, hay que pararlo):
 import asyncio
 import subprocess
 import sys
+import traceback
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# LiteRT escupe miles de líneas de log C++ directamente al descriptor, mientras que los
+# print() de Python se quedan en un buffer que se PIERDE si el proceso muere: en una
+# ejecución real no sobrevivió ni un resultado, solo el ruido. Con line_buffering cada
+# línea sale en cuanto se escribe.
+sys.stdout.reconfigure(line_buffering=True)
+
+# Copia de los resultados en disco, por si la salida se pierde o se trunca.
+INFORME = Path("/tmp/asistenteia-smoke.txt")
+
+
+def decir(linea: str = "") -> None:
+    """Imprime y deja constancia en el informe."""
+    print(linea)
+    with INFORME.open("a", encoding="utf-8") as f:
+        f.write(linea + "\n")
+
 
 from src.config import settings  # noqa: E402
 from src.litert_client import LiteRTClient  # noqa: E402
@@ -59,11 +77,11 @@ def servicio_activo() -> bool:
 
 async def main() -> int:
     if servicio_activo():
-        print("El servicio asistenteia está ACTIVO y ocupa la VRAM con el modelo.")
-        print("Párualo, ejecuta esto y arráncalo otra vez:\n")
-        print("  systemctl --user stop asistenteia.service; \\")
-        print("    venv/bin/python scripts/smoke-tools.py; \\")
-        print("    systemctl --user start asistenteia.service")
+        decir("El servicio asistenteia está ACTIVO y ocupa la VRAM con el modelo.")
+        decir("Párualo, ejecuta esto y arráncalo otra vez:\n")
+        decir("  systemctl --user stop asistenteia.service; \\")
+        decir("    venv/bin/python scripts/smoke-tools.py; \\")
+        decir("    systemctl --user start asistenteia.service")
         return 1
 
     # Las tools reales, tal cual las registra el asistente.
@@ -98,16 +116,16 @@ async def main() -> int:
     system_prompt = prompt_path.read_text(encoding="utf-8")
     system_prompt += AssistantService._now_context()
 
-    print("Cargando el modelo...")
+    decir("Cargando el modelo...")
     client = LiteRTClient()
     if not client.engine:
-        print("El motor no cargó.")
+        decir("El motor no cargó.")
         return 1
 
     fallos = 0
     total = 0
     for pregunta, pista in CASOS:
-        print(f"\n─── {pregunta}   ({pista})")
+        decir(f"\n─── {pregunta}   ({pista})")
         for intento in range(1, REPETICIONES + 1):
             total += 1
             texto = ""
@@ -141,20 +159,30 @@ async def main() -> int:
                 )
 
             marca = "❌" if problemas else "✅"
-            print(f"  {marca} intento {intento}/{REPETICIONES} · tools={usadas or 'ninguna'} "
+            decir(f"  {marca} intento {intento}/{REPETICIONES} · tools={usadas or 'ninguna'} "
                   f"· {len(texto)} chars")
-            print(f"       {texto[:160]!r}")
+            decir(f"       {texto[:160]!r}")
             if problemas:
                 fallos += 1
-                print(f"       → {'; '.join(problemas)}")
+                decir(f"       → {'; '.join(problemas)}")
 
-    print("\n" + "=" * 50)
+    decir("\n" + "=" * 50)
     if fallos:
-        print(f"TOOL CALLING ROTO: {fallos}/{total} intentos con problemas.")
+        decir(f"TOOL CALLING ROTO: {fallos}/{total} intentos con problemas.")
         return 1
-    print(f"TOOL CALLING OK: {len(CASOS)}/{len(CASOS)} casos bien.")
+    decir(f"TOOL CALLING OK: {total}/{total} intentos bien.")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    INFORME.write_text("", encoding="utf-8")
+    try:
+        codigo = asyncio.run(main())
+    except Exception:
+        # El traceback iría a stderr, que se pierde entre el ruido de LiteRT (o se
+        # descarta con 2>/dev/null). Va al informe y a stdout, como todo lo demás.
+        decir("\nEL SCRIPT PETÓ:")
+        decir(traceback.format_exc())
+        codigo = 1
+    decir(f"\n(copia de estos resultados en {INFORME})")
+    sys.exit(codigo)
