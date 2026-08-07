@@ -25,7 +25,8 @@ from src.command_executor import (
     send_input_to_terminal,
     interrupt_terminal_command,
     launch_application,
-    close_application
+    close_application,
+    set_current_utterance,
 )
 from src.vision_tool import analyze_screen, analyze_clipboard_image, take_screenshot, get_pending_vision
 from src.camera_tool import analyze_camera, show_camera_photo
@@ -59,8 +60,11 @@ _FALLBACK_BY_TOOL = {
     "take_screenshot": "Captura de pantalla hecha.",
     "analyze_clipboard_image": "Analizando la imagen del portapapeles.",
     "analyze_camera": "Mirando por la cámara.",
-    "web_search": "Búsqueda web realizada.",
-    "read_web_page": "Página leída.",
+    # "Búsqueda web realizada" / "Página leída" son confirmaciones vacías: dicen que la
+    # tool corrió pero no lo que el usuario quería saber, que es el contenido. Si el
+    # modelo no llegó a resumirlo, más vale decirlo y ofrecer repetir.
+    "web_search": "He buscado, pero no he sabido resumirte lo que he encontrado. ¿Lo intento otra vez?",
+    "read_web_page": "He leído la página, pero no he sabido resumírtela. ¿Lo intento otra vez?",
     "control_local_browser": "Listo en el navegador.",
     "clipboard_manager": "Portapapeles actualizado.",
     "launch_application": "Aplicación lanzada.",
@@ -684,6 +688,10 @@ class AssistantService:
         con pipeline de doble cola (síntesis || reproducción en paralelo).
         """
         logger.info(f"Procesando transcripción con LiteRT (streaming): {text[:100]}...")
+
+        # Las tools necesitan saber qué ha pedido el usuario, no solo sus argumentos:
+        # web_search se niega a buscar si no se lo han pedido explícitamente.
+        set_current_utterance(text)
 
         # Cancelar TTS previo si existe
         if self._current_tts_task and not self._current_tts_task.done():

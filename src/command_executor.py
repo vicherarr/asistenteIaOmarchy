@@ -73,6 +73,32 @@ PLAYERCTL_ACTIONS = {"next", "previous", "pause", "play", "stop", "play-pause"}
 # "en youtube", "por youtube", "el vídeo de..." → reproducir en el navegador.
 _YOUTUBE_RE = re.compile(r"\b(?:en|por|de|desde)?\s*you\s*tube\b|\bel v[íi]deo de\b", re.IGNORECASE)
 
+# --- Puerta de la búsqueda web ------------------------------------------------
+# Lo que el usuario ha dicho en el turno en curso. Lo fija assistant_service antes de
+# llamar al modelo, y lo usa web_search para decidir si buscar o no.
+_utterance_actual: str = ""
+
+# Petición EXPLÍCITA de buscar. Si no aparece nada de esto, no se busca: el modelo tiene
+# que contestar con lo que sabe.
+_PIDE_BUSCAR_RE = re.compile(
+    # b[uú]sca\w* cubre "busca", "búscame", "búscalo", "buscando"...
+    r"\bb[uú]sc\w*|\bgooglea\w*|\bgoogle\b|mira en internet|"
+    r"\ben internet\b|\ben la web\b|\ben la red\b|\binf[óo]rmate\b|\baverigua\w*|"
+    r"consulta en|qu[ée] se dice|[úu]ltimas noticias|noticias de\b",
+    re.IGNORECASE,
+)
+
+
+def set_current_utterance(texto: str) -> None:
+    """Registra lo que ha dicho el usuario en este turno (lo llama assistant_service)."""
+    global _utterance_actual
+    _utterance_actual = texto or ""
+
+
+def pide_buscar_en_web(texto: str) -> bool:
+    """¿El usuario ha pedido explícitamente buscar en internet?"""
+    return bool(texto) and _PIDE_BUSCAR_RE.search(texto) is not None
+
 # El propio asistente aparece en `playerctl -l`; nunca es el reproductor de música
 # que el usuario quiere controlar.
 _IGNORED_PLAYERS = {"asistenteia"}
@@ -389,12 +415,46 @@ def _ddg_html_search(query: str, max_results: int = 5) -> list[dict]:
 
 async def web_search(query: str) -> str:
     """
-    Busca información en internet (DuckDuckGo).
-    Usa esto para responder preguntas sobre temas actuales, noticias o documentación técnica.
+    Busca en internet SOLO si el usuario lo pide o si hace falta información de AHORA.
+    NO la uses para conocimiento general —historia, ciencia, biografías, definiciones,
+    "quién fue X", "qué es Y"—: eso ya lo sabes, contesta tú directamente y sin buscar.
+    Úsala para noticias, precios, resultados deportivos, versiones de un paquete, o
+    cuando el usuario diga "busca", "mira en internet" o "qué se dice de".
     Devuelve resultados con URLs reales. Para abrir o leer una de esas páginas, copia la URL
     EXACTA del resultado; NUNCA inventes ni adivines direcciones a partir del tema.
     """
     query = _sanitize_tool_args(query)
+
+    # Puerta dura: si el usuario no ha pedido buscar, no se busca. El modelo tiende a
+    # tirar de internet para cosas que ya sabe ("¿quién fue Albert Einstein?"), y el
+    # usuario acaba oyendo "Búsqueda web realizada" en vez de la respuesta. Esto se
+    # decide aquí y no en el prompt porque el árbol de decisión de este modelo es
+    # frágil: editarlo rompe llamadas sin relación (ver scripts/smoke-tools.sh).
+    #
+    # Solo afecta a la tool, es decir a lo que decide el MODELO. Las búsquedas internas
+    # de otras tools (play_specific_music busca el enlace de Spotify) van por
+    # _web_search_raw y no pasan por aquí.
+    if not pide_buscar_en_web(_utterance_actual):
+        logger.info(
+            f"web_search bloqueada para '{query}': el usuario no pidió buscar "
+            f"(dijo: '{_utterance_actual[:60]}')"
+        )
+        return (
+            "No hace falta buscar en internet: el usuario no lo ha pedido. "
+            "Responde tú directamente con lo que ya sabes, sin llamar a más "
+            "herramientas. Si de verdad no lo sabes, dilo."
+        )
+
+    return await _web_search_raw(query)
+
+
+async def _web_search_raw(query: str) -> str:
+    """Búsqueda en DuckDuckGo sin la puerta de intención.
+
+    La usan por dentro otras tools (p.ej. play_specific_music para dar con el enlace de
+    Spotify), donde la búsqueda es un detalle de implementación y no algo que el usuario
+    haya pedido.
+    """
     try:
         def _search():
             from duckduckgo_search import DDGS
@@ -467,7 +527,7 @@ async def play_specific_music(query: str) -> str:
     search_query = f"Spotify artist track album {query}"
     
     logger.info(f"Buscando música específica: {query}")
-    results_text = await web_search(search_query)
+    results_text = await _web_search_raw(search_query)
     
     # Extraer enlaces de Spotify
     import re
