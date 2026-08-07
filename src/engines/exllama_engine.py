@@ -335,7 +335,7 @@ class ExLlamaEngine:
         # guardarraíl anti-invención de assistant_service.
         self.last_turn_tools_used: list[str] = []
         self.last_turn_tools_disabled: bool = False
-        self.tool_events_supported: bool = True
+        self.tracks_tool_usage: bool = True
 
     # ---- contrato: salud / metadatos ----
     @property

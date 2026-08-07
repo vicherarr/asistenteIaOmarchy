@@ -536,7 +536,7 @@ class AssistantService:
         Si el motor no puede informar de las tools ejecutadas, el guardarraíl se
         desactiva: dar por inventado todo turno sería mucho peor que el problema.
         """
-        supported = bool(getattr(self.litert, "tool_events_supported", False))
+        supported = bool(getattr(self.litert, "tracks_tool_usage", False))
         used = bool(getattr(self.litert, "last_turn_tools_used", None))
         disabled = bool(getattr(self.litert, "last_turn_tools_disabled", False))
         return supported, used, disabled

@@ -20,7 +20,7 @@ def engine():
     """Motor falso que puede informar de las tools ejecutadas (como LiteRT real)."""
     client = MagicMock()
     client.engine = MagicMock()
-    client.tool_events_supported = True
+    client.tracks_tool_usage = True
     client.last_turn_tools_used = []
     client.last_turn_tools_disabled = False
     client.streams_clean_text = False
@@ -141,7 +141,7 @@ async def test_respuesta_informativa_sin_tools_se_habla_normal(service, engine):
 @pytest.mark.asyncio
 async def test_guardarrail_desactivado_si_el_motor_no_informa(service, engine):
     """Sin verdad de campo no se puede juzgar: mejor hablar que censurar todo turno."""
-    engine.tool_events_supported = False
+    engine.tracks_tool_usage = False
     engine.chat_stream = _stream(["Te he abierto la página de YouTube."], engine)
 
     historial = []
@@ -178,6 +178,91 @@ def test_detecta_afirmaciones_de_accion(service, frase):
 ])
 def test_no_confunde_respuestas_normales(service, frase):
     assert service._claims_action(frase) is False
+
+
+# --- Registro de tools ejecutadas (fuente de verdad del guardarraíl) ----------
+#
+# Regresión seria: el registro se hacía con el `tool_event_handler` del motor. Eso
+# destrozaba las RESPUESTAS de las tools —a "¿quién fue Albert Einstein?" contestaba
+# "Acción ejecutada correctamente" porque el modelo solo llegaba a emitir "Albert"— y
+# encima entregaba '?' en vez del nombre. Ahora se envuelven los callables, que no toca
+# la tubería del motor. Estos tests fijan las dos propiedades que se rompieron.
+
+@pytest.fixture
+def cliente_litert():
+    """LiteRTClient sin cargar el modelo: solo interesa _prepare_tools."""
+    from src.litert_client import LiteRTClient
+
+    client = object.__new__(LiteRTClient)
+    client.last_turn_tools_used = []
+    client.last_turn_tools_disabled = False
+    return client
+
+
+@pytest.mark.asyncio
+async def test_el_wrapper_no_toca_el_resultado_de_la_tool(cliente_litert):
+    """Lo que devuelve la tool debe llegar al modelo INTACTO."""
+    async def web_search(query: str) -> str:
+        """Busca en internet."""
+        return f"resultado largo y completo para {query}"
+
+    envuelta = cliente_litert._prepare_tools([web_search])[0]
+    # Desde un hilo, como hace el motor: el wrapper despacha al bucle y espera. Llamarlo
+    # desde el propio bucle se bloquearía a sí mismo.
+    resultado = await asyncio.to_thread(envuelta, "Einstein")
+    assert resultado == "resultado largo y completo para Einstein"
+
+
+@pytest.mark.asyncio
+async def test_registra_el_nombre_real_no_interrogante(cliente_litert):
+    async def play_youtube_music(query: str) -> str:
+        """Reproduce música."""
+        return "ok"
+
+    envuelta = cliente_litert._prepare_tools([play_youtube_music])[0]
+    assert cliente_litert.last_turn_tools_used == []      # aún no se ha llamado
+    await asyncio.to_thread(envuelta, "iron maiden")
+    assert cliente_litert.last_turn_tools_used == ["play_youtube_music"]
+
+
+@pytest.mark.asyncio
+async def test_conserva_firma_y_docstring_para_el_esquema(cliente_litert):
+    """El SDK introspecciona firma y docstring para construir el esquema de la tool."""
+    import inspect
+
+    async def music_control(action: str) -> str:
+        """Controla la reproducción."""
+        return "ok"
+
+    envuelta = cliente_litert._prepare_tools([music_control])[0]
+    assert envuelta.__name__ == "music_control"
+    assert "Controla la reproducción" in envuelta.__doc__
+    assert list(inspect.signature(envuelta).parameters) == ["action"]
+
+
+def test_tools_sincronas_tambien_se_registran(cliente_litert):
+    def tool_sincrona(x: str) -> str:
+        """Una tool que no es corrutina."""
+        return f"eco {x}"
+
+    envuelta = cliente_litert._prepare_tools([tool_sincrona])[0]
+    assert envuelta("hola") == "eco hola"
+    assert cliente_litert.last_turn_tools_used == ["tool_sincrona"]
+
+
+def test_sin_tools_devuelve_lista_vacia(cliente_litert):
+    assert cliente_litert._prepare_tools(None) == []
+    assert cliente_litert._prepare_tools([]) == []
+
+
+def test_el_handler_del_motor_solo_con_el_flag():
+    """No debe engancharse por defecto: hacerlo rompía el tool calling."""
+    import inspect
+
+    from src.litert_client import LiteRTClient
+
+    src = inspect.getsource(LiteRTClient._create_conversation)
+    assert "settings.LITERT_TOOL_EVENTS and tools" in src
 
 
 # --- Fallback por palabras clave --------------------------------------------

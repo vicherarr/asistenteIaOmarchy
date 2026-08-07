@@ -27,32 +27,23 @@ class _LoggingToolEventHandler(litert_lm.ToolEventHandler):
       en _DANGEROUS_TOOLS.
     - process_tool_response: punto para inspeccionar/transformar la salida.
 
-    Además de observar, es la ÚNICA fuente de verdad sobre si una herramienta se
-    ejecutó de verdad en el turno: con LiteRT el motor las invoca por dentro y la
-    aplicación solo ve texto. Sin este registro no hay forma de distinguir "lo he
-    abierto" de una invención del modelo, así que el handler se engancha siempre
-    (el flag LITERT_TOOL_EVENTS solo controla el detalle del log).
+    OJO: es puramente opcional (LITERT_TOOL_EVENTS) y NO sirve para saber qué tools se
+    ejecutaron. Engancharlo en todos los turnos rompía el tool calling: las respuestas
+    de las tools llegaban destrozadas al modelo, que contestaba una palabra y paraba
+    ("Albert" a un "¿quién fue Albert Einstein?"). Para el registro fiable, chat_stream
+    envuelve las propias tools, que no toca la tubería del motor.
     """
-
-    def __init__(self, sink: Optional[list] = None, verbose: bool = False):
-        super().__init__()
-        # Lista compartida con el cliente: se le añaden los nombres ejecutados.
-        self._sink = sink if sink is not None else []
-        self._verbose = verbose
 
     def approve_tool_call(self, tool_call: dict) -> bool:
         name = (tool_call or {}).get("name", "?")
-        if self._verbose:
-            logger.info(f"[tool] → llamada: {name}  args={(tool_call or {}).get('arguments', {})}")
+        logger.info(f"[tool] → llamada: {name}  args={(tool_call or {}).get('arguments', {})}")
         if name in _DANGEROUS_TOOLS:
             logger.warning(f"[tool] denegada por política: {name}")
             return False
-        self._sink.append(name)
         return True
 
     def process_tool_response(self, tool_response: dict) -> dict:
-        if self._verbose:
-            logger.info(f"[tool] ← respuesta de {(tool_response or {}).get('name', '?')}")
+        logger.info(f"[tool] ← respuesta de {(tool_response or {}).get('name', '?')}")
         return tool_response
 
 
@@ -74,29 +65,11 @@ class LiteRTClient:
         # acciones que no ocurrieron. Las rellena el ToolEventHandler / el reintento.
         self.last_turn_tools_used: list[str] = []
         self.last_turn_tools_disabled: bool = False
-        # ¿Acepta esta build `tool_event_handler`? Si no, last_turn_tools_used estaría
-        # siempre vacía y el guardarraíl saltaría en TODOS los turnos: hay que saberlo.
-        self.tool_events_supported: bool = False
+        # El registro se hace envolviendo las tools (ver _prepare_tools), no dependemos
+        # de ninguna capacidad del motor: siempre sabemos qué se ejecutó.
+        self.tracks_tool_usage: bool = True
         self._load_engine()
         self._log_capabilities()
-        self._detect_tool_events_support()
-
-    def _detect_tool_events_support(self) -> None:
-        """Comprueba si el motor instalado acepta un tool_event_handler."""
-        if not self.engine:
-            return
-        try:
-            import inspect
-            params = inspect.signature(self.engine.create_conversation).parameters
-            self.tool_events_supported = "tool_event_handler" in params
-        except (ValueError, TypeError):
-            self.tool_events_supported = False
-        if not self.tool_events_supported:
-            logger.warning(
-                "El motor no acepta tool_event_handler: no se puede saber qué "
-                "herramientas se ejecutan, así que el guardarraíl anti-invención "
-                "queda desactivado."
-            )
 
     def _log_capabilities(self):
         """Loguea las capacidades reales del motor (Fase 0): ventana de contexto, EOS…"""
@@ -152,6 +125,68 @@ class LiteRTClient:
             logger.warning(f"No se pudo construir SamplerConfig: {e}")
             return None
 
+    def _prepare_tools(self, tools: Optional[List[Callable]]) -> list:
+        """Adapta las tools para el motor y registra cuáles se ejecutan.
+
+        Dos cosas a la vez, porque van juntas:
+
+        1. LiteRT llama a las tools de forma síncrona desde su propio hilo, así que las
+           corrutinas se envuelven para despacharlas al bucle de eventos y esperar el
+           resultado. La firma original se preserva (`__signature__`) porque el SDK la
+           introspecciona para construir el esquema.
+        2. Cada wrapper anota su nombre en `last_turn_tools_used` al ser invocado. Esa
+           es la fuente de verdad del guardarraíl anti-invención: con LiteRT el motor
+           llama a las tools por dentro y la aplicación solo ve texto, así que sin esto
+           no hay forma de distinguir "te lo he abierto" de una invención.
+
+           Se hace envolviendo el callable y NO con el `tool_event_handler` del motor:
+           engancharlo en todos los turnos rompía el tool calling (las respuestas de las
+           tools llegaban destrozadas al modelo, que soltaba una palabra y paraba), y
+           encima entregaba '?' en vez del nombre. Envolver la función no toca la
+           tubería del motor y da el nombre real.
+        """
+        if not tools:
+            return []
+
+        import functools
+        import inspect
+
+        # El bucle solo hace falta para despachar corrutinas; si todas las tools son
+        # síncronas no se pide, porque get_event_loop() revienta cuando no hay ninguno
+        # en el hilo actual.
+        loop = None
+        if any(inspect.iscoroutinefunction(t) for t in tools):
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = asyncio.get_event_loop()
+
+        def registrar(func) -> None:
+            self.last_turn_tools_used.append(getattr(func, "__name__", "?"))
+
+        preparadas = []
+        for tool in tools:
+            if inspect.iscoroutinefunction(tool):
+                def make_async_wrapper(async_func):
+                    @functools.wraps(async_func)
+                    def wrapper(*args, **kwargs):
+                        registrar(async_func)
+                        future = asyncio.run_coroutine_threadsafe(async_func(*args, **kwargs), loop)
+                        return future.result()
+                    wrapper.__signature__ = inspect.signature(async_func)
+                    return wrapper
+                preparadas.append(make_async_wrapper(tool))
+            else:
+                def make_sync_wrapper(func):
+                    @functools.wraps(func)
+                    def wrapper(*args, **kwargs):
+                        registrar(func)
+                        return func(*args, **kwargs)
+                    wrapper.__signature__ = inspect.signature(func)
+                    return wrapper
+                preparadas.append(make_sync_wrapper(tool))
+        return preparadas
+
     def _create_conversation(self, messages, tools, image=False):
         """Crea una conversación pasando sampler_config (y tool_event_handler si procede).
 
@@ -168,14 +203,12 @@ class LiteRTClient:
             sampler = self._sampler_config()
         if sampler is not None:
             kwargs["sampler_config"] = sampler
-        if tools:
-            # Siempre, no solo con LITERT_TOOL_EVENTS: el registro de qué se ejecutó es
-            # lo que impide que el asistente afirme acciones que no ha hecho. El flag
-            # solo decide si además se loguea cada llamada al detalle.
-            kwargs["tool_event_handler"] = _LoggingToolEventHandler(
-                sink=self.last_turn_tools_used,
-                verbose=settings.LITERT_TOOL_EVENTS,
-            )
+        if settings.LITERT_TOOL_EVENTS and tools:
+            # Solo observación/log, y solo bajo demanda. NO se usa para saber qué tools
+            # se ejecutaron: enganchar un handler siempre hacía que las respuestas de las
+            # tools llegaran destrozadas al modelo (contestaba una palabra suelta y
+            # paraba). El registro fiable se hace envolviendo las tools en chat_stream.
+            kwargs["tool_event_handler"] = _LoggingToolEventHandler()
         if settings.LITERT_CONSTRAINED_DECODING and tools:
             # Fuerza al modelo a emitir tool calls sintácticamente válidas (la causa
             # raíz de los "Failed to parse FC tool calls"). Off por defecto: ver
@@ -381,28 +414,7 @@ class LiteRTClient:
         self.last_turn_tools_used.clear()
         self.last_turn_tools_disabled = False
 
-        # Wrapper para ejecutar herramientas asíncronas de forma síncrona dentro de LiteRT
-        sync_tools = []
-        if tools:
-            import inspect
-            import functools
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = asyncio.get_event_loop()
-
-            for tool in tools:
-                if inspect.iscoroutinefunction(tool):
-                    def make_wrapper(async_func):
-                        @functools.wraps(async_func)
-                        def wrapper(*args, **kwargs):
-                            future = asyncio.run_coroutine_threadsafe(async_func(*args, **kwargs), loop)
-                            return future.result()
-                        wrapper.__signature__ = inspect.signature(async_func)
-                        return wrapper
-                    sync_tools.append(make_wrapper(tool))
-                else:
-                    sync_tools.append(tool)
+        sync_tools = self._prepare_tools(tools)
 
         queue = asyncio.Queue()
         loop = asyncio.get_running_loop()
@@ -557,29 +569,7 @@ class LiteRTClient:
         if not self.engine:
             return "Error: Motor LiteRT no inicializado."
 
-        # Wrapper para ejecutar herramientas asíncronas de forma síncrona dentro de LiteRT
-        sync_tools = []
-        if tools:
-            import inspect
-            import functools
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = asyncio.get_event_loop()
-
-            for tool in tools:
-                if inspect.iscoroutinefunction(tool):
-                    def make_wrapper(async_func):
-                        @functools.wraps(async_func)
-                        def wrapper(*args, **kwargs):
-                            future = asyncio.run_coroutine_threadsafe(async_func(*args, **kwargs), loop)
-                            return future.result()
-                        # Preservar la firma original para que el SDK la parse
-                        wrapper.__signature__ = inspect.signature(async_func)
-                        return wrapper
-                    sync_tools.append(make_wrapper(tool))
-                else:
-                    sync_tools.append(tool)
+        sync_tools = self._prepare_tools(tools)
 
         # Asegurar que solo una sesión de inferencia corre a la vez
         async def _run_chat_under_lock():
