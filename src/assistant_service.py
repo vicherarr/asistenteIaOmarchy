@@ -17,6 +17,8 @@ from src.command_executor import (
     system_diagnostics,
     read_web_page,
     play_specific_music,
+    play_youtube_music,
+    music_control,
     open_terminal_and_run_command,
     read_terminal_screen,
     control_local_browser,
@@ -36,6 +38,37 @@ from src.config import settings
 from PIL import Image
 
 logger = logging.getLogger(__name__)
+
+# Tools que dejan su resultado en la terminal visible (tmux). Solo si una de estas se
+# ejecutó tiene sentido leer el panel para construir la respuesta.
+_TERMINAL_TOOL_NAMES = frozenset({
+    "execute_system_command",
+    "open_terminal_and_run_command",
+    "read_terminal_screen",
+    "send_input_to_terminal",
+    "interrupt_terminal_command",
+})
+
+# Frase de respaldo cuando el modelo ejecutó una tool pero su texto quedó inservible
+# (residuo de una tool call fugada). Se elige por la tool que realmente corrió.
+_FALLBACK_BY_TOOL = {
+    "play_youtube_music": "Reproduciendo música en YouTube.",
+    "play_specific_music": "Reproduciendo música en Spotify.",
+    "music_control": "Hecho.",
+    "analyze_screen": "Analizando la pantalla.",
+    "take_screenshot": "Captura de pantalla hecha.",
+    "analyze_clipboard_image": "Analizando la imagen del portapapeles.",
+    "analyze_camera": "Mirando por la cámara.",
+    "web_search": "Búsqueda web realizada.",
+    "read_web_page": "Página leída.",
+    "control_local_browser": "Listo en el navegador.",
+    "clipboard_manager": "Portapapeles actualizado.",
+    "launch_application": "Aplicación lanzada.",
+    "close_application": "Aplicación cerrada.",
+    "create_document": "Documento creado.",
+    "gmail_manager": "Gestión de correo hecha.",
+    "calendar_manager": "Agenda actualizada.",
+}
 
 
 class AssistantService:
@@ -68,6 +101,8 @@ class AssistantService:
             system_diagnostics,
             read_web_page,
             play_specific_music,
+            play_youtube_music,
+            music_control,
             open_terminal_and_run_command,
             read_terminal_screen,
             control_local_browser,
@@ -122,6 +157,8 @@ class AssistantService:
             "system_diagnostics": "Diagnóstico del sistema",
             "read_web_page": "Lee y extrae una página web",
             "play_specific_music": "Reproduce música en Spotify",
+            "play_youtube_music": "Reproduce música o vídeos de YouTube",
+            "music_control": "Control de reproducción (siguiente, pausa, play)",
             "open_terminal_and_run_command": "Abre terminal y ejecuta",
             "read_terminal_screen": "Lee la pantalla de la terminal",
             "control_local_browser": "Controla el navegador (Chromium)",
@@ -155,7 +192,7 @@ class AssistantService:
             {"key": "docs", "label": "Documentos y portapapeles", "icon": "📄",
              "tools": ["create_document", "clipboard_manager"]},
             {"key": "musica", "label": "Música", "icon": "🎵",
-             "tools": ["play_specific_music"]},
+             "tools": ["play_specific_music", "play_youtube_music", "music_control"]},
         ]
         if self._gmail_enabled:
             self._tool_groups.append(
@@ -461,6 +498,49 @@ class AssistantService:
             return False
         return True
 
+    # --- Guardarraíl anti-invención -----------------------------------------------
+    # El modelo a veces afirma en primera persona haber hecho algo sin haber llamado a
+    # ninguna herramienta: pasó de verdad con "Te he abierto la página de YouTube" tras
+    # un fallo de parseo que dejó al motor sin tools. Estas frases se RETIENEN hasta
+    # saber si alguna tool se ejecutó; si no se ejecutó ninguna, no se hablan.
+    _ACTION_CLAIM_RE = re.compile(
+        r"\b("
+        r"(?:te\s+)?(?:lo\s+|la\s+|los\s+|las\s+)?he\s+"
+        r"(?:abierto|lanzado|ejecutado|puesto|enviado|cerrado|guardado|creado|"
+        r"borrado|reproducido|copiado|buscado|instalado|a[ñn]adido|movido|archivado)"
+        r"|ya\s+(?:lo|la|los|las)\s+(?:tienes|he\s+|est[áa])"
+        r"|ya\s+est[áa]\s+(?:abierto|abierta|hecho|hecha|listo|lista|sonando|puesto)"
+        r"|est(?:oy|á)\s+(?:abriendo|reproduci[ée]ndose|ejecut[áa]ndose|son[áa]ndo)"
+        r"|reproduciendo\b"
+        r")",
+        re.IGNORECASE,
+    )
+    # "Hecho." / "Listo." como frase entera SÍ es una confirmación; "de hecho" dentro de
+    # una explicación no lo es, así que no vale buscar la palabra suelta.
+    _BARE_CONFIRM_RE = re.compile(
+        r"^\s*(hecho|listo|ya est[áa]|vale)\s*[.!]?\s*$", re.IGNORECASE
+    )
+    # Lo que se dice cuando el modelo afirmó una acción que nunca se ejecutó.
+    _NO_ACTION_MSG = "No he podido ejecutar la acción. ¿Lo intento otra vez?"
+
+    def _claims_action(self, text: str) -> bool:
+        """¿Esta frase afirma que una acción ya se ha realizado?"""
+        if not text:
+            return False
+        return (self._ACTION_CLAIM_RE.search(text) is not None
+                or self._BARE_CONFIRM_RE.match(text) is not None)
+
+    def _tool_truth(self) -> tuple[bool, bool, bool]:
+        """(se_puede_verificar, se_ejecutó_alguna_tool, el_motor_se_quedó_sin_tools).
+
+        Si el motor no puede informar de las tools ejecutadas, el guardarraíl se
+        desactiva: dar por inventado todo turno sería mucho peor que el problema.
+        """
+        supported = bool(getattr(self.litert, "tool_events_supported", False))
+        used = bool(getattr(self.litert, "last_turn_tools_used", None))
+        disabled = bool(getattr(self.litert, "last_turn_tools_disabled", False))
+        return supported, used, disabled
+
     # Sí/no para confirmar acciones de correo irreversibles (enviar/responder/papelera/
     # archivar). Se comprueba ANTES de llamar al modelo: si hay una acción de Gmail
     # pendiente y el usuario afirma o niega, se resuelve aquí sin pasar por el LLM.
@@ -666,6 +746,11 @@ class AssistantService:
         think_open_sent = False  # apertura <think> sintética para el display (ver más abajo)
         speakable_fed = 0  # chars de texto hablable ya pasados al pipeline de TTS (modelos
         # con razonamiento explícito <think>...</think> en el stream, p.ej. LiteRT)
+        # Frases que afirman una acción y todavía no se pueden dar por buenas. El TTS
+        # habla frase a frase mientras llega el stream, así que comprobar al final no
+        # sirve: la mentira ya se habría oído. Se retienen SOLO estas (respuestas de una
+        # línea), no el resto, para no añadir latencia a las respuestas largas.
+        held_claims: list[str] = []
 
         try:
             # Primera llamada al modelo
@@ -704,10 +789,18 @@ class AssistantService:
                             speakable_fed = len(speakable)
                     if tts_open:
                         sentences, sentence_buffer = self._extract_sentences(sentence_buffer)
+                        supported, tools_used, _ = self._tool_truth()
                         for s in sentences:
                             clean = strip_markdown(s)
-                            if self._is_speakable(clean):
-                                await queue_text.put(clean)
+                            if not self._is_speakable(clean):
+                                continue
+                            # Afirma una acción y todavía no consta ninguna tool
+                            # ejecutada: se retiene hasta el final del stream.
+                            if supported and not tools_used and self._claims_action(clean):
+                                logger.info(f"Afirmación retenida hasta verificar tools: {clean!r}")
+                                held_claims.append(clean)
+                                continue
+                            await queue_text.put(clean)
 
                 # Yield al cliente (sin tool calls). Se conserva el </think> que cierra el
                 # razonamiento: la interfaz lo usa como frontera para mostrar el razonamiento
@@ -723,13 +816,37 @@ class AssistantService:
 
             # Diagnóstico: qué marcadores de razonamiento/tool trae el stream crudo.
             # Sirve para afinar el filtrado de TTS si algún razonamiento se cuela.
+            supported, tools_used, tools_disabled = self._tool_truth()
             logger.info(
-                "TTS markers crudos: think=%s channel=%s tool=%s | head=%r",
+                "TTS markers crudos: think=%s channel=%s tool=%s | tools=%s | head=%r",
                 "<think>" in accumulated_text,
                 ("<|channel>" in accumulated_text or "<channel|>" in accumulated_text),
                 ("call:" in accumulated_text or "<|tool_call>" in accumulated_text),
+                getattr(self.litert, "last_turn_tools_used", None),
                 accumulated_text[:300],
             )
+
+            # Veredicto sobre las afirmaciones retenidas: ya se sabe si alguna tool se
+            # ejecutó de verdad en este turno.
+            fabricated_claim = False
+            if held_claims:
+                if tools_used:
+                    for clean in held_claims:
+                        await queue_text.put(clean)
+                else:
+                    razon = ("el motor se quedó sin herramientas tras fallar el parseo"
+                             if tools_disabled else "el modelo no llamó a ninguna herramienta")
+                    logger.warning(
+                        f"Afirmación inventada descartada ({razon}): {held_claims!r}"
+                    )
+                    fabricated_claim = True
+                    await queue_text.put(self._NO_ACTION_MSG)
+                    yield "\n" + self._NO_ACTION_MSG
+                    # El texto del modelo no se guarda: si la mentira entra en el
+                    # historial, el turno siguiente la imita y confirma sin ni siquiera
+                    # intentar la llamada (pasó tal cual en producción).
+                    accumulated_text = self._NO_ACTION_MSG
+                held_claims = []
 
             # --- Segunda pasada de visión ---
             # Si analyze_screen capturó una imagen, el motor (LLM en GPU, visión en CPU)
@@ -820,18 +937,25 @@ class AssistantService:
                 used_fallback = True
                 logger.info("Respuesta insuficiente. Generando fallback automático...")
                 lower_text = text.lower()
-                
-                # Detectar si el prompt involucra terminal/comandos
-                terminal_indicators = [
-                    "abre", "abrir", "lanza", "ejecuta", "terminal", "comando", "consola",
-                    "dime", "qué", "cuál", "característica", "info", "información",
-                    "versión", "version", "instala", "instalada", "instalado",
-                    "java", "node", "python", "dotnet", "ruby", "go", "rust",
-                    "php", "docker", "git", "npm", "cargo", "pip"
-                ]
-                is_terminal = any(kw in lower_text for kw in terminal_indicators)
-                
-                if is_terminal:
+
+                # Rama de terminal: se decide por la tool que SE EJECUTÓ, no por las
+                # palabras del usuario. Los indicadores de antes incluían "dime" o "qué",
+                # así que cualquier pregunta acababa raspando el panel de tmux y
+                # reportando el resultado de un comando anterior sin relación.
+                tools_run = set(getattr(self.litert, "last_turn_tools_used", None) or ())
+                is_terminal = bool(tools_run & _TERMINAL_TOOL_NAMES)
+
+                # Si no se ejecutó ninguna herramienta, no hay nada que confirmar: las
+                # frases de éxito de más abajo se deducían de las palabras del USUARIO,
+                # así que afirmaban acciones que nunca ocurrieron.
+                if supported and not tools_used:
+                    logger.warning(
+                        "Fallback sin ninguna tool ejecutada: se responde con la verdad "
+                        "en vez de confirmar una acción inexistente."
+                    )
+                    fallback = self._NO_ACTION_MSG
+                    fabricated_claim = True
+                elif is_terminal:
                     yield "⏳ Ejecutando comando en la terminal..."
                     await queue_text.put("Ejecutando comando en la terminal.")
                     await asyncio.sleep(3.0)
@@ -921,31 +1045,31 @@ class AssistantService:
                     except Exception as e:
                         logger.error(f"Error leyendo terminal tras tool calling: {e}")
                         fallback = "Comando ejecutado en la terminal."
-                elif any(kw in lower_text for kw in ["música", "canción", "play", "spotify", "pon"]):
-                    fallback = "Reproduciendo música."
-                elif any(kw in lower_text for kw in ["pantalla", "captura", "ver", "mira"]):
-                    fallback = "Analizando la pantalla."
-                elif any(kw in lower_text for kw in ["busca", "buscar", "investiga", "web"]):
-                    fallback = "Búsqueda web realizada."
-                elif any(kw in lower_text for kw in ["copia", "pegar", "portapapeles"]):
-                    fallback = "Portapapeles actualizado."
-                elif any(kw in lower_text for kw in ["ventana", "cerrar", "enfocar", "workspace"]):
-                    fallback = "Ventanas gestionadas."
                 else:
-                    fallback = "Acción ejecutada correctamente."
-                
+                    # Se describe la tool que se ejecutó, no lo que el usuario dijo:
+                    # antes "pon" bastaba para anunciar "Reproduciendo música" aunque
+                    # la tool que hubiera corrido fuese otra (o ninguna).
+                    fallback = next(
+                        (msg for name, msg in _FALLBACK_BY_TOOL.items() if name in tools_run),
+                        "Acción ejecutada correctamente.",
+                    )
+
                 accumulated_text = fallback
                 yield fallback
                 await queue_text.put(fallback)
 
             # Encolar lo que quede en el buffer. Si usamos fallback, el residuo es basura
             # de la tool call fugada (el fallback ya es la respuesta hablada): descartarlo.
-            if sentence_buffer.strip() and not used_fallback:
+            # Con una afirmación inventada descartada, el residuo es parte de esa misma
+            # mentira: tampoco se habla.
+            if sentence_buffer.strip() and not used_fallback and not fabricated_claim:
                 clean = strip_markdown(sentence_buffer)
                 if self._is_speakable(clean):
                     await queue_text.put(clean)
 
-            # Guardar respuesta final acumulada en el historial
+            # Guardar en el historial lo REALMENTE dicho. Si el guardarraíl sustituyó
+            # una afirmación inventada, `accumulated_text` ya es la versión honesta:
+            # meter la mentira aquí hacía que el turno siguiente la imitase.
             cleaned_final = self._clean_tool_calls(accumulated_text)
             conversation_history.append(ChatMessage(role="assistant", content=cleaned_final))
 
@@ -1026,10 +1150,15 @@ class AssistantService:
         # Si el texto visible está vacío pero se ejecutaron tools, generar fallback
         if not visible_text and response_text:
             import re
+            supported, tools_used, _ = self._tool_truth()
             tool_calls = re.findall(r'call:(\w+)\{', response_text)
             if tool_calls:
                 tool_names = ", ".join(sorted(set(tool_calls)))
                 visible_text = f"He ejecutado: {tool_names}."
+            elif supported and not tools_used:
+                # Sin tool call en el texto y sin ninguna ejecutada: "Acción ejecutada
+                # correctamente" era una invención pura.
+                visible_text = self._NO_ACTION_MSG
             else:
                 visible_text = "Acción ejecutada correctamente."
 

@@ -330,6 +330,12 @@ class ExLlamaEngine:
             self._headers["Authorization"] = f"Bearer {settings.EXLLAMA_API_KEY}"
         self._client = httpx.AsyncClient(timeout=self.timeout, headers=self._headers)
         self._ready = self._ping()
+        # Verdad de campo del turno: qué herramientas se ejecutaron realmente. Aquí el
+        # bucle de tools es nuestro, así que lo sabemos con certeza. Lo consume el
+        # guardarraíl anti-invención de assistant_service.
+        self.last_turn_tools_used: list[str] = []
+        self.last_turn_tools_disabled: bool = False
+        self.tool_events_supported: bool = True
 
     # ---- contrato: salud / metadatos ----
     @property
@@ -437,6 +443,7 @@ class ExLlamaEngine:
                 result = await fn(**args)
             else:
                 result = await asyncio.to_thread(fn, **args)
+            self.last_turn_tools_used.append(name)
             return str(result)
         except Exception as e:  # noqa: BLE001
             logger.error(f"Error ejecutando tool {name}({args}): {e}", exc_info=True)
@@ -455,6 +462,9 @@ class ExLlamaEngine:
             yield "Error: Motor ExLlama no disponible."
             return
         self._ready = True
+
+        self.last_turn_tools_used.clear()
+        self.last_turn_tools_disabled = False
 
         tool_schemas = [callable_to_schema(t) for t in tools] if tools else None
         tool_map = {t.__name__: t for t in (tools or [])}

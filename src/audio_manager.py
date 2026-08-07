@@ -302,7 +302,39 @@ class AudioManager:
                     stderr=subprocess.DEVNULL
                 )
                 await resume_proc.wait()
+                # Chromium acepta `pause` por MPRIS pero NO reanuda con `play`: exige un
+                # gesto de usuario. Sin esto, la música de YouTube se queda muerta en
+                # cuanto Luka habla una vez. Se reanuda por CDP, que sí cuenta como gesto.
+                if player.split(".")[0] == "chromium" and not await self._is_playing(player):
+                    await self._resume_youtube_via_cdp(player)
+                    continue
                 logger.info(f"Reproductor '{player}' reanudado.")
             except Exception as e:
                 logger.error(f"Error reanudando reproductor '{player}': {e}")
+
+    async def _is_playing(self, player: str) -> bool:
+        """¿Está este reproductor MPRIS en estado Playing?"""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "playerctl", "-p", player, "status",
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            )
+            out, _ = await proc.communicate()
+            return "Playing" in out.decode()
+        except Exception:
+            return False
+
+    async def _resume_youtube_via_cdp(self, player: str) -> None:
+        """Reanuda la pestaña de YouTube por CDP (el único camino que Chromium acepta)."""
+        try:
+            from playwright.async_api import async_playwright
+
+            from src.browser import get_youtube_page, youtube_control
+
+            async with async_playwright() as p:
+                page = await get_youtube_page(p)
+                resultado = await youtube_control(page, "play")
+            logger.info(f"Reproductor '{player}' reanudado vía CDP: {resultado}")
+        except Exception as e:
+            logger.warning(f"No se pudo reanudar '{player}' vía CDP: {e}")
 

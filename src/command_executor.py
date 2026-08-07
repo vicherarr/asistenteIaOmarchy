@@ -39,7 +39,69 @@ def explain_exit_code(code: int) -> str:
     return f"El comando falló con un código de error no estándar ({code})."
 
 
+# --- Control de reproducción -------------------------------------------------
+# Vocabulario hablado → acción de playerctl. Vive a nivel de módulo porque lo usan
+# tanto music_control como el guard de play_specific_music (el modelo a veces manda
+# "siguiente" como si fuera una canción que buscar).
+MUSIC_CONTROL_MAP = {
+    "siguiente": "next",
+    "siguiente canción": "next",
+    "siguiente cancion": "next",
+    "salta": "next",
+    "next": "next",
+    "anterior": "previous",
+    "canción anterior": "previous",
+    "cancion anterior": "previous",
+    "atrás": "previous",
+    "atras": "previous",
+    "previous": "previous",
+    "pausa": "pause",
+    "pausar": "pause",
+    "para": "pause",
+    "pause": "pause",
+    "play": "play",
+    "reanuda": "play",
+    "continúa": "play",
+    "continua": "play",
+    "stop": "stop",
+    "detén": "stop",
+    "deten": "stop",
+}
 
+PLAYERCTL_ACTIONS = {"next", "previous", "pause", "play", "stop", "play-pause"}
+
+# El propio asistente aparece en `playerctl -l`; nunca es el reproductor de música
+# que el usuario quiere controlar.
+_IGNORED_PLAYERS = {"asistenteia"}
+
+
+async def _list_mpris_players() -> list[str]:
+    """Reproductores MPRIS disponibles, excluyendo el propio asistente."""
+    executor = CommandExecutor()
+    ok, out = await executor.execute("playerctl --list-all")
+    if not ok:
+        return []
+    return [
+        p.strip() for p in out.splitlines()
+        if p.strip() and p.strip().split(".")[0] not in _IGNORED_PLAYERS
+    ]
+
+
+async def _active_player() -> Optional[str]:
+    """El reproductor que está sonando; si ninguno suena, el primero disponible.
+
+    Sustituye al `--player=spotify` que estaba clavado en el código: con música en
+    YouTube (Chromium) o en cualquier otro reproductor, hablarle a Spotify no hace nada.
+    """
+    players = await _list_mpris_players()
+    if not players:
+        return None
+    executor = CommandExecutor()
+    for player in players:
+        ok, status = await executor.execute(f"playerctl --player={player} status")
+        if ok and "Playing" in status:
+            return player
+    return players[0]
 
 
 class CommandExecutorError(Exception):
@@ -213,14 +275,20 @@ async def execute_system_command(command: str) -> str:
     """
     command = _sanitize_tool_args(command)
 
-    # Normalizar comandos playerctl sin --player para que siempre apunten a Spotify
-    import re as _re
-    _playerctl_actions = {"next", "previous", "pause", "play", "stop", "play-pause"}
-    _pc_match = _re.match(r'^playerctl\s+(' + '|'.join(_playerctl_actions) + r')$', command.strip())
+    # Normalizar comandos playerctl sin --player para que apunten al reproductor que
+    # está sonando. Antes se forzaba Spotify, lo que dejaba muerto el control cuando la
+    # música venía de otro sitio (p.ej. YouTube en el navegador).
+    _pc_match = re.match(
+        r'^playerctl\s+(' + '|'.join(PLAYERCTL_ACTIONS) + r')$', command.strip()
+    )
     if _pc_match:
         action = _pc_match.group(1)
-        command = f"playerctl --player=spotify {action}"
-        logger.info(f"playerctl normalizado a: {command}")
+        player = await _active_player()
+        if player:
+            command = f"playerctl --player={player} {action}"
+            logger.info(f"playerctl normalizado a: {command}")
+        else:
+            return "No hay ningún reproductor de música activo."
 
     logger.info(f"Redirigiendo execute_system_command a terminal visible: {command}")
     return await open_terminal_and_run_command(command)
@@ -360,30 +428,12 @@ async def play_specific_music(query: str) -> str:
     query = _sanitize_tool_args(query).strip().lower()
 
     # Guard: interceptar palabras de control de reproducción mal enrutadas
-    _CONTROL_MAP = {
-        "siguiente": "next",
-        "siguiente canción": "next",
-        "next": "next",
-        "anterior": "previous",
-        "canción anterior": "previous",
-        "atrás": "previous",
-        "atras": "previous",
-        "previous": "previous",
-        "pausa": "pause",
-        "pausar": "pause",
-        "para": "pause",
-        "pause": "pause",
-        "play": "play",
-        "reanuda": "play",
-        "continúa": "play",
-        "continua": "play",
-    }
-    if query in _CONTROL_MAP:
-        action = _CONTROL_MAP[query]
+    if query in MUSIC_CONTROL_MAP:
+        action = MUSIC_CONTROL_MAP[query]
         logger.warning(
-            f"play_specific_music recibió palabra de control '{query}' → redirigiendo a playerctl {action}"
+            f"play_specific_music recibió palabra de control '{query}' → redirigiendo a music_control {action}"
         )
-        return await execute_system_command(f"playerctl --player=spotify {action}")
+        return await music_control(action)
 
     # Buscamos de forma muy abierta
     search_query = f"Spotify artist track album {query}"
@@ -466,6 +516,101 @@ async def play_specific_music(query: str) -> str:
             return f"He abierto Spotify con '{query}', pero es posible que tengas que darle al play manualmente ({msg})."
     except Exception as e:
         return f"Error en el flujo de música: {e}"
+
+
+async def play_youtube_music(query: str) -> str:
+    """Reproduce música o un vídeo de YouTube en el navegador visible.
+
+    Úsala cuando el usuario pida música "en YouTube" o pida ver un vídeo concreto.
+    Abre la mezcla (radio) del tema para que haya una cola y la música siga sola.
+    Para música en Spotify usa play_specific_music.
+
+    Args:
+        query: artista, canción o vídeo a buscar. Ej: "Fear of the Dark de Iron Maiden".
+    """
+    query = _sanitize_tool_args(query).strip()
+    if not query:
+        return "Error: dime qué quieres escuchar en YouTube."
+
+    # Palabras de control mal enrutadas: no son algo que buscar.
+    if query.lower() in MUSIC_CONTROL_MAP:
+        return await music_control(MUSIC_CONTROL_MAP[query.lower()])
+
+    from src.browser import ensure_browser, get_youtube_page, youtube_play
+    from playwright.async_api import async_playwright
+
+    error = await ensure_browser()
+    if error:
+        return error
+
+    try:
+        async with async_playwright() as p:
+            page = await get_youtube_page(p)
+            return await youtube_play(page, query)
+    except Exception as e:
+        logger.error(f"Excepción en play_youtube_music: {e}")
+        return f"No he podido reproducir '{query}' en YouTube: {e}"
+
+
+async def music_control(action: str) -> str:
+    """Controla la reproducción de música: siguiente, anterior, pausa, play o stop.
+
+    Funciona con cualquier reproductor (Spotify, YouTube en el navegador...): busca el
+    que esté sonando. Úsala para "siguiente", "pausa", "para", "play", "reanuda".
+
+    Args:
+        action: una de — next, previous, pause, play, stop. También acepta las palabras
+            en español ("siguiente", "anterior", "pausa", "reanuda").
+    """
+    action = _sanitize_tool_args(action).strip().lower()
+    action = MUSIC_CONTROL_MAP.get(action, action)
+    if action not in PLAYERCTL_ACTIONS:
+        return (f"Error: '{action}' no es una acción de reproducción. "
+                "Usa next, previous, pause, play o stop.")
+
+    player = await _active_player()
+    if not player:
+        return "No hay nada reproduciéndose."
+
+    # Chromium publica MPRIS solo a medias: `status` y `pause` funcionan, pero `play` no
+    # reanuda (exige gesto de usuario) y `next` no existe en su sesión de medios
+    # (comprobado en este equipo). Para la música de YouTube se controla la pestaña por
+    # CDP con los atajos de la propia web, que sí funcionan siempre.
+    if player.startswith("chromium"):
+        try:
+            from src.browser import get_youtube_page, youtube_control
+            from playwright.async_api import async_playwright
+            async with async_playwright() as p:
+                page = await get_youtube_page(p)
+                return await youtube_control(page, action)
+        except Exception as e:
+            logger.error(f"Control por CDP de YouTube falló ({action}): {e}")
+            # Se sigue por playerctl: para 'pause' sí suele funcionar.
+
+    executor = CommandExecutor()
+    ok, out = await executor.execute(f"playerctl --player={player} {action}")
+
+    if not ok:
+        return f"No he podido {action} en {player}: {out.strip() or 'sin detalle'}."
+
+    # Verificar el efecto real en lugar de dar por bueno el comando.
+    await asyncio.sleep(0.6)
+    _, status = await executor.execute(f"playerctl --player={player} status")
+    status = status.strip()
+
+    if action in ("pause", "stop"):
+        if "Playing" in status:
+            return f"He mandado {action} a {player} pero sigue sonando."
+        return "Música pausada." if action == "pause" else "Música detenida."
+
+    if action == "play" and "Playing" not in status:
+        return f"He mandado play a {player} pero no ha arrancado."
+
+    if action == "next":
+        return "Siguiente canción."
+    if action == "previous":
+        return "Canción anterior."
+    return "Reproducción reanudada."
 
 
 

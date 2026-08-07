@@ -58,9 +58,15 @@ class Settings(BaseSettings):
     LITERT_PERSISTENT_CONVERSATION: bool = False
 
     # --- Fase 4: tools nativas y event handler ---
-    # Emite eventos de tool (inicio/fin) al log y permite gating de comandos.
-    # EXPERIMENTAL: por defecto off (automatic_tool_calling ya funciona sin él).
+    # Loguea cada llamada a herramienta al detalle (nombre + argumentos). El handler
+    # se engancha SIEMPRE (es la única forma de saber qué se ejecutó de verdad); este
+    # flag solo controla el nivel de log.
     LITERT_TOOL_EVENTS: bool = False
+
+    # Decodificación restringida a la gramática de tool calls: evita los
+    # "Failed to parse FC tool calls" que dejan al modelo sin herramientas.
+    # EXPERIMENTAL: medir antes con scripts/spike-constrained-decoding.py.
+    LITERT_CONSTRAINED_DECODING: bool = False
 
     # Nota Fase 5: la visión en "una sola pasada" para analyze_screen es inviable por
     # reentrancia del motor (no se puede invocar inferencia desde dentro de un tool);

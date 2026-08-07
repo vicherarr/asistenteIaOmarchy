@@ -26,19 +26,33 @@ class _LoggingToolEventHandler(litert_lm.ToolEventHandler):
       (devolver False la bloquea). Por defecto aprueba todo salvo lo que esté
       en _DANGEROUS_TOOLS.
     - process_tool_response: punto para inspeccionar/transformar la salida.
-    Sirve para emitir al GUI "ejecutando herramienta X" y para seguridad.
+
+    Además de observar, es la ÚNICA fuente de verdad sobre si una herramienta se
+    ejecutó de verdad en el turno: con LiteRT el motor las invoca por dentro y la
+    aplicación solo ve texto. Sin este registro no hay forma de distinguir "lo he
+    abierto" de una invención del modelo, así que el handler se engancha siempre
+    (el flag LITERT_TOOL_EVENTS solo controla el detalle del log).
     """
+
+    def __init__(self, sink: Optional[list] = None, verbose: bool = False):
+        super().__init__()
+        # Lista compartida con el cliente: se le añaden los nombres ejecutados.
+        self._sink = sink if sink is not None else []
+        self._verbose = verbose
 
     def approve_tool_call(self, tool_call: dict) -> bool:
         name = (tool_call or {}).get("name", "?")
-        logger.info(f"[tool] → llamada: {name}  args={(tool_call or {}).get('arguments', {})}")
+        if self._verbose:
+            logger.info(f"[tool] → llamada: {name}  args={(tool_call or {}).get('arguments', {})}")
         if name in _DANGEROUS_TOOLS:
             logger.warning(f"[tool] denegada por política: {name}")
             return False
+        self._sink.append(name)
         return True
 
     def process_tool_response(self, tool_response: dict) -> dict:
-        logger.info(f"[tool] ← respuesta de {(tool_response or {}).get('name', '?')}")
+        if self._verbose:
+            logger.info(f"[tool] ← respuesta de {(tool_response or {}).get('name', '?')}")
         return tool_response
 
 
@@ -56,8 +70,33 @@ class LiteRTClient:
         # Fase 3: conversación persistente (KV-cache reutilizable entre turnos)
         self._persistent_conv = None
         self._persistent_sig = None  # (system_prompt, tuple(tool_names)) para invalidar
+        # Verdad de campo del turno en curso, para que la capa de voz no pueda afirmar
+        # acciones que no ocurrieron. Las rellena el ToolEventHandler / el reintento.
+        self.last_turn_tools_used: list[str] = []
+        self.last_turn_tools_disabled: bool = False
+        # ¿Acepta esta build `tool_event_handler`? Si no, last_turn_tools_used estaría
+        # siempre vacía y el guardarraíl saltaría en TODOS los turnos: hay que saberlo.
+        self.tool_events_supported: bool = False
         self._load_engine()
         self._log_capabilities()
+        self._detect_tool_events_support()
+
+    def _detect_tool_events_support(self) -> None:
+        """Comprueba si el motor instalado acepta un tool_event_handler."""
+        if not self.engine:
+            return
+        try:
+            import inspect
+            params = inspect.signature(self.engine.create_conversation).parameters
+            self.tool_events_supported = "tool_event_handler" in params
+        except (ValueError, TypeError):
+            self.tool_events_supported = False
+        if not self.tool_events_supported:
+            logger.warning(
+                "El motor no acepta tool_event_handler: no se puede saber qué "
+                "herramientas se ejecutan, así que el guardarraíl anti-invención "
+                "queda desactivado."
+            )
 
     def _log_capabilities(self):
         """Loguea las capacidades reales del motor (Fase 0): ventana de contexto, EOS…"""
@@ -129,9 +168,19 @@ class LiteRTClient:
             sampler = self._sampler_config()
         if sampler is not None:
             kwargs["sampler_config"] = sampler
-        if settings.LITERT_TOOL_EVENTS and tools:
-            handler = _LoggingToolEventHandler()
-            kwargs["tool_event_handler"] = handler
+        if tools:
+            # Siempre, no solo con LITERT_TOOL_EVENTS: el registro de qué se ejecutó es
+            # lo que impide que el asistente afirme acciones que no ha hecho. El flag
+            # solo decide si además se loguea cada llamada al detalle.
+            kwargs["tool_event_handler"] = _LoggingToolEventHandler(
+                sink=self.last_turn_tools_used,
+                verbose=settings.LITERT_TOOL_EVENTS,
+            )
+        if settings.LITERT_CONSTRAINED_DECODING and tools:
+            # Fuerza al modelo a emitir tool calls sintácticamente válidas (la causa
+            # raíz de los "Failed to parse FC tool calls"). Off por defecto: ver
+            # scripts/spike-constrained-decoding.py.
+            kwargs["enable_constrained_decoding"] = True
         try:
             import inspect
             params = inspect.signature(self.engine.create_conversation).parameters
@@ -325,6 +374,13 @@ class LiteRTClient:
             yield "Error: Motor LiteRT no inicializado."
             return
 
+        # Reset de la verdad de campo del turno. `clear()` en vez de reasignar: el
+        # ToolEventHandler de la conversación persistente guarda una referencia a ESTA
+        # lista y se crea una sola vez, así que rebindearla lo dejaría escribiendo en
+        # una lista huérfana y el guardarraíl no vería nada nunca.
+        self.last_turn_tools_used.clear()
+        self.last_turn_tools_disabled = False
+
         # Wrapper para ejecutar herramientas asíncronas de forma síncrona dentro de LiteRT
         sync_tools = []
         if tools:
@@ -402,9 +458,16 @@ class LiteRTClient:
                     "content": content_parts
                 }
 
-                # Intentar con herramientas primero; si falla por tool call parsing, reintentar sin ellas
-                tools_to_use = sync_tools
-                for attempt in range(2):
+                # El fallo de gramática al parsear una tool call es estocástico: casi
+                # siempre sale bien al reintentarlo tal cual. Por eso se insiste CON
+                # herramientas antes de rendirse. Quitarlas (último intento) deja al
+                # modelo incapaz de actuar pero igual de dispuesto a decir "ya está
+                # hecho", así que ese caso se marca para que la capa de voz no lo hable.
+                attempts = [sync_tools, sync_tools, None]
+                emitted_any_text = False
+                for attempt, tools_to_use in enumerate(attempts):
+                    if tools_to_use is None:
+                        self.last_turn_tools_disabled = True
                     try:
                         with self._conversation_ctx(system_prompt, formatted_messages, tools_to_use, image=bool(image_path)) as conversation:
                             stream = conversation.send_message_async(current_message)
@@ -419,14 +482,24 @@ class LiteRTClient:
                                 
                                 text_to_send = "".join(text_parts).replace("\u2581", " ")
                                 if text_to_send:
+                                    emitted_any_text = True
                                     loop.call_soon_threadsafe(queue.put_nowait, ("text", text_to_send))
                             break  # Éxito
                     except Exception as e:
                         err_str = str(e)
                         if "Failed to parse tool calls" in err_str or "INVALID_ARGUMENT" in err_str:
-                            if attempt == 0:
-                                logger.warning(f"Tool call parsing failed ({e}), retrying without tools...", exc_info=True)
-                                tools_to_use = None
+                            # Solo se reintenta si el intento fallido no llegó a emitir
+                            # texto: si ya se habló algo, repetir duplicaría la respuesta.
+                            if attempt < len(attempts) - 1 and not emitted_any_text:
+                                siguiente = (
+                                    "reintentando con herramientas"
+                                    if attempts[attempt + 1] is not None
+                                    else "reintentando SIN herramientas (último recurso)"
+                                )
+                                logger.warning(
+                                    f"Tool call parsing failed ({e}), {siguiente}...",
+                                    exc_info=True,
+                                )
                                 continue
                         raise
 

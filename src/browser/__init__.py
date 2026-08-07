@@ -12,6 +12,12 @@ from src.browser.navigation import (
 from src.browser.clip import browser_clip
 from src.browser.research import browser_research
 from src.browser.translate import browser_translate
+from src.browser.youtube import (
+    get_youtube_page,
+    youtube_control,
+    youtube_play,
+    youtube_search,
+)
 
 __all__ = [
     "ensure_browser",
@@ -25,4 +31,8 @@ __all__ = [
     "browser_clip",
     "browser_research",
     "browser_translate",
+    "get_youtube_page",
+    "youtube_control",
+    "youtube_play",
+    "youtube_search",
 ]
