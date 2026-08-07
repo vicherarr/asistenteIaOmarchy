@@ -18,6 +18,7 @@ Uso (el servicio tiene el modelo en la GPU, hay que pararlo):
       systemctl --user start asistenteia.service
 """
 
+import argparse
 import asyncio
 import subprocess
 import sys
@@ -57,6 +58,11 @@ CASOS = [
 
 # El fallo que se escapó era INTERMITENTE: pasó el smoke test a la primera y falló las
 # dos veces siguientes con voz real. Una sola pasada no prueba nada.
+#
+# OJO: el motor LiteRT segfaultea al encadenar varios turnos en el mismo proceso. No es
+# de estos cambios —el servicio lleva cayéndose así desde antes (varios SIGSEGV el 6 de
+# agosto)—, pero obliga a lanzar UN TURNO POR PROCESO para poder medir. De eso se
+# encarga scripts/smoke-tools.sh, que llama aquí con --caso y --intento.
 REPETICIONES = 3
 
 # Respuesta demasiado corta = el muñón que delataba el fallo.
@@ -75,7 +81,7 @@ def servicio_activo() -> bool:
         return False
 
 
-async def main() -> int:
+async def main(args) -> int:
     if servicio_activo():
         decir("El servicio asistenteia está ACTIVO y ocupa la VRAM con el modelo.")
         decir("Párualo, ejecuta esto y arráncalo otra vez:\n")
@@ -122,11 +128,17 @@ async def main() -> int:
         decir("El motor no cargó.")
         return 1
 
+    # Con --caso se ejecuta un ÚNICO turno y se sale: así un segfault del motor se lleva
+    # por delante ese turno y no el resto de la medición.
+    casos = CASOS if args.caso is None else [CASOS[args.caso]]
+    repeticiones = 1 if args.caso is not None else REPETICIONES
+
     fallos = 0
     total = 0
-    for pregunta, pista in CASOS:
-        decir(f"\n─── {pregunta}   ({pista})")
-        for intento in range(1, REPETICIONES + 1):
+    for pregunta, pista in casos:
+        if args.caso is None:
+            decir(f"\n─── {pregunta}   ({pista})")
+        for intento in range(1, repeticiones + 1):
             total += 1
             texto = ""
             async for chunk in client.chat_stream(
@@ -159,12 +171,16 @@ async def main() -> int:
                 )
 
             marca = "❌" if problemas else "✅"
-            decir(f"  {marca} intento {intento}/{REPETICIONES} · tools={usadas or 'ninguna'} "
-                  f"· {len(texto)} chars")
+            etiqueta = (f"intento {args.intento}" if args.caso is not None
+                        else f"intento {intento}/{repeticiones}")
+            decir(f"  {marca} {etiqueta} · tools={usadas or 'ninguna'} · {len(texto)} chars")
             decir(f"       {texto[:160]!r}")
             if problemas:
                 fallos += 1
                 decir(f"       → {'; '.join(problemas)}")
+
+    if args.caso is not None:
+        return 1 if fallos else 0
 
     decir("\n" + "=" * 50)
     if fallos:
@@ -175,14 +191,29 @@ async def main() -> int:
 
 
 if __name__ == "__main__":
-    INFORME.write_text("", encoding="utf-8")
+    parser = argparse.ArgumentParser(description="Smoke test del tool calling.")
+    parser.add_argument("--caso", type=int, default=None,
+                        help="Ejecuta SOLO este caso (índice) una vez y sale. Lo usa "
+                             "smoke-tools.sh para aislar cada turno en su propio "
+                             "proceso, porque el motor segfaultea al encadenarlos.")
+    parser.add_argument("--intento", default="1", help="Etiqueta del intento, solo para el informe.")
+    parser.add_argument("--listar", action="store_true", help="Imprime cuántos casos hay y sale.")
+    args = parser.parse_args()
+
+    if args.listar:
+        print(len(CASOS))
+        sys.exit(0)
+
+    if args.caso is None:
+        INFORME.write_text("", encoding="utf-8")
     try:
-        codigo = asyncio.run(main())
+        codigo = asyncio.run(main(args))
     except Exception:
         # El traceback iría a stderr, que se pierde entre el ruido de LiteRT (o se
         # descarta con 2>/dev/null). Va al informe y a stdout, como todo lo demás.
         decir("\nEL SCRIPT PETÓ:")
         decir(traceback.format_exc())
         codigo = 1
-    decir(f"\n(copia de estos resultados en {INFORME})")
+    if args.caso is None:
+        decir(f"\n(copia de estos resultados en {INFORME})")
     sys.exit(codigo)
