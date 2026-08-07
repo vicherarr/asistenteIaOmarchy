@@ -76,6 +76,13 @@ async def main() -> int:
         dt.create_document, ct.analyze_camera, ct.show_camera_photo,
     ]
 
+    # Se reutiliza el parser del motor ExLlama: rescata llamadas 'peladas' con AST y
+    # paréntesis equilibrados, y solo acepta nombres de tools reales para no confundir
+    # prosa con una llamada.
+    from src.engines.exllama_engine import _extract_bare_tool_calls
+
+    nombres_de_tools = {t.__name__ for t in tools}
+
     prompt_path = settings.PROJECT_ROOT / "config" / "system_prompt.txt"
     system_prompt = prompt_path.read_text(encoding="utf-8")
 
@@ -108,6 +115,14 @@ async def main() -> int:
             problemas.append("hay tools registradas como '?'")
         if client.last_turn_tools_disabled:
             problemas.append("el motor se quedó SIN herramientas (parse error)")
+        # El modelo a veces ESCRIBE la llamada en vez de ejecutarla
+        # (execute_system_command("date") como texto). Sin esta comprobación el caso
+        # pasaba por bueno solo por tener longitud suficiente.
+        fugadas = _extract_bare_tool_calls(texto, nombres_de_tools)
+        if fugadas:
+            problemas.append(
+                f"tool call fugada como texto: {', '.join(c['name'] for c in fugadas)}"
+            )
 
         if problemas:
             fallos += 1
