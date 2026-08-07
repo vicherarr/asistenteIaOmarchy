@@ -16,6 +16,25 @@ Qué mide, para OFF y para ON:
   - nº de llamadas en que el modelo eligió la tool correcta
   - latencia media hasta terminar la respuesta
 
+RESULTADO MEDIDO (2026-08-07, Gemma E4B en GPU, n=10):
+
+                              OFF         ON
+    parse errors             0/10       0/10
+    llamó a la tool          8/10       8/10
+    latencia media (s)       1.35       1.87
+
+CONCLUSIÓN: se queda en False. No se pudo provocar ni un fallo de parseo en 10
+intentos (es esporádico: se ve del orden de una vez al día de uso real), pero el
+coste de latencia es constante y grande: +38%, consistente prompt a prompt. En un
+asistente de voz medio segundo en CADA turno se nota siempre, mientras que el fallo
+que evitaría es raro y ya está cubierto: litert_client reintenta con herramientas y,
+si aun así se queda sin ellas, el guardarraíl de assistant_service impide que el
+modelo afirme algo que no hizo. Cambiar latencia segura por un fallo raro y ya
+mitigado no sale a cuenta.
+
+Merecería la pena reabrirlo si los parse errors se volvieran frecuentes (varios al
+día) o si una versión futura de litert_lm abarata la decodificación restringida.
+
 Uso:
     venv/bin/python scripts/spike-constrained-decoding.py           # 10 iteraciones
     venv/bin/python scripts/spike-constrained-decoding.py -n 20

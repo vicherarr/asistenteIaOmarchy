@@ -65,7 +65,10 @@ class Settings(BaseSettings):
 
     # Decodificación restringida a la gramática de tool calls: evita los
     # "Failed to parse FC tool calls" que dejan al modelo sin herramientas.
-    # EXPERIMENTAL: medir antes con scripts/spike-constrained-decoding.py.
+    # MEDIDO (2026-08-07, ver scripts/spike-constrained-decoding.py): cuesta +38% de
+    # latencia en cada turno (1.35s → 1.87s) y no se logró provocar ni un fallo en 10
+    # intentos. Se queda en False: el fallo es esporádico y ya lo cubren el reintento
+    # con herramientas y el guardarraíl anti-invención.
     LITERT_CONSTRAINED_DECODING: bool = False
 
     # Nota Fase 5: la visión en "una sola pasada" para analyze_screen es inviable por
