@@ -26,6 +26,7 @@ Ojo: carga el modelo en GPU, así que conviene parar el servicio antes
 
 import argparse
 import statistics
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -35,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import litert_lm  # noqa: E402
 
 from src.config import settings  # noqa: E402
+from src.litert_client import LiteRTClient  # noqa: E402
 
 # Prompts que en producción llevan al modelo a una tool de varios argumentos, que es
 # donde revienta la gramática.
@@ -120,10 +122,35 @@ def medir(engine, iteraciones: int, constrained: bool) -> dict:
     }
 
 
+def servicio_activo() -> bool:
+    """¿Está el servicio corriendo? Si lo está, tiene el modelo en VRAM y no cabe otro."""
+    try:
+        out = subprocess.run(
+            ["systemctl", "--user", "is-active", "asistenteia.service"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return out.stdout.strip() == "active"
+    except Exception:
+        return False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("-n", "--iteraciones", type=int, default=10)
+    parser.add_argument("--igualmente", action="store_true",
+                        help="Ejecuta aunque el servicio esté activo (probablemente falle por VRAM).")
     args = parser.parse_args()
+
+    if servicio_activo() and not args.igualmente:
+        print("El servicio asistenteia está ACTIVO y tiene el modelo cargado en la GPU.")
+        print("No hay VRAM para una segunda copia. Párualo, ejecuta el spike y arráncalo:")
+        print()
+        print("  systemctl --user stop asistenteia.service")
+        print(f"  venv/bin/python scripts/spike-constrained-decoding.py -n {args.iteraciones}")
+        print("  systemctl --user start asistenteia.service")
+        print()
+        print("(o pasa --igualmente para intentarlo de todos modos)")
+        return 1
 
     modelo = Path(settings.LITERT_MODEL_PATH)
     if not modelo.is_absolute():
@@ -132,8 +159,17 @@ def main() -> int:
         print(f"No encuentro el modelo en {modelo}")
         return 1
 
+    # Se carga con LiteRTClient en vez de construir el Engine a mano: él ya aplica la
+    # estrategia real de backend (GPU para el LLM, CPU para visión/audio) y las
+    # optimizaciones del .env. Duplicar eso aquí mediría un motor distinto al de
+    # producción, que es justo lo que no queremos.
     print(f"Cargando {modelo.name} (backend {settings.LITERT_BACKEND})...")
-    engine = litert_lm.Engine(model_path=str(modelo), backend=settings.LITERT_BACKEND)
+    client = LiteRTClient()
+    if not client.engine:
+        print("El motor no se pudo cargar. ¿Está el servicio corriendo y ocupando la VRAM?")
+        print("Párualo con:  systemctl --user stop asistenteia.service")
+        return 1
+    engine = client.engine
 
     off = medir(engine, args.iteraciones, constrained=False)
     on = medir(engine, args.iteraciones, constrained=True)
