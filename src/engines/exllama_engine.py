@@ -476,17 +476,6 @@ class ExLlamaEngine:
         fn = tool_map.get(name)
         if not fn:
             return f"Error: herramienta desconocida '{name}'."
-        # Aviso de que la herramienta ARRANCA. Con un modelo remoto, un turno con tool
-        # son dos idas y vueltas por la red más lo que tarde la tool: veinte segundos de
-        # silencio en los que el usuario cree que se ha colgado (y el satélite ESP32 da
-        # el turno por perdido a los 30 s). Quien lo habla es assistant_service; aquí
-        # solo se avisa, y si nadie escucha no pasa nada.
-        cb = getattr(self, "on_tool_start", None)
-        if cb:
-            try:
-                cb(name)
-            except Exception as e:  # noqa: BLE001 — avisar nunca puede tumbar el turno
-                logger.warning(f"on_tool_start falló para {name}: {e}")
         try:
             if inspect.iscoroutinefunction(fn):
                 result = await fn(**args)

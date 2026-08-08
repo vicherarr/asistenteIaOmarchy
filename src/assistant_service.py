@@ -50,31 +50,6 @@ _TERMINAL_TOOL_NAMES = frozenset({
     "interrupt_terminal_command",
 })
 
-# Lo que se dice EN CUANTO arranca una herramienta lenta, sin esperar al modelo.
-#
-# Solo están las que tardan de verdad (red, captura, navegador). Con un motor en la nube
-# un turno con herramienta son dos idas y vueltas más la propia tool: medido, veinte
-# segundos de silencio absoluto antes de la primera palabra. El usuario da por hecho que
-# se ha colgado, y el satélite ESP32 literalmente lo da por perdido (THINKING_TIMEOUT_MS,
-# 30 s) y tira el enlace, cancelando el turno entero.
-#
-# Estas frases NO pasan por el guardarraíl anti-invención, y es correcto: no las dice el
-# modelo, las decimos nosotros al ver que la herramienta arranca. Van en gerundio a
-# propósito ("Mirando…", no "He mirado"): anuncian, no afirman que esté hecho.
-_TOOL_START_PHRASES = {
-    "analyze_camera": "Mirando por la cámara.",
-    "analyze_screen": "Déjame ver la pantalla.",
-    "analyze_clipboard_image": "Mirando la imagen.",
-    "web_search": "Buscando en internet.",
-    "read_web_page": "Leyendo la página.",
-    "control_local_browser": "Voy al navegador.",
-    "play_youtube_music": "Poniendo la música.",
-    "play_specific_music": "Poniendo la música.",
-    "gmail_manager": "Mirando el correo.",
-    "calendar_manager": "Mirando la agenda.",
-    "create_document": "Escribiendo el documento.",
-}
-
 # Frase de respaldo cuando el modelo ejecutó una tool pero su texto quedó inservible
 # (residuo de una tool call fugada). Se elige por la tool que realmente corrió.
 _FALLBACK_BY_TOOL = {
@@ -789,24 +764,6 @@ class AssistantService:
         # línea), no el resto, para no añadir latencia a las respuestas largas.
         held_claims: list[str] = []
 
-        # Aviso hablado en cuanto arranca una herramienta lenta, para que el usuario (y el
-        # satélite, que expira a los 30 s) oiga algo mientras se espera. Se avisa una sola
-        # vez por herramienta y turno: en un bucle agéntico la misma tool puede repetirse y
-        # dos veces la misma frase suena a disco rayado.
-        announced: set[str] = set()
-
-        def _announce_tool(name: str) -> None:
-            frase = _TOOL_START_PHRASES.get(name)
-            if not frase or name in announced:
-                return
-            announced.add(name)
-            logger.info(f"Aviso de herramienta en marcha: {name} -> {frase!r}")
-            queue_text.put_nowait(frase)
-
-        # Duck-typing, como el resto de extras del motor: los que no lo miran (LiteRT,
-        # cuyos turnos son locales y cortos) siguen exactamente igual.
-        self.litert.on_tool_start = _announce_tool
-
         try:
             # Primera llamada al modelo
             async for chunk in self.litert.chat_stream(
@@ -1141,9 +1098,6 @@ class AssistantService:
             self.tts.stop()
             raise
         finally:
-            # El callback cierra sobre la cola de ESTE turno: dejarlo puesto haría que el
-            # turno siguiente hablara por una cola ya cerrada.
-            self.litert.on_tool_start = None
             # Enviar señal de fin a workers pero NO esperarlos
             # El stream debe cerrarse inmediatamente para que la GUI actualice el texto
             await queue_text.put(None)
