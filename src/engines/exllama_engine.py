@@ -363,6 +363,36 @@ class ExLlamaEngine:
         # pantalla pero NO hablarlo (mantiene el TTS cerrado hasta pasar </think>).
         return bool(self.thinking)
 
+    # ---- puntos de extensión (los redefine OpenRouterEngine, que hereda de aquí) ----
+    @property
+    def _engine_label(self) -> str:
+        """Nombre del motor en los mensajes de error que se le dicen al usuario."""
+        return "ExLlama"
+
+    @property
+    def chat_url(self) -> str:
+        """Endpoint de chat completions del servidor OpenAI-compatible."""
+        return f"{self.base_url}/v1/chat/completions"
+
+    def _extra_payload(self) -> Dict[str, Any]:
+        """Campos extra del cuerpo de la petición, propios del servidor de turno."""
+        return {}
+
+    def _http_error_message(self, exc: Exception) -> str:
+        """Qué se le dice al usuario (y se le habla por TTS) si la petición falla."""
+        return f"Error: fallo de comunicación con el motor {self._engine_label}."
+
+    def _image_mime(self, path: str, raw: bytes) -> str:
+        """Tipo MIME del data-URI de la imagen. TabbyAPI decodifica por contenido y le
+        da igual la etiqueta, así que aquí se mantiene la de siempre."""
+        return "image/png"
+
+    @property
+    def _system_suffix(self) -> str:
+        """Sufijo que se añade al system prompt. En Qwen3, '/no_think' apaga el
+        razonamiento; otros modelos no lo entienden y para ellos es basura."""
+        return "" if self.thinking else " /no_think"
+
     def _ping(self) -> bool:
         try:
             r = httpx.get(f"{self.base_url}/v1/models", headers=self._headers, timeout=3)
@@ -389,8 +419,7 @@ class ExLlamaEngine:
     def _build_messages(self, prompt, system_prompt, history, image_path) -> List[dict]:
         msgs: List[dict] = []
         sys_txt = (system_prompt or "").strip()
-        if not self.thinking:
-            sys_txt = (sys_txt + " /no_think").strip()
+        sys_txt = (sys_txt + self._system_suffix).strip()
         if sys_txt:
             msgs.append({"role": "system", "content": sys_txt})
         for m in history or []:
@@ -400,10 +429,12 @@ class ExLlamaEngine:
                 msgs.append({"role": role, "content": content})
         if image_path and self.vision:
             try:
-                b64 = base64.b64encode(open(image_path, "rb").read()).decode()
+                raw = open(image_path, "rb").read()
+                b64 = base64.b64encode(raw).decode()
+                mime = self._image_mime(image_path, raw)
                 msgs.append({"role": "user", "content": [
                     {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
                 ]})
                 return msgs
             except OSError as e:
@@ -420,7 +451,14 @@ class ExLlamaEngine:
         if tool_schemas:
             payload["tools"] = tool_schemas
             payload["tool_choice"] = "auto"
-        async with self._client.stream("POST", f"{self.base_url}/v1/chat/completions", json=payload) as r:
+        payload.update(self._extra_payload())
+        async with self._client.stream("POST", self.chat_url, json=payload) as r:
+            if r.status_code >= 400:
+                # En streaming el cuerpo no se lee solo, y sin él un 4xx es un número
+                # pelado en el log: el motivo real (modelo desconocido, cuota, etc.)
+                # viene justo ahí.
+                body = (await r.aread()).decode(errors="replace")[:400]
+                logger.error(f"{self._engine_label} HTTP {r.status_code}: {body}")
             r.raise_for_status()
             async for line in r.aiter_lines():
                 if not line.startswith("data:"):
@@ -459,7 +497,7 @@ class ExLlamaEngine:
         image_path: Optional[str] = None,
     ) -> AsyncIterator[str]:
         if not self._ready and not self._ping():
-            yield "Error: Motor ExLlama no disponible."
+            yield f"Error: Motor {self._engine_label} no disponible."
             return
         self._ready = True
 
@@ -496,8 +534,8 @@ class ExLlamaEngine:
                             acc["arguments"] += fn["arguments"]
             except httpx.HTTPError as e:
                 self._ready = False
-                logger.error(f"Fallo en la inferencia ExLlama: {e}")
-                yield "Error: fallo de comunicación con el motor ExLlama."
+                logger.error(f"Fallo en la inferencia {self._engine_label}: {e}")
+                yield self._http_error_message(e)
                 return
             for text in flt.flush():
                 if not seen:
@@ -530,7 +568,7 @@ class ExLlamaEngine:
                 result = await self._exec_tool(call, tool_map)
                 messages.append({"role": "tool", "tool_call_id": f"call_{i}", "content": result})
 
-        logger.warning(f"ExLlama: alcanzado el límite de {self.max_tool_rounds} rondas de tools.")
+        logger.warning(f"{self._engine_label}: alcanzado el límite de {self.max_tool_rounds} rondas de tools.")
 
     async def chat(
         self,

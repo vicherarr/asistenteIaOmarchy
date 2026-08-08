@@ -76,12 +76,14 @@ Todo (inferencia de texto, tool calling, visión multimodal, audio nativo) corre
 
 **Retry automático:** si LiteRT falla al parsear tool calls, reintenta sin herramientas.
 
-### Motor intercambiable: LiteRT ⇄ ExLlamaV3 (opcional)
+### Motor intercambiable: LiteRT ⇄ ExLlamaV3 ⇄ OpenRouter (opcional)
 
 El motor de inferencia es **conmutable** y 100% retrocompatible: LiteRT es el de por defecto y nada cambia si no tocas nada. La factoría `src/engines/factory.py` construye el motor según `AI_ENGINE` y todo el sistema lo consume por un contrato común (`src/engines/base.py`: `InferenceEngine` + `EngineCapabilities`), de modo que el resto actúa **por capacidades**, no por nombre de motor.
 
 - **`litert` (defecto):** Gemma 4 en proceso; texto, tools, visión y audio nativos.
 - **`exllama`:** Qwen3 cuantizado EXL3 sobre un **sidecar [TabbyAPI](https://github.com/theroyallab/tabbyAPI)** (servidor OpenAI-compatible en GPU). El bucle agéntico de tool-calling es propio (`src/engines/exllama_engine.py`); no hace audio (el STT cae a Whisper por capacidades). Aislado en su propio venv para no mezclar las dependencias de torch/CUDA con las del asistente.
+
+- **`openrouter`:** un LLM **en la nube** por HTTP ([OpenRouter](https://openrouter.ai)), sin VRAM ni descargas. Solo se ofrecen modelos **gratis y con tool calling**; por defecto `google/gemma-4-31b-it:free` (30,7B, 256k de contexto y **acepta imágenes**, así que la cámara del satélite y el análisis de pantalla los describe él). Reutiliza el cliente OpenAI-compatible de `exllama` (`src/engines/openrouter_engine.py` hereda de él). Ver [docs/motor-openrouter.md](docs/motor-openrouter.md).
 
 **Solo un motor activo a la vez** (en una GPU de 8 GiB no coexisten): al usar LiteRT no corre TabbyAPI y viceversa. El sidecar se instala, arranca/para y se conmuta con `asistenteia engine` (ver abajo); con `AI_ENGINE=exllama` el asistente levanta TabbyAPI al arrancar (como LiteRT se carga solo) y lo para al detenerse.
 

@@ -168,8 +168,9 @@ EXLLAMA_API_KEY="$(ai_read_env EXLLAMA_API_KEY "")"
 EXLLAMA_AUTOSTART="$(ai_read_env EXLLAMA_AUTOSTART true)"
 EXLLAMA_TABBY_DIR="$(ai_read_env EXLLAMA_TABBY_DIR "$PROJECT_DIR/exllama/tabbyAPI")"
 
-ai_engine()         { ai_read_env AI_ENGINE litert; }
-ai_using_exllama()  { [ "$(ai_engine)" = "exllama" ]; }
+ai_engine()          { ai_read_env AI_ENGINE litert; }
+ai_using_exllama()   { [ "$(ai_engine)" = "exllama" ]; }
+ai_using_openrouter(){ [ "$(ai_engine)" = "openrouter" ]; }
 ai_tabby_autostart(){ case "$(printf '%s' "$EXLLAMA_AUTOSTART" | tr 'A-Z' 'a-z')" in 1|true|yes|on) return 0 ;; *) return 1 ;; esac; }
 
 # El backend ExLlama está "instalado" si existe su venv y el main.py de TabbyAPI.
@@ -232,6 +233,34 @@ ai_tabby_stop() {
     # Red de seguridad: cualquier proceso de NUESTRO main.py (ruta absoluta), por si
     # el grupo no cubrió algún huérfano. Acotado a este dir: no toca otros servicios.
     pkill -f "$EXLLAMA_TABBY_DIR/main.py" 2>/dev/null || true
+}
+
+# --------------------------------------------------------------------------
+# Motor OpenRouter: LLM en la nube. No hay nada que arrancar ni que descargar —
+# solo una key y un id de modelo en el .env—, así que aquí no hay ciclo de vida:
+# únicamente lectura de config y el catálogo de modelos gratis.
+# --------------------------------------------------------------------------
+OPENROUTER_MODEL_DEFAULT="google/gemma-4-31b-it:free"
+
+# Reserva por defecto: la misma que src/config.py, para que la CLI enseñe lo que de
+# verdad se va a usar cuando la clave no está escrita en el .env.
+OPENROUTER_FALLBACKS_DEFAULT="google/gemma-4-26b-a4b-it:free,nvidia/nemotron-nano-12b-v2-vl:free"
+
+ai_openrouter_key()       { ai_read_env OPENROUTER_API_KEY ""; }
+ai_openrouter_model()     { ai_read_env OPENROUTER_MODEL "$OPENROUTER_MODEL_DEFAULT"; }
+ai_openrouter_fallbacks() { ai_read_env OPENROUTER_FALLBACK_MODELS "$OPENROUTER_FALLBACKS_DEFAULT"; }
+
+# La key SIEMPRE enmascarada al mostrarla: 'status' se pega en incidencias y se ve en
+# capturas de pantalla, y una key completa ahí es una key quemada.
+ai_openrouter_key_masked() {
+    local k; k="$(ai_openrouter_key)"
+    if [ -z "$k" ]; then echo "(sin configurar)"; else printf '%s…%s\n' "${k:0:12}" "${k: -4}"; fi
+}
+
+# Catálogo de modelos gratis con tool calling (se consulta en vivo a OpenRouter).
+# $@ se pasa tal cual al helper: --list | --check <id>.
+ai_openrouter_models() {
+    "$PROJECT_DIR/venv/bin/python" "$PROJECT_DIR/scripts/openrouter-models.py" "$@"
 }
 
 # LFM2.5 tiene muchas cuantizaciones (bpw). Elige la MÁS ALTA (más calidad) que

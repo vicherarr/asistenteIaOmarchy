@@ -17,8 +17,9 @@ logger = logging.getLogger(__name__)
 def create_engine(settings=_settings) -> InferenceEngine:
     """Construye el motor según ``settings.AI_ENGINE``.
 
-    - "litert"  -> LiteRTClient (motor actual, por defecto).
-    - "exllama" -> Fase 2 (aún no implementado).
+    - "litert"     -> LiteRTClient (motor local en proceso, por defecto).
+    - "exllama"    -> ExLlamaEngine (sidecar TabbyAPI en la GPU).
+    - "openrouter" -> OpenRouterEngine (LLM en la nube, sin VRAM).
     """
     name = (getattr(settings, "AI_ENGINE", "litert") or "litert").lower()
 
@@ -34,6 +35,12 @@ def create_engine(settings=_settings) -> InferenceEngine:
         logger.info("Motor de inferencia: ExLlama (TabbyAPI)")
         return ExLlamaEngine()
 
+    if name == "openrouter":
+        from src.engines.openrouter_engine import OpenRouterEngine
+
+        logger.info("Motor de inferencia: OpenRouter (nube)")
+        return OpenRouterEngine()
+
     raise ValueError(
-        f"AI_ENGINE no válido: {name!r}. Valores válidos: 'litert', 'exllama'."
+        f"AI_ENGINE no válido: {name!r}. Valores válidos: 'litert', 'exllama', 'openrouter'."
     )

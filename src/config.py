@@ -20,7 +20,8 @@ class Settings(BaseSettings):
     SSL_KEYFILE: Optional[str] = None
     SSL_CERTFILE: Optional[str] = None
     
-    # Motor de inferencia: "litert" (por defecto) o "exllama" (Fase 2).
+    # Motor de inferencia: "litert" (por defecto), "exllama" (sidecar local) u
+    # "openrouter" (LLM en la nube).
     # Selecciona qué backend de LLM construye la factoría (src/engines/factory.py).
     AI_ENGINE: str = "litert"
 
@@ -101,6 +102,33 @@ class Settings(BaseSettings):
     # Carpeta de la instalación de TabbyAPI (su propio venv py3.11 + main.py + modelo).
     # Vacío => <raíz del proyecto>/exllama/tabbyAPI. La crea el instalador.
     EXLLAMA_TABBY_DIR: str = ""
+
+    # --- Motor OpenRouter (AI_ENGINE="openrouter") ---
+    # LLM en la nube por HTTP, API OpenAI-compatible: no consume VRAM ni necesita sidecar.
+    # Solo modelos GRATIS (precio 0) y con tool calling; la CLI no deja elegir otros.
+    # La API key la gestiona la CLI ('asistenteia engine openrouter key <KEY>') y vive
+    # SOLO en el .env, que está en .gitignore: NUNCA se versiona.
+    OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+    # Gemma 4 31B: el free más capaz que además acepta imágenes (30.7B densos, 256k de
+    # contexto, function calling nativo). Al ser Gemma, el system prompt —afinado a base
+    # de medir con Gemma— le sigue hablando al mismo modelo.
+    OPENROUTER_MODEL: str = "google/gemma-4-31b-it:free"
+    # Modelos de reserva (separados por comas) por si el principal falla. Los "free" se
+    # sirven desde un pool COMPARTIDO que se satura a ratos y devuelve 429 aunque nuestra
+    # cuota esté intacta; OpenRouter enruta solo al siguiente de la lista. MEDIDO: con el
+    # pool de Gemma 31B saturado, la petición la atendió el 26B sin que se notara.
+    # Se dejan dos que también aceptan imágenes, para no perder la visión al caer.
+    OPENROUTER_FALLBACK_MODELS: str = (
+        "google/gemma-4-26b-a4b-it:free,nvidia/nemotron-nano-12b-v2-vl:free"
+    )
+    OPENROUTER_API_KEY: str = ""
+    OPENROUTER_TIMEOUT: float = 120.0
+    OPENROUTER_MAX_TOKENS: int = 1024
+    OPENROUTER_TEMPERATURE: float = 0.6
+    # El modelo por defecto es multimodal: con esto la cámara del satélite y las capturas
+    # de pantalla las describe él. La CLI lo ajusta sola al cambiar de modelo.
+    OPENROUTER_VISION: bool = True
+    OPENROUTER_MAX_TOOL_ROUNDS: int = 8
 
     # Assistant
     MAX_HISTORY: int = 10

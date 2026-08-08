@@ -63,8 +63,12 @@ AsistenteIA - uso: asistenteia <comando>
   model [m]    Cambia el modelo (e2b/e4b/12b): lo descarga si falta y reinicia.
                Sin argumento, muestra el actual y pregunta cuál usar.
                12b es más capaz (32k contexto) pero aún no soporta imágenes.
-  engine [e]   Cambia el motor de inferencia (litert/exllama) y reinicia.
+  engine [e]   Cambia el motor de inferencia (litert/exllama/openrouter) y reinicia.
                Sin argumento, muestra el actual y los disponibles.
+               engine openrouter          LLM en la nube: sin VRAM, modelos gratis.
+               engine openrouter model    Elige modelo gratis (marca los que ven imágenes).
+               engine openrouter key <k>  Guarda la API key de openrouter.ai (solo en .env).
+               engine openrouter status   Modelo, visión y key (enmascarada).
                engine install [m]  Instala el backend exllama (TabbyAPI + modelo).
                engine model [m]    Modelo curado: qwen3-8b / qwen3-vl / lfm2.5 (4 GiB).
                engine browse [f]   Lista modelos EXL3 de turboderp en HuggingFace.
@@ -360,6 +364,107 @@ PY
         sub="${1:-}"
         cur="$(ai_read_env AI_ENGINE litert)"
 
+        # Subcomandos del motor OpenRouter (nube). Van los primeros para que
+        # 'engine openrouter model' no se confunda con 'engine model' (que es de exllama).
+        case "$sub" in
+            openrouter)
+                orsub="${2:-}"
+                case "$orsub" in
+                    key)
+                        # La key vive SOLO en el .env, que está en .gitignore. El chmod es
+                        # porque ahí dentro también hay API_TOKEN y no tiene por qué leerlo
+                        # cualquier proceso de la máquina.
+                        newkey="${3:-}"
+                        if [ -z "$newkey" ]; then
+                            echo "API key de OpenRouter: $(ai_openrouter_key_masked)"
+                            echo "Uso: asistenteia engine openrouter key <TU_API_KEY>"
+                            echo "Consíguela en https://openrouter.ai/keys (los modelos de la lista son gratis)."
+                            exit 0
+                        fi
+                        ai_set_env_key OPENROUTER_API_KEY "$newkey"
+                        chmod 600 "$PROJECT_DIR/.env" 2>/dev/null || true
+                        ok "API key guardada en $PROJECT_DIR/.env ($(ai_openrouter_key_masked))."
+                        if ai_using_openrouter && ai_server_up; then
+                            echo "Reinicia para aplicarla: asistenteia restart"
+                        fi
+                        exit 0 ;;
+                    status|"")
+                        # Sin subcomando: estado. Cambiar de motor es 'asistenteia engine openrouter'
+                        # sin más, que cae más abajo (fuera de este case).
+                        if [ -n "$orsub" ]; then
+                            echo "Motor actual:  $cur"
+                            echo "Modelo:        $(ai_openrouter_model)"
+                            echo "Visión:        $(ai_read_env OPENROUTER_VISION True)"
+                            echo "Reserva:       $(ai_openrouter_fallbacks)"
+                            echo "API key:       $(ai_openrouter_key_masked)"
+                            exit 0
+                        fi
+                        ;;
+                    model)
+                        cur_model="$(ai_openrouter_model)"
+                        key="${3:-}"
+                        if [ -z "$key" ] || [ "$key" = list ] || [ "$key" = status ]; then
+                            echo "Modelo OpenRouter actual: $cur_model"
+                            echo
+                            echo "Modelos GRATIS con herramientas (los de pago no se ofrecen):"
+                            i=0; ids=""
+                            while IFS='|' read -r mid mname mctx mvis; do
+                                [ -z "$mid" ] && continue
+                                i=$((i + 1)); ids="$ids $mid"
+                                mark=" "; [ "$mid" = "$cur_model" ] && mark="*"
+                                [ "$mvis" = yes ] && vis="VISIÓN" || vis="  —   "
+                                printf "  %s %2d) %-52s %s  %6s ctx\n" "$mark" "$i" "$mid" "$vis" "$((mctx / 1000))k"
+                            done < <(ai_openrouter_models --list)
+                            if [ "$i" -eq 0 ]; then err "No se pudo obtener el catálogo."; exit 1; fi
+                            echo
+                            echo "VISIÓN = puede mirar por la cámara y analizar la pantalla."
+                            [ "$key" = list ] || [ "$key" = status ] && exit 0
+                            if [ -r /dev/tty ]; then
+                                read -r -p "¿Qué modelo uso? [nº o id] (Enter = cancelar): " key </dev/tty || key=""
+                            fi
+                            [ -z "$key" ] && { echo "Sin cambios."; exit 0; }
+                            # Permitir elegir por número de la lista.
+                            case "$key" in
+                                ''|*[!0-9]*) : ;;
+                                *) key="$(echo $ids | cut -d' ' -f"$key")" ;;
+                            esac
+                        fi
+                        if ! vision="$(ai_openrouter_models --check "$key")"; then
+                            err "'$key' no está entre los modelos gratis con herramientas."
+                            err "Míralos con: asistenteia engine openrouter model list"
+                            exit 1
+                        fi
+                        ai_set_env_key OPENROUTER_MODEL "$key"
+                        if [ "$vision" = yes ]; then
+                            ai_set_env_key OPENROUTER_VISION True
+                            echo "Modelo OpenRouter activo: $key (con visión)"
+                        else
+                            ai_set_env_key OPENROUTER_VISION False
+                            warn "'$key' no acepta imágenes: la cámara y el análisis de pantalla no funcionarán con él."
+                        fi
+                        if [ "$(ai_engine)" != openrouter ]; then
+                            warn "El motor activo es '$(ai_engine)'. Úsalo con: asistenteia engine openrouter"
+                            exit 0
+                        fi
+                        if ai_server_up; then
+                            echo "Reiniciando para cargar '$key'..."
+                            "$SCRIPTS_DIR/stop-assistant.sh" >/dev/null 2>&1 || true
+                            sleep 1
+                            case "$(ai_ensure_running 60)" in
+                                error) err "No arrancó con '$key'. Revisa: asistenteia logs"; exit 1 ;;
+                                *)     echo "Listo: '$key' en uso." ;;
+                            esac
+                        else
+                            echo "Hecho. Se usará al arrancar (asistenteia start o Super + Z)."
+                        fi
+                        exit 0 ;;
+                    *)
+                        err "Subcomando desconocido: engine openrouter $orsub"
+                        echo "Usa: model | key | status"; exit 1 ;;
+                esac
+                ;;
+        esac
+
         # Subcomandos auxiliares del sidecar TabbyAPI (instalación / control manual).
         case "$sub" in
             install)
@@ -637,23 +742,29 @@ PY
             m=" "; [ "$cur" = exllama ] && m="*"
             est="no instalado"; ai_tabby_installed && est="instalado"
             printf "  %s exllama  ExLlamaV3 vía TabbyAPI (Qwen3, sidecar GPU)  [%s]\n" "$m" "$est"
+            m=" "; [ "$cur" = openrouter ] && m="*"
+            est="sin API key"; [ -n "$(ai_openrouter_key)" ] && est="con API key"
+            printf "  %s openrouter  LLM en la nube (gratis, sin VRAM)          [%s]\n" "$m" "$est"
             echo
             if ai_using_exllama; then
                 ai_tabby_up && echo "Sidecar TabbyAPI: EN MARCHA ($EXLLAMA_BASE_URL)" \
                             || echo "Sidecar TabbyAPI: detenido"
             fi
+            if ai_using_openrouter; then
+                echo "Modelo OpenRouter: $(ai_openrouter_model)"
+            fi
             [ "$sub" = list ] || [ "$sub" = status ] && exit 0
             echo
             if [ -r /dev/tty ]; then
-                read -r -p "¿A qué motor cambiar? [litert/exllama] (Enter = cancelar): " sub </dev/tty || sub=""
+                read -r -p "¿A qué motor cambiar? [litert/exllama/openrouter] (Enter = cancelar): " sub </dev/tty || sub=""
             fi
             [ -z "$sub" ] && { echo "Sin cambios."; exit 0; }
         fi
 
         sub="$(printf '%s' "$sub" | tr 'A-Z' 'a-z')"
         case "$sub" in
-            litert|exllama) : ;;
-            *) err "Motor no válido: '$sub'. Usa litert o exllama."; exit 1 ;;
+            litert|exllama|openrouter) : ;;
+            *) err "Motor no válido: '$sub'. Usa litert, exllama u openrouter."; exit 1 ;;
         esac
 
         if [ "$sub" = "$cur" ]; then
@@ -670,12 +781,23 @@ PY
             fi
         fi
 
+        # OpenRouter sin key arranca pero no puede responder: mejor avisar aquí que
+        # descubrirlo hablándole al asistente.
+        if [ "$sub" = openrouter ] && [ -z "$(ai_openrouter_key)" ]; then
+            warn "No hay API key de OpenRouter configurada."
+            warn "Ponla con: asistenteia engine openrouter key <TU_API_KEY>"
+            if ! ai_confirm "¿Cambiar a 'openrouter' igualmente (no responderá hasta ponerla)?"; then
+                echo "Sin cambios."; exit 0
+            fi
+        fi
+
         ai_set_env_key AI_ENGINE "$sub"
         ai_refresh_focus_tools
         echo "Motor activo: $sub"
+        [ "$sub" = openrouter ] && echo "Modelo: $(ai_openrouter_model)"
 
-        # Mutua exclusión: al volver a litert, parar el sidecar y liberar VRAM.
-        [ "$sub" = litert ] && ai_tabby_stop
+        # Mutua exclusión: al salir de exllama, parar el sidecar y liberar VRAM.
+        [ "$sub" = litert ] || [ "$sub" = openrouter ] && ai_tabby_stop
 
         # Aplicar reiniciando (igual que 'model'); ai_ensure_running levanta el
         # sidecar si toca. Timeout amplio: TabbyAPI carga el modelo al arrancar.

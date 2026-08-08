@@ -302,7 +302,10 @@ async def lifespan(app: FastAPI):
     await state.audio_manager.auto_configure_bluetooth()
 
     if not state.engine.is_ready:
-        logger.warning(f"El motor no pudo cargar el modelo en {settings.LITERT_MODEL_PATH}")
+        # El aviso nombra el modelo del motor ACTIVO: con exllama u openrouter, la ruta
+        # de LiteRT no pinta nada y mandaba a mirar donde no estaba el problema.
+        modelo = getattr(state.engine, "model_label", None) or settings.LITERT_MODEL_PATH
+        logger.warning(f"El motor {state.engine.name} no está listo (modelo: {modelo})")
 
     # Configurar e iniciar el WakeWordListener si está habilitado
     if settings.WAKE_WORD_ENABLED:
