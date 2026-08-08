@@ -201,6 +201,9 @@ def _fake_state(transcription="hola luka", reply="Hola, dime."):
 
     state.assistant_service.process_transcription_stream = _stream
     state.assistant_service.wait_for_tts_complete = AsyncMock()
+    # Sin esto devuelve un MagicMock, que no serializa a JSON: la REPLY se quedaba
+    # sin enviar y el test fallaba culpando al gateway de algo que era del mock.
+    state.assistant_service.without_reasoning = lambda texto: texto
     return state
 
 
@@ -225,6 +228,43 @@ class TestDeviceSession:
         assert proto.TTS_END in kinds, "debería cerrar el audio del turno"
         # El último estado tiene que ser idle: si no, el anillo del dispositivo se
         # quedaría "pensando" para siempre.
+        assert ws.states()[-1] == proto.STATE_IDLE
+
+    async def test_un_turno_largo_repite_que_sigue_vivo(self, monkeypatch):
+        """El latido que evita que un turno lento se corte a mitad.
+
+        El satélite da el turno por perdido si el servidor pasa 30 s sin decir
+        nada, y ese plazo se renueva con cada STATE. Un turno de cámara —foto, dos
+        vueltas al modelo y la pasada de visión— pasa de ahí con facilidad, así que
+        sin este aviso repetido el aparato tiraba el enlace con la respuesta ya
+        generada.
+        """
+        from src import device_gateway
+        from src.device_gateway import DeviceSession
+
+        monkeypatch.setattr(device_gateway, "TURN_KEEPALIVE_SECONDS", 0.01)
+
+        state = _fake_state()
+
+        async def _lento(**_kwargs):
+            await asyncio.sleep(0.08)  # el modelo tardando
+            yield "Ya está."
+
+        state.assistant_service.process_transcription_stream = _lento
+
+        audio = proto.encode(proto.AUDIO, b"\x00" * (LINK_SAMPLE_RATE + 100))
+        ws = FakeWebSocket([
+            proto.encode_json(proto.HELLO, device="luka-speaker"),
+            audio,
+            proto.encode(proto.END),
+        ])
+        session = DeviceSession(ws, state)
+        await drive(session)
+
+        thinking = [s for s in ws.states() if s == proto.STATE_THINKING]
+        assert len(thinking) > 1, "el turno largo no repitió que seguía vivo"
+        # Y el latido muere con el turno: si sobreviviera, seguiría diciendo
+        # "pensando" encima del turno siguiente.
         assert ws.states()[-1] == proto.STATE_IDLE
 
     async def test_audio_demasiado_corto_se_ignora(self):
@@ -293,11 +333,15 @@ class TestGestorDeDispositivos:
         service.audio_sink = None
 
         manager = DeviceManager()
-        manager.attach(DeviceSession(FakeWebSocket([]), MagicMock()), service)
+        session = DeviceSession(FakeWebSocket([]), MagicMock())
+        manager.attach(session, service)
         assert service.audio_target == "both"
         assert service.audio_sink is not None
 
-        manager.detach(service)
+        # `detach` recibe la sesión que se va, no solo el servicio: solo suelta el
+        # sink si la que se cierra es la registrada (si no, una sesión vieja dejaba
+        # muda a la nueva).
+        manager.detach(session, service)
         assert service.audio_target == "pc"
         assert service.audio_sink is None
         assert not manager.connected

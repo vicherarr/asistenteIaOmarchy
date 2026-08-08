@@ -20,8 +20,20 @@
 /// queda pillado (o alguien lo suelta fuera de rango), el turno se cierra igual
 /// en vez de subir audio indefinidamente.
 pub const LISTENING_TIMEOUT_MS: u64 = 15_000;
-/// Plazo para que el servidor conteste algo tras el fin del turno.
+/// Cuánto se aguanta SIN NOTICIAS del servidor tras cerrar el turno.
+///
+/// Es un plazo de **silencio**, no de duración: cada `STATE` del servidor lo
+/// renueva. La diferencia importa porque "el servidor tarda" y "el servidor no
+/// está" son cosas distintas y antes se trataban igual: un turno de treinta
+/// segundos —una pregunta a la cámara, con la foto y dos vueltas al modelo— se
+/// daba por perdido con el servidor trabajando al otro lado.
 pub const THINKING_TIMEOUT_MS: u64 = 30_000;
+/// Tope duro del turno, pase lo que pase.
+///
+/// El plazo de arriba se renueva, así que por sí solo no cumple el invariante de
+/// que nada se quede colgado para siempre: un servidor que dijera "sigo en ello"
+/// eternamente dejaría el aparato esperando eternamente. Este no se renueva.
+pub const THINKING_MAX_MS: u64 = 180_000;
 /// Plazo para abrir el WebSocket. Sin esto, un fallo que no llegue a producir un
 /// evento de desconexión dejaría el dispositivo en `ServerConnecting` para
 /// siempre, con el anillo girando en azul y sin reintentar jamás.
@@ -86,6 +98,16 @@ impl Fault {
     pub const fn is_recoverable(self) -> bool {
         !matches!(self, Self::AuthRejected)
     }
+
+    /// ¿Hay que rehacer la asociación WiFi para recuperarse?
+    ///
+    /// Solo si el problema puede ser de radio. Que el servidor no conteste no lo
+    /// es, y reasociar por eso era el peor remedio posible: tira el socket TLS
+    /// que había debajo del WebSocket y provoca justo el corte que se pretendía
+    /// evitar. Ahí basta con rehacer el WebSocket.
+    pub const fn needs_wifi_restart(self) -> bool {
+        !matches!(self, Self::ServerUnreachable)
+    }
 }
 
 /// Estado del dispositivo. Los campos `_ms` son marcas de tiempo monótonas.
@@ -112,7 +134,12 @@ pub enum State {
     /// también los turnos de botón.
     Listening { since_ms: u64, hands_free: bool },
     /// Turno enviado, esperando a Luka.
-    Thinking { since_ms: u64 },
+    ///
+    /// Dos marcas, porque hay dos preguntas distintas que responder. `since_ms`
+    /// es el último indicio de vida —el envío del turno, o la última señal del
+    /// servidor— y contesta a "¿sigue ahí?". `started_ms` es cuándo empezó todo
+    /// esto y no se renueva nunca: contesta a "¿esto va a acabar alguna vez?".
+    Thinking { since_ms: u64, started_ms: u64 },
     /// Reproduciendo la voz de Luka.
     Speaking { since_ms: u64 },
     /// Luka acaba de terminar de hablar y el micro sigue atento.
@@ -366,7 +393,7 @@ pub fn next(state: State, event: Event, now_ms: u64) -> (State, Actions) {
         }
 
         (S::Listening { hands_free: false, .. }, E::ButtonReleased) => {
-            (S::Thinking { since_ms: now_ms }, Actions::of(&[StopCapture, SendEnd]))
+            (S::Thinking { since_ms: now_ms, started_ms: now_ms }, Actions::of(&[StopCapture, SendEnd]))
         }
 
         // --- Wake word: manos libres ---
@@ -377,12 +404,12 @@ pub fn next(state: State, event: Event, now_ms: u64) -> (State, Actions) {
         // El silencio cierra el turno, pero solo el que abrió la palabra. En un
         // turno de botón mandas tú.
         (S::Listening { hands_free: true, .. }, E::SilenceDetected) => {
-            (S::Thinking { since_ms: now_ms }, Actions::of(&[StopCapture, SendEnd]))
+            (S::Thinking { since_ms: now_ms, started_ms: now_ms }, Actions::of(&[StopCapture, SendEnd]))
         }
 
         // El turno se alarga demasiado: se cierra solo, como si se hubiera soltado.
         (S::Listening { since_ms, .. }, E::Tick) if now_ms.saturating_sub(since_ms) >= LISTENING_TIMEOUT_MS => {
-            (S::Thinking { since_ms: now_ms }, Actions::of(&[StopCapture, SendEnd]))
+            (S::Thinking { since_ms: now_ms, started_ms: now_ms }, Actions::of(&[StopCapture, SendEnd]))
         }
 
         // Interrumpir a Luka con el botón. Es seguro aunque v1 sea half-duplex
@@ -453,9 +480,33 @@ pub fn next(state: State, event: Event, now_ms: u64) -> (State, Actions) {
         // se perdió). No hay nada que reproducir, pero el turno ha terminado.
         (S::Thinking { .. }, E::TtsEnded) => (S::Idle, Actions::none()),
 
-        (S::Thinking { since_ms }, E::Tick) if now_ms.saturating_sub(since_ms) >= THINKING_TIMEOUT_MS => (
+        // **El servidor dice que sigue en ello.**
+        //
+        // Es la única forma de distinguir "tarda" de "no está", y sin ella el
+        // aparato daba por muerto un turno de treinta segundos con el servidor
+        // trabajando: una pregunta a la cámara son la foto, dos vueltas al modelo
+        // y la pasada de visión, y eso no cabe en el plazo.
+        //
+        // Renueva el plazo y NADA MÁS. No abre el altavoz: eso lo sigue decidiendo
+        // el audio de verdad, por lo que explica el bloque de más abajo.
+        (S::Thinking { started_ms, .. }, E::ServerSaid(Reported::Thinking | Reported::Speaking)) => {
+            (S::Thinking { since_ms: now_ms, started_ms }, Actions::none())
+        }
+
+        // Ni una señal en todo el plazo: esta vez sí, el servidor no está.
+        // Se le manda `SendCancel` antes de rendirse: si el enlace resulta estar
+        // vivo, deja de generar una respuesta que ya no va a oír nadie; y si está
+        // muerto, el envío falla en silencio y no cuesta nada.
+        (S::Thinking { since_ms, .. }, E::Tick) if now_ms.saturating_sub(since_ms) >= THINKING_TIMEOUT_MS => (
             S::Fault { kind: Fault::ServerUnreachable, since_ms: now_ms },
-            Actions::none(),
+            Actions::of(&[SendCancel]),
+        ),
+
+        // El servidor habla pero el turno no acaba nunca. El plazo de arriba se
+        // renueva, así que hace falta este tope que no se renueva jamás.
+        (S::Thinking { started_ms, .. }, E::Tick) if now_ms.saturating_sub(started_ms) >= THINKING_MAX_MS => (
+            S::Fault { kind: Fault::ServerUnreachable, since_ms: now_ms },
+            Actions::of(&[SendCancel]),
         ),
 
         (S::Speaking { since_ms }, E::Tick) if now_ms.saturating_sub(since_ms) >= SPEAKING_TIMEOUT_MS => {
@@ -487,11 +538,20 @@ pub fn next(state: State, event: Event, now_ms: u64) -> (State, Actions) {
 
         // --- Fallos ---
         (S::Fault { kind, since_ms }, E::Tick) if now_ms.saturating_sub(since_ms) >= FAULT_DISPLAY_MS => {
-            if kind.is_recoverable() {
-                (S::WifiConnecting { since_ms: now_ms }, Actions::of(&[ConnectWifi]))
-            } else {
+            if !kind.is_recoverable() {
                 // Se queda enseñando el fallo: reintentar no lo arreglaría.
                 (state, Actions::none())
+            } else if kind.needs_wifi_restart() {
+                (S::WifiConnecting { since_ms: now_ms }, Actions::of(&[ConnectWifi]))
+            } else {
+                // El servidor no contesta pero la radio está bien: se rehace solo
+                // el WebSocket, por el mismo camino que una desconexión normal
+                // (el `Tick` siguiente lo recoge `Disconnected` y reconecta tras
+                // el backoff). Reasociar la WiFi aquí era lo que mataba el socket.
+                (
+                    S::Disconnected { retry_at_ms: retry_at(now_ms, 0), attempt: 1 },
+                    Actions::of(&[DropServer]),
+                )
             }
         }
 
@@ -613,7 +673,7 @@ mod tests {
     /// solo puede ser ruido, y se ignora.
     #[test]
     fn la_palabra_se_ignora_mientras_luka_piensa() {
-        let state = S::Thinking { since_ms: 0 };
+        let state = S::Thinking { since_ms: 0, started_ms: 0 };
         let (despues, actions) = next(state, E::WakeDetected, 1_000);
         assert_eq!(despues, state, "{state:?} atendió a la wake word");
         assert!(actions.is_empty());
@@ -656,9 +716,12 @@ mod tests {
     /// de nada — que es exactamente lo que pasaba.
     #[test]
     fn el_servidor_no_abre_el_altavoz_por_su_cuenta() {
-        let pensando = S::Thinking { since_ms: 0 };
+        let pensando = S::Thinking { since_ms: 0, started_ms: 0 };
         let (despues, actions) = next(pensando, E::ServerSaid(Reported::Speaking), 1_000);
-        assert_eq!(despues, pensando, "el aviso del servidor abrió la reproducción");
+        // Sigue pensando y NO se abre la reproducción. El aviso sí renueva el plazo
+        // de espera (para eso está), así que se comprueba lo que de verdad importa
+        // aquí en vez de exigir que el estado sea idéntico bit a bit.
+        assert!(matches!(despues, S::Thinking { .. }), "el aviso abrió la reproducción");
         assert!(!actions.contains(StartPlayback));
     }
 
@@ -676,7 +739,7 @@ mod tests {
     /// se sale de un turno que el servidor descartó por no entender nada.
     #[test]
     fn pensando_si_atiende_el_reposo_del_servidor() {
-        assert_eq!(next(S::Thinking { since_ms: 0 }, E::ServerSaid(Reported::Idle), 1_000).0, S::Idle);
+        assert_eq!(next(S::Thinking { since_ms: 0, started_ms: 0 }, E::ServerSaid(Reported::Idle), 1_000).0, S::Idle);
     }
 
     /// Con esto, entrar y salir de `Speaking` depende solo del audio: lo abre
@@ -684,7 +747,7 @@ mod tests {
     /// `TtsEnded` (que el supervisor manda al vaciarse la cola).
     #[test]
     fn hablar_empieza_y_acaba_con_el_audio_no_con_la_red() {
-        let (state, actions) = next(S::Thinking { since_ms: 0 }, E::TtsStarted, 1_000);
+        let (state, actions) = next(S::Thinking { since_ms: 0, started_ms: 0 }, E::TtsStarted, 1_000);
         assert_eq!(state, S::Speaking { since_ms: 1_000 });
         assert!(actions.contains(StartPlayback));
 
@@ -751,7 +814,7 @@ mod tests {
     /// que reproducir no se pasa por `Speaking`.
     #[test]
     fn un_turno_sin_voz_no_abre_ventana() {
-        assert_eq!(next(S::Thinking { since_ms: 0 }, E::TtsEnded, 1_000).0, S::Idle);
+        assert_eq!(next(S::Thinking { since_ms: 0, started_ms: 0 }, E::TtsEnded, 1_000).0, S::Idle);
     }
 
     /// El nivel de voz solo significa algo justo después de hablar Luka. En
@@ -798,8 +861,58 @@ mod tests {
 
     #[test]
     fn si_luka_no_contesta_no_se_espera_para_siempre() {
-        let (state, _) = next(S::Thinking { since_ms: 0 }, E::Tick, THINKING_TIMEOUT_MS);
+        let pensando = S::Thinking { since_ms: 0, started_ms: 0 };
+        // El borde inferior no vence: si no, el plazo real sería uno menos.
+        assert_eq!(next(pensando, E::Tick, THINKING_TIMEOUT_MS - 1).0, pensando);
+
+        let (state, actions) = next(pensando, E::Tick, THINKING_TIMEOUT_MS);
         assert_eq!(state, S::Fault { kind: Fault::ServerUnreachable, since_ms: THINKING_TIMEOUT_MS });
+        // Y se avisa antes de rendirse, para que el servidor no siga generando una
+        // respuesta que ya no va a oír nadie.
+        assert!(actions.contains(SendCancel));
+    }
+
+    /// El fallo que rompía las preguntas a la cámara: un turno de treinta segundos
+    /// —foto, dos vueltas al modelo y la pasada de visión— se daba por perdido con
+    /// el servidor trabajando al otro lado. Ahora el servidor puede decir que sigue
+    /// en ello, y eso renueva el plazo.
+    #[test]
+    fn el_aviso_del_servidor_prorroga_la_espera() {
+        let mut state = S::Thinking { since_ms: 0, started_ms: 0 };
+
+        // El servidor da señales cada 5 s durante un minuto entero.
+        let mut ahora = 0;
+        while ahora < 60_000 {
+            ahora += 5_000;
+            state = next(state, E::ServerSaid(Reported::Thinking), ahora).0;
+            assert!(matches!(state, S::Thinking { .. }), "se rindió en {ahora} ms");
+            // Y los Tick de por medio tampoco vencen nada.
+            state = next(state, E::Tick, ahora + 1).0;
+            assert!(matches!(state, S::Thinking { .. }), "un Tick lo tumbó en {ahora} ms");
+        }
+
+        // Pero en cuanto se calla, el plazo corre desde el ÚLTIMO aviso.
+        assert!(matches!(next(state, E::Tick, ahora + THINKING_TIMEOUT_MS - 1).0, S::Thinking { .. }));
+        let (state, _) = next(state, E::Tick, ahora + THINKING_TIMEOUT_MS);
+        assert_eq!(state, S::Fault { kind: Fault::ServerUnreachable, since_ms: ahora + THINKING_TIMEOUT_MS });
+    }
+
+    /// El plazo renovable, por sí solo, rompería el invariante del módulo: un
+    /// servidor que dijera "sigo en ello" para siempre dejaría el aparato esperando
+    /// para siempre. El tope duro no se renueva.
+    #[test]
+    fn un_turno_eterno_se_corta_aunque_el_servidor_siga_hablando() {
+        let mut state = S::Thinking { since_ms: 0, started_ms: 0 };
+        let mut ahora = 0;
+        while ahora < THINKING_MAX_MS {
+            ahora += 5_000;
+            state = next(state, E::ServerSaid(Reported::Thinking), ahora).0;
+            state = next(state, E::Tick, ahora).0;
+        }
+        let S::Fault { kind, .. } = state else {
+            panic!("el tope duro no cortó el turno: {state:?}");
+        };
+        assert_eq!(kind, Fault::ServerUnreachable);
     }
 
     #[test]
@@ -865,11 +978,23 @@ mod tests {
 
     #[test]
     fn un_fallo_recuperable_reintenta_pasado_el_plazo() {
-        let state = S::Fault { kind: Fault::ServerUnreachable, since_ms: 0 };
+        let state = S::Fault { kind: Fault::WifiAssoc, since_ms: 0 };
         assert_eq!(next(state, E::Tick, FAULT_DISPLAY_MS - 1).0, state);
         let (despues, actions) = next(state, E::Tick, FAULT_DISPLAY_MS);
         assert!(matches!(despues, S::WifiConnecting { .. }));
         assert!(actions.contains(ConnectWifi));
+    }
+
+    /// Que el servidor no conteste NO es motivo para tocar la radio. Reasociar la
+    /// WiFi mataba el socket TLS de debajo del WebSocket, que es justo el corte que
+    /// se quería evitar: se rehace solo el WebSocket.
+    #[test]
+    fn el_servidor_mudo_no_reasocia_la_wifi() {
+        let state = S::Fault { kind: Fault::ServerUnreachable, since_ms: 0 };
+        let (despues, actions) = next(state, E::Tick, FAULT_DISPLAY_MS);
+        assert!(matches!(despues, S::Disconnected { .. }), "no programó reintento: {despues:?}");
+        assert!(actions.contains(DropServer));
+        assert!(!actions.contains(ConnectWifi), "tocó la radio por un problema del servidor");
     }
 
     /// El contador de intentos tiene que sobrevivir a la vuelta
@@ -969,7 +1094,7 @@ mod tests {
     /// frecuente con diferencia: si moviera algo, lo movería 50 veces por segundo.
     #[test]
     fn un_tick_inocuo_no_cambia_nada() {
-        for state in [S::Idle, S::Listening { since_ms: 99_000, hands_free: false }, S::Thinking { since_ms: 99_000 }] {
+        for state in [S::Idle, S::Listening { since_ms: 99_000, hands_free: false }, S::Thinking { since_ms: 99_000, started_ms: 99_000 }] {
             let (siguiente, actions) = next(state, E::Tick, 99_100);
             assert_eq!(siguiente, state);
             assert!(actions.is_empty());
@@ -1021,7 +1146,7 @@ mod tests {
         S::Idle,
         S::Listening { since_ms: 0, hands_free: false },
         S::Listening { since_ms: 0, hands_free: true },
-        S::Thinking { since_ms: 0 },
+        S::Thinking { since_ms: 0, started_ms: 0 },
         S::Speaking { since_ms: 0 },
         S::Fault { kind: Fault::Audio, since_ms: 0 },
     ];

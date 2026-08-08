@@ -317,7 +317,7 @@ mod tests {
         State::Disconnected { retry_at_ms: 0, attempt: 1 },
         State::Idle,
         State::Listening { since_ms: 0, hands_free: false },
-        State::Thinking { since_ms: 0 },
+        State::Thinking { since_ms: 0, started_ms: 0 },
         State::Speaking { since_ms: 0 },
         State::FollowUp { since_ms: 0 },
         State::Fault { kind: Fault::Audio, since_ms: 0 },
@@ -453,7 +453,7 @@ mod tests {
             ("ServerConnecting", State::ServerConnecting { since_ms: 0, attempt: 0 }, 0),
             ("Disconnected", State::Disconnected { retry_at_ms: 0, attempt: 1 }, 0),
             ("Listening", State::Listening { since_ms: 0, hands_free: false }, 255),
-            ("Thinking", State::Thinking { since_ms: 0 }, 0),
+            ("Thinking", State::Thinking { since_ms: 0, started_ms: 0 }, 0),
             ("Speaking", State::Speaking { since_ms: 0 }, 255),
             ("Fault", State::Fault { kind: Fault::Audio, since_ms: 0 }, 0),
         ] {
@@ -497,7 +497,7 @@ mod tests {
             State::WifiConnecting { since_ms: 0 },
             State::ServerConnecting { since_ms: 0, attempt: 0 },
             State::Disconnected { retry_at_ms: 0, attempt: 1 },
-            State::Thinking { since_ms: 0 },
+            State::Thinking { since_ms: 0, started_ms: 0 },
         ] {
             let mut vistos = [false; COUNT];
             for t in (0..10_000).step_by(10) {

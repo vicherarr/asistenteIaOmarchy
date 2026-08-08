@@ -142,7 +142,9 @@ fn decode_state(encoded: u32, fault_encoded: u32, since_ms: u64) -> State {
         3 => State::Disconnected { retry_at_ms: 0, attempt: 0 },
         4 => State::Idle,
         5 => State::Listening { since_ms, hands_free: false },
-        6 => State::Thinking { since_ms },
+        // started_ms no lo mira la animación (solo cuenta desde cuándo se está
+        // pensando, para el cometa), así que se reconstruye igual que since_ms.
+        6 => State::Thinking { since_ms, started_ms: since_ms },
         7 => State::Speaking { since_ms },
         9 => State::FollowUp { since_ms },
         8 => {

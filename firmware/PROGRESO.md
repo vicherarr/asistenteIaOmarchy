@@ -921,6 +921,65 @@ su hilo.
 
 ---
 
+## ✅ Un turno lento ya no tira el enlace (2026-08-08)
+
+Al pasar Luka a un motor en la nube, las preguntas a la cámara empezaron a morir
+a mitad. La respuesta se generaba entera —quedaba escrita en el log del
+servidor— y no llegaba a oírse. Tres intentos seguidos cayeron a los **33, 34 y
+34 segundos**. Esa regularidad es lo que delató que era un plazo y no un fallo de
+radio.
+
+**La cadena, de arriba abajo:** `Thinking` tenía un plazo **absoluto** de 30 s
+desde el `END` que nada podía prorrogar (`STATE`, `TRANSCRIPT`, `REPLY` y `PONG`
+llegaban y no tenían ningún efecto). Al vencer iba a `Fault::ServerUnreachable`
+sin emitir una sola acción, y 3 s después `is_recoverable()` lo mandaba a
+`WifiConnecting` con `ConnectWifi`. Y `connect_wifi` **reasocia la radio aunque
+la WiFi esté perfecta**, lo que mata el socket TLS de debajo del WebSocket: eso
+es el `enlace perdido al enviar` + `HELLO` nuevo que se veía en el servidor, que
+además cancelaba el turno al interpretarlo como desconexión.
+
+Dicho corto: **el aparato respondía a "el servidor tarda" tirando la WiFi**. No
+distinguía "va lento" de "no está", porque no tenía con qué: el servidor no
+mandaba nada durante el turno.
+
+**El arreglo, en tres piezas:**
+
+1. `Thinking` lleva ahora dos marcas: `since_ms` (último indicio de vida, se
+   renueva con cada `STATE` del servidor) y `started_ms` (no se renueva jamás).
+   `THINKING_TIMEOUT_MS` pasa a significar **silencio**, no duración.
+2. `THINKING_MAX_MS` (180 s) como tope duro, porque un plazo renovable por sí
+   solo rompería el invariante del módulo: un servidor que dijera "sigo en ello"
+   eternamente dejaría el aparato esperando eternamente. Al vencer cualquiera de
+   los dos se manda `SendCancel`, que antes no se mandaba: el servidor seguía
+   generando una respuesta que ya no iba a oír nadie.
+3. `Fault::needs_wifi_restart()`: que el servidor no conteste **no** es motivo
+   para tocar la radio. Ese caso rehace solo el WebSocket, por el mismo camino
+   que una desconexión normal (`Disconnected` + `DropServer`, y el backoff de
+   siempre lo recoge). De regalo, ese camino ya no reinicia `attempt` en cada
+   vuelta, así que un servidor apagado deja de reintentarse cada 35 s.
+
+Del lado del servidor, `device_gateway.py` repite `STATE_THINKING` cada 5 s
+mientras dura el turno (`TURN_KEEPALIVE_SECONDS`). Seis avisos dentro del plazo:
+se pueden perder cinco seguidos sin consecuencias. **No hizo falta tocar el
+protocolo**: `STATE` con `thinking` ya existía en los dos extremos y `net.rs` ya
+lo convertía en `ServerSaid(Reported::Thinking)`. Solo faltaba que alguien lo
+dijera y que aquí sirviera para algo.
+
+**Lo que NO se tocó, a propósito:** el servidor sigue sin decidir cuándo se abre
+el altavoz. Ese invariante costó medidas (abría con la cola vacía; cortaba 3,2 s
+de audio) y sigue intacto: el aviso solo renueva el *plazo*, y `Speaking` se
+entra únicamente con audio de verdad.
+
+Antes hubo un parche que metía una frase hablada al arrancar cada herramienta.
+Funcionaba, pero por el motivo equivocado: colaba audio antes de los 30 s. El
+aparato aguantaba porque le hablábamos, no porque el protocolo se lo dijera, y
+cualquier turno lento sin herramienta seguía roto. Revertido.
+
+44 tests en `luka-state` (3 nuevos: el plazo se prorroga, el tope duro corta
+igual, y un servidor mudo no reasocia la WiFi).
+
+---
+
 # 📍 Dónde estamos (2026-08-06, cierre del día)
 
 ## Funciona

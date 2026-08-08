@@ -39,6 +39,16 @@ MAX_TURN_BYTES = LINK_SAMPLE_RATE * 2 * MAX_TURN_SECONDS
 # mandan bloques de ~100 ms para no saturar de tramas pequeñas el WebSocket.
 DOWNLINK_CHUNK_SAMPLES = LINK_SAMPLE_RATE // 10
 
+# Cada cuánto se le dice al dispositivo que el turno sigue vivo.
+#
+# El satélite espera un tiempo acotado a que el servidor dé señales
+# (THINKING_TIMEOUT_MS, 30 s) y, si no llegan, da el turno por perdido. Ese plazo
+# se renueva con cada STATE, así que esto es lo que permite que un turno largo
+# —una pregunta a la cámara son la foto, dos vueltas al modelo y la pasada de
+# visión— no se corte a mitad. A 5 s caben seis avisos dentro del plazo: se pueden
+# perder cinco seguidos sin consecuencias.
+TURN_KEEPALIVE_SECONDS = 5.0
+
 
 def pcm16_to_wav(pcm: bytes, path: Path, sample_rate: int = LINK_SAMPLE_RATE) -> None:
     """Escribe PCM16 crudo como un .wav, que es lo que espera el STT."""
@@ -255,9 +265,25 @@ class DeviceSession:
         await self._cancel_turn()
         self._turn = asyncio.create_task(self._run_turn(pcm))
 
+    async def _keepalive(self) -> None:
+        """Repite «sigo en ello» mientras dure el turno.
+
+        El dispositivo no puede distinguir un servidor lento de uno caído si el
+        servidor calla: solo ve pasar el tiempo. Esto es esa distinción, y es lo
+        único que hace falta porque el plazo de allí se renueva con cada STATE.
+
+        Repetirlo también mientras suena el audio es inofensivo: en `Speaking` el
+        firmware ignora este aviso (solo el audio de verdad abre y cierra el
+        altavoz), así que no hay que condicionarlo a nada.
+        """
+        while True:
+            await asyncio.sleep(TURN_KEEPALIVE_SECONDS)
+            await self.send(proto.state(proto.STATE_THINKING))
+
     async def _run_turn(self, pcm: bytes) -> None:
         """STT → asistente → TTS, reenviando el progreso al dispositivo."""
         wav_path = settings.TEMP_DIR / f"device_{int(time.time() * 1000)}.wav"
+        latido = asyncio.create_task(self._keepalive())
         try:
             await self.send(proto.state(proto.STATE_THINKING))
             pcm16_to_wav(pcm, wav_path)
@@ -314,6 +340,9 @@ class DeviceSession:
             logger.error(f"[{self.name}] error procesando el turno: {e}", exc_info=True)
             await self.send(proto.error("turn_failed", str(e)))
         finally:
+            # Antes que nada: si el latido sobreviviera al turno, seguiría diciendo
+            # «sigo pensando» sobre el turno SIGUIENTE.
+            latido.cancel()
             wav_path.unlink(missing_ok=True)
             await self.send(proto.encode(proto.TTS_END))
             await self.send(proto.state(proto.STATE_IDLE))
