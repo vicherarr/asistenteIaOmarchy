@@ -683,11 +683,15 @@ class AssistantService:
         max_history: int = 10
     ):
         """
-        Procesa el texto del usuario usando LiteRT y herramientas de forma reactiva,
+        Procesa el texto del usuario usando el motor activo y herramientas de forma reactiva,
         transmitiendo los chunks resultantes en tiempo real y sintetizando voz frase a frase
         con pipeline de doble cola (síntesis || reproducción en paralelo).
         """
-        logger.info(f"Procesando transcripción con LiteRT (streaming): {text[:100]}...")
+        # El nombre del motor va en el log porque es la línea que se mira para saber
+        # QUIÉN está respondiendo; decir siempre "LiteRT" hacía dudar de si el cambio
+        # de motor había surtido efecto.
+        motor = getattr(self.litert, "name", "motor")
+        logger.info(f"Procesando transcripción con {motor} (streaming): {text[:100]}...")
 
         # Las tools necesitan saber qué ha pedido el usuario, no solo sus argumentos:
         # web_search se niega a buscar si no se lo han pedido explícitamente.

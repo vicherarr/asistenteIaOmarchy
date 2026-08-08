@@ -287,8 +287,8 @@ class HealthResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging_filters()
-    logger.info("Inicializando AsistenteIA con LiteRT...")
-    
+    logger.info("Inicializando AsistenteIA...")
+
     state = AppState()
     app.state.app_state = state
 
