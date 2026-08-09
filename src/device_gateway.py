@@ -109,6 +109,10 @@ class DeviceSession:
         # los dos en el mismo WebSocket, y entrelazar tramas lo corrompería.
         self._send_lock = asyncio.Lock()
         self._closed = False
+        # Hay voz de Luka en vuelo hacia el dispositivo. Es lo que hace a
+        # `end_tts` idempotente: solo se manda TTS_END si de verdad se abrió el
+        # grifo, no una vez por cada sitio que podría cerrarlo.
+        self._tts_open = False
         # Quien esté esperando una foto. `None` si nadie la pidió.
         self._image_waiter: Optional[asyncio.Future] = None
 
@@ -127,8 +131,25 @@ class DeviceSession:
     async def send_tts_audio(self, audio: np.ndarray, source_rate: int) -> None:
         """*Sink* de audio: reenvía al dispositivo lo que sintetiza el TTS."""
         pcm = float_to_link_pcm(audio, source_rate)
+        if pcm:
+            self._tts_open = True
         for i in range(0, len(pcm), DOWNLINK_CHUNK_SAMPLES * 2):
             await self.send(proto.encode(proto.TTS_AUDIO, pcm[i:i + DOWNLINK_CHUNK_SAMPLES * 2]))
+
+    async def end_tts(self) -> None:
+        """Cierra el audio del turno: `TTS_END`, pero solo si hubo audio.
+
+        Idempotente a propósito: lo llaman tanto el *pipeline* del TTS (al
+        agotarse, venga el turno de donde venga) como el `finally` del turno del
+        propio dispositivo. Y un `TTS_END` sin audio previo **no** es inofensivo:
+        en el firmware fuerza la apertura del altavoz (existe para respuestas
+        cortas que nunca llenaron el colchón), así que mandarlo de más se oiría
+        como un clic y un flash del anillo.
+        """
+        if not self._tts_open:
+            return
+        self._tts_open = False
+        await self.send(proto.encode(proto.TTS_END))
 
     # ------------------------------------------------------------- recepción
     async def run(self) -> None:
@@ -344,7 +365,7 @@ class DeviceSession:
             # «sigo pensando» sobre el turno SIGUIENTE.
             latido.cancel()
             wav_path.unlink(missing_ok=True)
-            await self.send(proto.encode(proto.TTS_END))
+            await self.end_tts()
             await self.send(proto.state(proto.STATE_IDLE))
 
 
@@ -366,6 +387,7 @@ class DeviceManager:
         """Registra la sesión y engancha el *sink* de audio del TTS."""
         self.session = session
         assistant_service.audio_sink = self._sink
+        assistant_service.audio_sink_end = self._sink_end
         # Con dispositivo presente, por defecto suena en los dos sitios; el usuario
         # puede cambiarlo en caliente desde /device/audio-sink.
         assistant_service.audio_target = "both"
@@ -394,12 +416,23 @@ class DeviceManager:
             return
         self.session = None
         assistant_service.audio_sink = None
+        assistant_service.audio_sink_end = None
         assistant_service.audio_target = "pc"
         logger.info("Dispositivo desconectado; salida de audio: pc")
 
     async def _sink(self, audio: np.ndarray, source_rate: int) -> None:
         if self.session is not None:
             await self.session.send_tts_audio(audio, source_rate)
+
+    async def _sink_end(self) -> None:
+        """Aviso de «no viene más audio»: lo llama el pipeline del TTS al agotarse.
+
+        Es lo que hace que una respuesta pedida por otra vía (GUI, micro del PC,
+        chat) cierre bien en el dispositivo: sin él el aparato se quedaría
+        «hablando» hasta el *timeout* del firmware, sordo mientras tanto.
+        """
+        if self.session is not None:
+            await self.session.end_tts()
 
     def status(self) -> dict:
         """Resumen para /status."""

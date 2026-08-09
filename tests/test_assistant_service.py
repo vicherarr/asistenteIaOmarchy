@@ -268,6 +268,100 @@ async def test_play_worker_handles_error(service, mock_tts):
     assert call_count == 3
 
 
+@pytest.mark.asyncio
+async def test_play_worker_avisa_al_dispositivo_al_agotarse(service, mock_tts):
+    """La voz que salió hacia el satélite se cierra con el aviso de fin, venga el
+    turno de donde venga: sin él el aparato se queda «hablando» y sordo hasta el
+    timeout del firmware."""
+    import numpy as np
+
+    enviado = []
+    fin = asyncio.Event()
+
+    async def sink(audio, rate):
+        enviado.append((audio, rate))
+
+    async def sink_end():
+        fin.set()
+
+    service.audio_sink = sink
+    service.audio_sink_end = sink_end
+    service.audio_target = "both"
+
+    queue_audio = asyncio.Queue()
+    await queue_audio.put(np.array([0.1, 0.2]))
+    await queue_audio.put(None)
+
+    await service._play_worker(queue_audio)
+
+    assert len(enviado) == 1, "el audio no salió hacia el dispositivo"
+    assert fin.is_set(), "el dispositivo no recibió el aviso de fin de audio"
+    # Y el PC sigue sonando como siempre (target "both").
+    mock_tts.play_audio_array.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_play_worker_cancelado_tambien_cierra_el_audio(service, mock_tts):
+    """Cancelar (/cancel, otra petición que pisa, barge-in) no puede dejar al
+    satélite «hablando» hasta el timeout del firmware."""
+    import numpy as np
+
+    llamado = asyncio.Event()
+    fin = asyncio.Event()
+
+    async def sink(_audio, _rate):
+        llamado.set()
+
+    async def sink_end():
+        fin.set()
+
+    service.audio_sink = sink
+    service.audio_sink_end = sink_end
+    service.audio_target = "both"
+
+    queue_audio = asyncio.Queue()
+    await queue_audio.put(np.array([0.1]))
+
+    task = asyncio.create_task(service._play_worker(queue_audio))
+    # Que procese el primer audio y se quede esperando más: ahí es donde llega
+    # la cancelación en la vida real.
+    await asyncio.wait_for(llamado.wait(), 1.0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert fin.is_set(), "una cancelación dejó al dispositivo sin fin de audio"
+
+
+@pytest.mark.asyncio
+async def test_play_worker_sin_dispositivo_no_avisa_ni_envia(service, mock_tts):
+    """Con salida solo por el PC no se envía audio ni fin de audio al satélite."""
+    import numpy as np
+
+    enviado = []
+    fin = asyncio.Event()
+
+    async def sink(audio, _rate):
+        enviado.append(audio)
+
+    async def sink_end():
+        fin.set()
+
+    service.audio_sink = sink
+    service.audio_sink_end = sink_end
+    service.audio_target = "pc"
+
+    queue_audio = asyncio.Queue()
+    await queue_audio.put(np.array([0.1]))
+    await queue_audio.put(None)
+
+    await service._play_worker(queue_audio)
+
+    assert enviado == []
+    assert not fin.is_set()
+    mock_tts.play_audio_array.assert_awaited_once()
+
+
 @pytest.mark.skip(reason="Loop multimodal desactivado - analyze_screen no está registrado en self.tools")
 @pytest.mark.asyncio
 async def test_process_transcription_stream_multimodal_second_pass(service, mock_litert):

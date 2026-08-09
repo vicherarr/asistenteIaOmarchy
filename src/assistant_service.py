@@ -96,6 +96,9 @@ class AssistantService:
         self.audio_target: str = "pc"
         # Callable async (audio_np, sample_rate) -> None. Lo instala device_gateway.
         self.audio_sink: Optional[Callable] = None
+        # Callable async () -> None: aviso de «no viene más audio» para el
+        # dispositivo. Lo instala device_gateway junto a `audio_sink`.
+        self.audio_sink_end: Optional[Callable] = None
         # Lista de herramientas para LiteRT
         self.tools = [
             execute_system_command,
@@ -374,6 +377,11 @@ class AssistantService:
         Se ejecuta en paralelo con _synth_worker para eliminar gaps entre frases.
         """
         logger.info("Worker de reproducción TTS iniciado")
+        # Si en este turno salió audio hacia el dispositivo, al cerrar hay que
+        # avisarle de que no viene más —tanto si la cola se agota como si nos
+        # cancelan—: sin el TTS_END el aparato se quedaría «hablando» hasta el
+        # timeout del firmware, sordo mientras tanto.
+        sent_to_device = False
         try:
             while True:
                 audio_np = await queue_audio.get()
@@ -381,13 +389,14 @@ class AssistantService:
                     queue_audio.task_done()
                     logger.info("Worker de reproducción recibió señal de finalización")
                     break
-                
+
                 try:
                     # Dispositivo satélite primero: se manda por red mientras el PC
                     # reproduce, en vez de después, para no sumar latencias.
                     if self.audio_sink is not None and self.audio_target in ("device", "both"):
                         try:
                             await self.audio_sink(audio_np, TTSEngine.SAMPLE_RATE)
+                            sent_to_device = True
                         except Exception as e:  # noqa: BLE001 — el enlace no debe tumbar el TTS
                             logger.warning(f"No se pudo enviar audio al dispositivo: {e}")
                     if self.audio_target in ("pc", "both"):
@@ -402,6 +411,11 @@ class AssistantService:
         except Exception as e:
             logger.error(f"Error inesperado en worker de reproducción: {e}")
         finally:
+            if sent_to_device and self.audio_sink_end is not None:
+                try:
+                    await self.audio_sink_end()
+                except Exception as e:  # noqa: BLE001 — el aviso no debe tumbar el worker
+                    logger.warning(f"No se pudo avisar del fin de audio al dispositivo: {e}")
             # Cerrar el stream persistente al terminar
             self.tts.close_persistent_stream()
 

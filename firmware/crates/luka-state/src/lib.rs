@@ -445,6 +445,23 @@ pub fn next(state: State, event: Event, now_ms: u64) -> (State, Actions) {
             (S::Speaking { since_ms: now_ms }, Actions::of(&[StartPlayback]))
         }
 
+        // **La voz abre el altavoz venga el turno de donde venga.**
+        //
+        // Un turno que no nació aquí —se le habló a Luka por la GUI, por el
+        // micro del PC o por el chat— no pasa por `Thinking`: el primer indicio
+        // que llega del servidor es el propio audio. Sin este brazo ese audio se
+        // acumulaba en la cola hasta desbordar y se tiraba sin haber sonado, y
+        // el satélite se quedaba mudo ante cualquier conversación que no hubiera
+        // empezado en él.
+        //
+        // El invariante de siempre se mantiene intacto: quien abre el altavoz
+        // es el audio de verdad (con su colchón ya lleno), nunca un aviso del
+        // servidor. Y el cierre es el de cualquier turno: `TtsEnded` cuando la
+        // cola se vacía, que deja el micro atento por si se quiere contestar.
+        (S::Idle | S::FollowUp { .. }, E::TtsStarted) => {
+            (S::Speaking { since_ms: now_ms }, Actions::of(&[StartPlayback]))
+        }
+
         // Terminar de hablar ya no devuelve a reposo: deja el micro atento un
         // rato para poder contestar sin volver a decir "Luka".
         (S::Speaking { .. }, E::TtsEnded) => {
@@ -754,6 +771,44 @@ mod tests {
         let (state, actions) = next(state, E::TtsEnded, 5_000);
         assert!(matches!(state, S::FollowUp { .. }));
         assert!(actions.contains(StopPlayback));
+    }
+
+    // --- Turnos que no nacieron aquí ---
+
+    /// Se le puede hablar a Luka por la GUI, por el micro del PC o por el chat:
+    /// esos turnos no pasan por `Thinking` y el primer indicio que llega es el
+    /// propio audio. Sin este brazo el satélite se quedaba mudo: la cola se
+    /// llenaba hasta desbordar sin que sonara una sola muestra.
+    #[test]
+    fn la_voz_que_llega_en_reposo_abre_el_altavoz() {
+        let (state, actions) = next(S::Idle, E::TtsStarted, 1_000);
+        assert_eq!(state, S::Speaking { since_ms: 1_000 });
+        assert!(actions.contains(StartPlayback));
+    }
+
+    /// Y si el audio llega durante la ventana de seguimiento —Luka acaba de
+    /// hablar y alguien contesta desde otra vía— también tiene que sonar.
+    #[test]
+    fn la_voz_que_llega_en_seguimiento_abre_el_altavoz() {
+        let (state, actions) = next(S::FollowUp { since_ms: 0 }, E::TtsStarted, 1_000);
+        assert_eq!(state, S::Speaking { since_ms: 1_000 });
+        assert!(actions.contains(StartPlayback));
+    }
+
+    /// El camino completo de una respuesta nacida fuera: suena, y al acabar el
+    /// micro queda atento un rato, igual que tras cualquier turno.
+    #[test]
+    fn una_respuesta_nacida_fuera_suena_y_deja_el_micro_atento() {
+        let state = run(&[
+            (E::Booted, 0),
+            (E::WifiUp, 100),
+            (E::ServerUp, 200),
+            // Nadie pulsó el botón ni dijo "Luka": el audio llega solo.
+            (E::TtsStarted, 5_000),
+            (E::TtsEnded, 9_000),
+        ]);
+        assert!(matches!(state, S::FollowUp { .. }), "no quedó atento: {state:?}");
+        assert_eq!(next(state, E::Tick, 9_000 + FOLLOW_UP_MS).0, S::Idle);
     }
 
     // --- Ventana de seguimiento ---

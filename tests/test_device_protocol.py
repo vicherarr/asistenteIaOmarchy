@@ -187,7 +187,7 @@ async def drive(session, timeout: float = 3.0):
             await task
 
 
-def _fake_state(transcription="hola luka", reply="Hola, dime."):
+def _fake_state(transcription="hola luka", reply="Hola, dime.", con_voz=False):
     """AppState mínimo con las piezas que toca la sesión."""
     from unittest.mock import AsyncMock, MagicMock
 
@@ -195,9 +195,21 @@ def _fake_state(transcription="hola luka", reply="Hola, dime."):
     state.stt_engine.transcribe = AsyncMock(return_value=transcription)
     state.audio_manager.default_sink = None
     state.conversation_history = []
+    # Los engancha `DeviceManager.attach` si hay dispositivo; aquí arrancan en
+    # None para que el stream de mentira sepa si hay sink o no.
+    state.assistant_service.audio_sink = None
+    state.assistant_service.audio_sink_end = None
 
     async def _stream(**_kwargs):
+        if con_voz and state.assistant_service.audio_sink is not None:
+            # Como el pipeline real: la voz sale por el sink mientras llega el
+            # texto, y al terminar se avisa de que no viene más.
+            await state.assistant_service.audio_sink(
+                np.zeros(1600, dtype=np.float32), 24_000
+            )
         yield reply
+        if con_voz and state.assistant_service.audio_sink_end is not None:
+            await state.assistant_service.audio_sink_end()
 
     state.assistant_service.process_transcription_stream = _stream
     state.assistant_service.wait_for_tts_complete = AsyncMock()
@@ -210,7 +222,7 @@ def _fake_state(transcription="hola luka", reply="Hola, dime."):
 @pytest.mark.asyncio
 class TestDeviceSession:
     async def test_un_turno_completo(self):
-        from src.device_gateway import DeviceSession
+        from src.device_gateway import DeviceManager, DeviceSession
 
         # Medio segundo de audio: justo por encima del umbral de "esto es un roce".
         audio = proto.encode(proto.AUDIO, b"\x00" * (LINK_SAMPLE_RATE + 100))
@@ -219,15 +231,42 @@ class TestDeviceSession:
             audio,
             proto.encode(proto.END),
         ])
-        session = DeviceSession(ws, _fake_state())
+        state = _fake_state(con_voz=True)
+        session = DeviceSession(ws, state)
+        # El cableado de producción: el sink del TTS apunta a esta sesión.
+        DeviceManager().attach(session, state.assistant_service)
         await drive(session)
 
         kinds = ws.kinds()
         assert proto.TRANSCRIPT in kinds, "debería devolver lo que entendió"
         assert proto.REPLY in kinds, "debería devolver la respuesta de Luka"
-        assert proto.TTS_END in kinds, "debería cerrar el audio del turno"
+        assert proto.TTS_AUDIO in kinds, "la voz debería viajar al dispositivo"
+        # El audio se cierra exactamente una vez: lo llaman tanto el pipeline al
+        # agotarse como el finally del turno, y un TTS_END duplicado abriría el
+        # altavoz en seco en el dispositivo.
+        assert kinds.count(proto.TTS_END) == 1, "el fin de audio debería salir una sola vez"
+        assert kinds.index(proto.TTS_END) > kinds.index(proto.TTS_AUDIO)
         # El último estado tiene que ser idle: si no, el anillo del dispositivo se
         # quedaría "pensando" para siempre.
+        assert ws.states()[-1] == proto.STATE_IDLE
+
+    async def test_un_turno_sin_audio_no_manda_tts_end(self):
+        """Un TTS_END sin audio previo abriría el altavoz en seco.
+
+        El firmware fuerza la apertura ante un TTS_END (existe para respuestas
+        cortas que nunca llenaron el colchón), así que mandarlo en un turno que
+        no sintetizó nada se oiría como un clic y un flash del anillo.
+        """
+        from src.device_gateway import DeviceSession
+
+        ws = FakeWebSocket([
+            proto.encode(proto.AUDIO, b"\x00" * (LINK_SAMPLE_RATE + 100)),
+            proto.encode(proto.END),
+        ])
+        session = DeviceSession(ws, _fake_state(transcription=""))
+        await drive(session)
+
+        assert proto.TTS_END not in ws.kinds()
         assert ws.states()[-1] == proto.STATE_IDLE
 
     async def test_un_turno_largo_repite_que_sigue_vivo(self, monkeypatch):
@@ -337,6 +376,7 @@ class TestGestorDeDispositivos:
         manager.attach(session, service)
         assert service.audio_target == "both"
         assert service.audio_sink is not None
+        assert service.audio_sink_end is not None
 
         # `detach` recibe la sesión que se va, no solo el servicio: solo suelta el
         # sink si la que se cierra es la registrada (si no, una sesión vieja dejaba
@@ -344,6 +384,7 @@ class TestGestorDeDispositivos:
         manager.detach(session, service)
         assert service.audio_target == "pc"
         assert service.audio_sink is None
+        assert service.audio_sink_end is None
         assert not manager.connected
 
 

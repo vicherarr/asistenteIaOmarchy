@@ -980,6 +980,48 @@ igual, y un servidor mudo no reasocia la WiFi).
 
 ---
 
+## ✅ Luka contesta por el satélite venga el turno de donde venga (2026-08-09)
+
+Hablarle a Luka por la GUI, por el micro del PC o por el chat dejaba al satélite
+mudo. La respuesta se generaba, se sintetizaba y **viajaba** al aparato —las
+tramas `TTS_AUDIO` llegaban— pero no se oía nada. La cadena tenía dos eslabones
+rotos, uno en cada extremo, y hacían falta los dos para el silencio:
+
+**Del lado del firmware:** `Speaking` solo se alcanzaba desde `Thinking`, o sea
+desde un turno que había nacido en la propia placa. Un turno de fuera no pasa
+por ahí: el primer indicio que llega es el audio, y `(Idle, TtsStarted)` caía en
+el cajón de «no cambia nada». Resultado: la cola se llenaba (caben 60 s) y se
+tiraba sin haber sonado una sola muestra. El arreglo es un brazo nuevo:
+`(Idle | FollowUp, TtsStarted) → Speaking + StartPlayback`. El invariante de
+siempre —quien abre el altavoz es el audio de verdad, con su colchón ya lleno,
+nunca un aviso del servidor— queda intacto.
+
+**Del lado del servidor:** `TTS_END` solo se mandaba en los turnos del propio
+satélite (`_run_turn`). Para los demás nunca llegaba: con el altavoz ya abierto
+por el brazo nuevo, el aparato se habría quedado «hablando» y sordo hasta el
+timeout de 60 s. Ahora el `_play_worker` del TTS avisa al agotarse la cola **y
+al ser cancelado**, a través de un hook nuevo (`audio_sink_end`) que instala el
+`DeviceManager` al engancharse. De regalo, `/cancel` ya no deja al satélite
+colgado.
+
+Y una trampa que había que desarmar antes de que mordiera: ese `TTS_END` se
+mandaba **incondicionalmente**, incluso en turnos sin voz. Con el brazo nuevo,
+un `TTS_END` sin audio previo fuerza `TtsStarted` en el firmware (existe para
+respuestas cortas que nunca llenan el colchón) y abriría el altavoz en seco:
+clic y flash del anillo tras cada «no te he entendido». Por eso `end_tts()` es
+idempotente: solo cierra si hubo audio, y lo llaman dos sitios (el pipeline y el
+`finally` del turno) sin que salga dos veces.
+
+47 tests en `luka-state` (3 nuevos: la voz abre en reposo, abre en seguimiento,
+y el camino completo suena y deja el micro atento). En Python, 8 nuevos: el fin
+de audio sale exactamente una vez, no sale si no hubo audio, y el `_play_worker`
+avisa al terminar, al cancelar y nunca sin dispositivo.
+
+Desbloquea el pendiente de **narrar tareas agénticas** (el #5 de la lista), que
+estaba parado justo por la transición que faltaba.
+
+---
+
 # 📍 Dónde estamos (2026-08-06, cierre del día)
 
 ## Funciona
@@ -1016,8 +1058,9 @@ que lo pidan.
 4. **El troceado del TTS** (`assistant_service.py:273`) parte por todas las comas
    pasados 80 caracteres; con enumeraciones Kokoro cae a 1× tiempo real. El
    colchón lo tapa, pero sigue ahí.
-5. **Narrar tareas agénticas**: la tercera petición del día, sin empezar. La
-   bloquea que `(Idle, TtsStarted)` no exista en la máquina de estados.
+5. **Narrar tareas agénticas**: la tercera petición del día, sin empezar. Ya no
+   la bloquea la máquina de estados: `(Idle, TtsStarted)` existe desde
+   2026-08-09.
 6. **El color de la cámara** (balance de blancos) y **la tarjeta SD**, sin tocar.
 
 ## Cómo se trabaja aquí (lo que hoy costó aprender)
