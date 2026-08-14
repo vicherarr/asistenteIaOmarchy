@@ -287,3 +287,30 @@ def test_factory_hermes_returns_engine(tmp_path, monkeypatch):
     engine = create_engine(_DummySettings("hermes"))
     assert isinstance(engine, InferenceEngine)
     assert engine.name == "Hermes"
+
+
+def test_hermes_normaliza_los_nombres_de_tools_mcp():
+    """Hermes prefija las tools MCP; el resto del asistente busca el nombre pelado.
+
+    Sin esto, _TERMINAL_TOOL_NAMES no detectaría la rama de terminal y las frases de
+    _FALLBACK_BY_TOOL no dispararían nunca (ambos en assistant_service).
+    """
+    from src.engines.hermes_engine import _luka_tool_name
+
+    assert _luka_tool_name("mcp__luka__music_control") == "music_control"
+    assert _luka_tool_name("mcp__luka__execute_system_command") == "execute_system_command"
+    # Las propias de Hermes no llevan prefijo y no deben tocarse.
+    assert _luka_tool_name("terminal") == "terminal"
+    assert _luka_tool_name("execute_code") == "execute_code"
+    # Casos raros: no romper.
+    assert _luka_tool_name("mcp__luka__") == "mcp__luka__"
+    assert _luka_tool_name("mcp__solo_dos") == "mcp__solo_dos"
+
+
+def test_hermes_los_nombres_normalizados_casan_con_la_rama_de_terminal():
+    """La normalización tiene que servir para lo que existe: el fallback de terminal."""
+    from src.assistant_service import _TERMINAL_TOOL_NAMES
+    from src.engines.hermes_engine import _luka_tool_name
+
+    assert _luka_tool_name("mcp__luka__execute_system_command") in _TERMINAL_TOOL_NAMES
+    assert _luka_tool_name("mcp__luka__read_terminal_screen") in _TERMINAL_TOOL_NAMES

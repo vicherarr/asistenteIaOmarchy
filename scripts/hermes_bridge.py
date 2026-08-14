@@ -70,6 +70,8 @@ def main() -> None:
 
     from run_agent import AIAgent  # noqa: E402 — depende del sys.path de arriba
 
+    _register_mcp_servers()
+
     tools_this_turn: list[str] = []
 
     def _on_tool_start(*a) -> None:
@@ -140,6 +142,33 @@ def main() -> None:
             _log(f"error en el turno: {type(e).__name__}: {e}")
             _emit({"done": True, "final": "", "tools": list(tools_this_turn),
                    "error": f"{type(e).__name__}: {e}"})
+
+
+def _register_mcp_servers() -> None:
+    """Conecta los servidores MCP de ~/.hermes/config.yaml y registra sus herramientas.
+
+    Hay que pedirlo explícitamente: construir un AIAgent NO lo hace. Es la CLI (y el
+    adaptador ACP) quien llama a register_mcp_servers al arrancar, así que un agente
+    embebido como este se queda sin ellas si no lo replica. Sin esto, Hermes busca
+    'music_control' con tool_search, no la encuentra, y responde que no tiene acceso.
+
+    Aquí es donde entran las herramientas de Luka (src/mcp_server.py).
+    """
+    try:
+        from tools.mcp_tool import _load_mcp_config, register_mcp_servers
+    except ImportError as e:
+        # El soporte MCP de Hermes es un extra opcional ('uv sync --extra mcp').
+        _log(f"sin soporte MCP ({e}); Hermes irá solo con sus herramientas")
+        return
+    try:
+        servers = _load_mcp_config()
+        if not servers:
+            _log("no hay servidores MCP configurados")
+            return
+        names = register_mcp_servers(servers)
+        _log(f"MCP: {len(names)} herramientas de {sorted(servers)} -> {sorted(names)[:12]}")
+    except Exception as e:  # noqa: BLE001 — un MCP caído no debe impedir el turno
+        _log(f"no se pudieron registrar los servidores MCP: {type(e).__name__}: {e}")
 
 
 def _tools_from_messages(messages) -> list[str]:

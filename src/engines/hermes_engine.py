@@ -212,11 +212,12 @@ class HermesEngine:
                         seen = True
                     yield text
                 elif "tool" in msg:
-                    self.last_turn_tools_used.append(msg["tool"])
+                    self.last_turn_tools_used.append(_luka_tool_name(msg["tool"]))
                 elif msg.get("done"):
                     for name in msg.get("tools") or []:
-                        if name not in self.last_turn_tools_used:
-                            self.last_turn_tools_used.append(name)
+                        luka_name = _luka_tool_name(name)
+                        if luka_name not in self.last_turn_tools_used:
+                            self.last_turn_tools_used.append(luka_name)
                     if msg.get("error"):
                         logger.error(f"Hermes falló el turno: {msg['error']}")
                         yield "Error: Hermes no ha podido completar la tarea."
@@ -250,6 +251,23 @@ class HermesEngine:
 
     def close(self) -> None:
         self._kill()
+
+
+def _luka_tool_name(name: str) -> str:
+    """Quita el prefijo con el que Hermes espacia las herramientas MCP.
+
+    Hermes las registra como ``mcp__<servidor>__<tool>`` (p.ej.
+    ``mcp__luka__music_control``), pero el resto del asistente busca el nombre pelado:
+    ``_TERMINAL_TOOL_NAMES`` decide con él la rama de terminal del fallback, y
+    ``_FALLBACK_BY_TOOL`` la frase que se habla cuando la respuesta no es suficiente
+    (ambos en assistant_service). Sin normalizar, ninguna de las dos dispararía nunca y
+    el guardarraíl vería nombres que no reconoce.
+    """
+    if name.startswith("mcp__"):
+        partes = name.split("__", 2)
+        if len(partes) == 3 and partes[2]:
+            return partes[2]
+    return name
 
 
 def _history_to_dicts(history) -> list[dict]:
