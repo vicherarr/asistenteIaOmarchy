@@ -171,6 +171,19 @@ EXLLAMA_TABBY_DIR="$(ai_read_env EXLLAMA_TABBY_DIR "$PROJECT_DIR/exllama/tabbyAP
 ai_engine()          { ai_read_env AI_ENGINE litert; }
 ai_using_exllama()   { [ "$(ai_engine)" = "exllama" ]; }
 ai_using_openrouter(){ [ "$(ai_engine)" = "openrouter" ]; }
+ai_using_hermes()    { [ "$(ai_engine)" = "hermes" ]; }
+# Motores que sirven su LLM desde el sidecar TabbyAPI. Hermes también, porque le habla
+# por /v1 igual que ExLlamaEngine; lo que cambia es quién lleva el bucle de tools.
+ai_needs_tabby()     { ai_using_exllama || ai_using_hermes; }
+
+# Configuración del sidecar CUANDO el motor es hermes. Es distinta de la de exllama a
+# propósito: Hermes pide 64k de contexto mínimo y su system prompt es enorme, así que
+# necesita una cuantización más baja (más VRAM libre para la KV-cache) y caché Q4.
+# Con exllama, Luka sigue exactamente con lo suyo (4.00bpw / 8k / Q8): son dos perfiles
+# independientes y cambiar de motor reescribe el config.yml del sidecar.
+HERMES_MODEL="$(ai_read_env HERMES_MODEL Qwen3.5-9B-exl3-3.00bpw)"
+HERMES_CTX="$(ai_read_env HERMES_CTX 65536)"
+HERMES_CACHE_MODE="$(ai_read_env HERMES_CACHE_MODE Q4)"
 ai_tabby_autostart(){ case "$(printf '%s' "$EXLLAMA_AUTOSTART" | tr 'A-Z' 'a-z')" in 1|true|yes|on) return 0 ;; *) return 1 ;; esac; }
 
 # El backend ExLlama está "instalado" si existe su venv y el main.py de TabbyAPI.
@@ -400,11 +413,12 @@ ai_tabby_tool_format() {
     esac
 }
 
-# Escribe el config.yml de TabbyAPI. $1=model_name $2=max_seq_len $3=vision(yes/no).
-# host/port salen de EXLLAMA_BASE_URL; sin tokens => disable_auth. El formato de
-# herramientas del servidor se fija solo si el modelo tiene parser (ver arriba).
+# Escribe el config.yml de TabbyAPI. $1=model_name $2=max_seq_len $3=vision(yes/no)
+# $4=cache_mode (Q8 por defecto). host/port salen de EXLLAMA_BASE_URL; sin tokens =>
+# disable_auth. El formato de herramientas del servidor se fija solo si el modelo tiene
+# parser (ver arriba).
 ai_tabby_write_config() {
-    local model_name="$1" max_seq="${2:-8192}" vision="${3:-no}"
+    local model_name="$1" max_seq="${2:-8192}" vision="${3:-no}" cache_mode="${4:-Q8}"
     local hp host port disable_auth vbool tool_fmt
     # Asegura una plantilla de chat compatible si el modelo la necesita (transparente).
     ai_tabby_autofix_template "$model_name"
@@ -433,9 +447,10 @@ model:
   model_name: $model_name
   max_seq_len: $max_seq
   cache_size: $max_seq
-  # Caché KV cuantizada a 8 bits: ~la mitad de VRAM que FP16 con pérdida de calidad
-  # mínima, así cabe MÁS contexto en la misma tarjeta (p.ej. 32k en 8 GiB).
-  cache_mode: Q8
+  # Caché KV cuantizada: a 8 bits es ~la mitad de VRAM que FP16 con pérdida mínima, así
+  # cabe MÁS contexto en la misma tarjeta (p.ej. 32k en 8 GiB). Con el motor hermes se
+  # baja a Q4 porque hacen falta 64k y no entran de otra forma.
+  cache_mode: $cache_mode
   gpu_split_auto: true
   inline_model_loading: false
   vision: $vbool
@@ -444,6 +459,44 @@ model:
 developer:
   unsafe_launch: false
 YML
+}
+
+# Ventana de contexto que le toca a un modelo con el motor exllama. Prioridad:
+# EXLLAMA_CTX del .env (lo fija 'engine use', respetando un --ctx a medida) > el valor
+# del catálogo curado (ya validado para 8 GiB) > 8192.
+ai_tabby_model_max_seq() {
+    local model="$1" ctx k _r _v cdir cvis cseq _d
+    ctx="$(ai_read_env EXLLAMA_CTX '')"
+    case "$ctx" in ''|*[!0-9]*) ctx="" ;; esac
+    [ -n "$ctx" ] && { echo "$ctx"; return 0; }
+    for k in $EXLLAMA_MODEL_KEYS; do
+        IFS='|' read -r _r _v cdir cvis cseq _d < <(exllama_model_meta "$k")
+        [ "$cdir" = "$model" ] && { echo "$cseq"; return 0; }
+    done
+    echo 8192
+}
+
+# Reescribe el config.yml del sidecar con el perfil del motor ACTIVO. Se llama al
+# cambiar de motor, porque exllama y hermes quieren cosas distintas de la misma tarjeta:
+#
+#   exllama -> EXLLAMA_MODEL, su ventana, Q8   (Luka lleva el bucle de tools)
+#   hermes  -> HERMES_MODEL, 64k, Q4           (Hermes lo lleva y necesita contexto)
+#
+# Con litert/openrouter no hay sidecar y no se toca nada. Devuelve 1 (sin escribir) si
+# el modelo que toca no está descargado, para que quien llame pueda avisar.
+ai_tabby_sync_config_for_engine() {
+    ai_needs_tabby || return 0
+    local model seq vis cache
+    if ai_using_hermes; then
+        model="$HERMES_MODEL"; seq="$HERMES_CTX"; cache="$HERMES_CACHE_MODE"; vis=no
+    else
+        model="$(ai_read_env EXLLAMA_MODEL Qwen3-8B-exl3-4bpw)"
+        seq="$(ai_tabby_model_max_seq "$model")"
+        case "$(ai_read_env EXLLAMA_VISION False)" in [Tt]rue|1|yes) vis=yes ;; *) vis=no ;; esac
+        cache=Q8
+    fi
+    ai_tabby_model_present "$model" || return 1
+    ai_tabby_write_config "$model" "$seq" "$vis" "$cache"
 }
 
 # ---- Modelos EXL3 libres (cualquiera de HuggingFace, no solo el catálogo) ----
@@ -633,7 +686,7 @@ ai_ensure_running() {
     # servicio: con systemd lo gestiona la unit companion `asistenteia-tabby.service`
     # (Wants/After), así no se arranca dos veces (colisión de puerto). Todo su stdout
     # va a stderr para no contaminar el "started/already/error" que devolvemos.
-    if ai_using_exllama && ai_tabby_autostart && ! ai_service_installed; then
+    if ai_needs_tabby && ai_tabby_autostart && ! ai_service_installed; then
         ai_tabby_start 180 1>&2 \
             || warn "Arrancando el asistente sin motor listo (ExLlama no disponible)."
     fi

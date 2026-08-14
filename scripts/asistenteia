@@ -705,6 +705,10 @@ PY
 
                 ai_tabby_write_config "$name" "$ctx" "$want_vision"
                 ai_set_env_key EXLLAMA_MODEL "$name"
+                # Se guarda para que al ir y volver de 'hermes' (que reescribe el
+                # config.yml con su propio perfil) se recupere ESTA ventana, incluida
+                # una elegida a mano con --ctx, y no la del catálogo.
+                ai_set_env_key EXLLAMA_CTX "$ctx"
                 [ "$want_vision" = yes ] && ai_set_env_key EXLLAMA_VISION True || ai_set_env_key EXLLAMA_VISION False
                 ai_refresh_focus_tools
                 ok "Modelo exllama activo: $name (contexto $ctx, visión: $want_vision)"
@@ -745,8 +749,11 @@ PY
             m=" "; [ "$cur" = openrouter ] && m="*"
             est="sin API key"; [ -n "$(ai_openrouter_key)" ] && est="con API key"
             printf "  %s openrouter  LLM en la nube (gratis, sin VRAM)          [%s]\n" "$m" "$est"
+            m=" "; [ "$cur" = hermes ] && m="*"
+            est="modelo sin descargar"; ai_tabby_model_present "$HERMES_MODEL" && est="listo"
+            printf "  %s hermes   Hermes Agent sobre el sidecar (64k, agéntico) [%s]\n" "$m" "$est"
             echo
-            if ai_using_exllama; then
+            if ai_needs_tabby; then
                 ai_tabby_up && echo "Sidecar TabbyAPI: EN MARCHA ($EXLLAMA_BASE_URL)" \
                             || echo "Sidecar TabbyAPI: detenido"
             fi
@@ -756,15 +763,15 @@ PY
             [ "$sub" = list ] || [ "$sub" = status ] && exit 0
             echo
             if [ -r /dev/tty ]; then
-                read -r -p "¿A qué motor cambiar? [litert/exllama/openrouter] (Enter = cancelar): " sub </dev/tty || sub=""
+                read -r -p "¿A qué motor cambiar? [litert/exllama/openrouter/hermes] (Enter = cancelar): " sub </dev/tty || sub=""
             fi
             [ -z "$sub" ] && { echo "Sin cambios."; exit 0; }
         fi
 
         sub="$(printf '%s' "$sub" | tr 'A-Z' 'a-z')"
         case "$sub" in
-            litert|exllama|openrouter) : ;;
-            *) err "Motor no válido: '$sub'. Usa litert, exllama u openrouter."; exit 1 ;;
+            litert|exllama|openrouter|hermes) : ;;
+            *) err "Motor no válido: '$sub'. Usa litert, exllama, openrouter o hermes."; exit 1 ;;
         esac
 
         if [ "$sub" = "$cur" ]; then
@@ -796,7 +803,22 @@ PY
         echo "Motor activo: $sub"
         [ "$sub" = openrouter ] && echo "Modelo: $(ai_openrouter_model)"
 
-        # Mutua exclusión: al salir de exllama, parar el sidecar y liberar VRAM.
+        # exllama y hermes comparten sidecar pero NO configuración: uno quiere la ventana
+        # corta de Luka y el otro 64k para el bucle de Hermes. Al cambiar entre ellos hay
+        # que reescribir el config.yml, o el sidecar arrancaría con el perfil del otro.
+        if ai_needs_tabby; then
+            if ai_tabby_sync_config_for_engine; then
+                if [ "$sub" = hermes ]; then
+                    echo "Sidecar: $HERMES_MODEL (contexto $HERMES_CTX, caché $HERMES_CACHE_MODE)"
+                fi
+            else
+                warn "El modelo del motor '$sub' no está descargado; el config.yml no se ha tocado."
+                [ "$sub" = hermes ] && \
+                    warn "Descárgalo con: asistenteia engine pull turboderp/Qwen3.5-9B-exl3 3.00bpw"
+            fi
+        fi
+
+        # Mutua exclusión: al salir de exllama/hermes, parar el sidecar y liberar VRAM.
         [ "$sub" = litert ] || [ "$sub" = openrouter ] && ai_tabby_stop
 
         # Aplicar reiniciando (igual que 'model'); ai_ensure_running levanta el

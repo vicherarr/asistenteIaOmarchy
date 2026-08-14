@@ -6,7 +6,7 @@
 # en primer plano, systemd es el supervisor: en `stop` mata el cgroup entero
 # (padre + hijo que retiene la VRAM), sin PID files ni huérfanos.
 #
-# Solo arranca si el motor activo es exllama; con litert sale 0 (nada que hacer),
+# Solo arranca si el motor activo usa el sidecar (exllama o hermes); si no, sale 0
 # de modo que la unit, aunque se "quiera" junto al asistente, no consume VRAM.
 # Resuelve EXLLAMA_TABBY_DIR vía _common.sh (respeta el .env).
 # =============================================================================
@@ -16,8 +16,8 @@ set -uo pipefail
 # shellcheck source=_common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
-if ! ai_using_exllama; then
-    echo "AI_ENGINE != exllama: no se arranca TabbyAPI." >&2
+if ! ai_needs_tabby; then
+    echo "AI_ENGINE sin sidecar (ni exllama ni hermes): no se arranca TabbyAPI." >&2
     exit 0
 fi
 
