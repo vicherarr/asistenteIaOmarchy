@@ -219,6 +219,26 @@ ai_luka_mcp_url() {
 # autofirmado (lo genera el instalador), así que con HTTPS la verificación falla y el
 # servidor MCP queda inalcanzable. Es aceptable porque el destino es esta misma máquina.
 ai_luka_mcp_ssl_verify() { [ "$PROTO" = https ] && echo false || echo true; }
+
+# Para TODO lo de Hermes: el puente que pilota Luka y cualquier Hermes suelto que se
+# haya abierto en una terminal ('asistenteia hermes' / 'hermes').
+#
+# El puente normalmente muere solo, porque es hijo del servicio y systemd se lleva el
+# cgroup entero. Pero un Hermes de terminal NO: sobrevive al asistente, y sigue con un
+# agente cargado que puede ejecutar herramientas. Al parar o al cambiar de motor, eso
+# tiene que caer también.
+#
+# Todo va acotado a NUESTRA instalación (rutas absolutas): si alguien tiene otro Hermes
+# en la máquina, no se toca.
+ai_hermes_stop() {
+    local d; d="$(ai_hermes_dir)"
+    # El puente, por su ruta de script (aunque haya quedado huérfano).
+    pkill -f "$PROJECT_DIR/scripts/hermes_bridge.py" 2>/dev/null || true
+    # Hermes suelto: su ejecutable y su intérprete, ambos dentro de nuestro venv.
+    pkill -f "$d/.venv/bin/hermes" 2>/dev/null || true
+    pkill -f "$d/.venv/bin/python .*run_agent" 2>/dev/null || true
+    return 0
+}
 ai_tabby_autostart(){ case "$(printf '%s' "$EXLLAMA_AUTOSTART" | tr 'A-Z' 'a-z')" in 1|true|yes|on) return 0 ;; *) return 1 ;; esac; }
 
 # El backend ExLlama está "instalado" si existe su venv y el main.py de TabbyAPI.

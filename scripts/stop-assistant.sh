@@ -22,6 +22,12 @@ ai_stop_process
 #     solo afecta a NUESTRA instalación.
 ai_tabby_stop
 
+# 2c. Detener TODO lo de Hermes. El puente ya habrá caído con el servicio, pero un
+#     Hermes abierto a mano en una terminal ('hermes') sobrevive al asistente y sigue
+#     con un agente cargado capaz de ejecutar herramientas. Super + X significa parar,
+#     así que también para eso.
+ai_hermes_stop
+
 # 3. Cerrar la interfaz visual.
 ai_stop_gui
 

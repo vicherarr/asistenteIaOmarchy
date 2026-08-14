@@ -864,6 +864,15 @@ PY
         # Mutua exclusión: al salir de exllama/hermes, parar el sidecar y liberar VRAM.
         [ "$sub" = litert ] || [ "$sub" = openrouter ] && ai_tabby_stop
 
+        # Al dejar de ser el motor activo, Hermes se apaga entero: el puente y cualquier
+        # Hermes suelto que hubiera abierto en una terminal. Si no, se quedaría un agente
+        # cargado, ejecutando herramientas, cuando el usuario ya ha cambiado de motor —
+        # y además apuntando a un sidecar que puede haberse parado o cambiado de perfil.
+        if [ "$cur" = hermes ] && [ "$sub" != hermes ]; then
+            ai_hermes_stop
+            echo "Hermes detenido (puente y sesiones de terminal)."
+        fi
+
         # Aplicar reiniciando (igual que 'model'); ai_ensure_running levanta el
         # sidecar si toca. Timeout amplio: TabbyAPI carga el modelo al arrancar.
         if ai_server_up; then
