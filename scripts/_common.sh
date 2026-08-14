@@ -376,12 +376,36 @@ PY
     ai_tabby_autofix_template "$name"
 }
 
+# Formato de tool calling que TabbyAPI debe PARSEAR en el servidor, según el modelo.
+# Imprime la clave de ALL_TOOLCALL_FORMATS (endpoints/OAI/utils/tools.py) o nada.
+#
+# Por qué importa: sin esta clave TabbyAPI deja la llamada como TEXTO dentro de
+# `content` (p.ej. Qwen3.5 emite <tool_call><function=X><parameter=Y>…) y NO rellena
+# `tool_calls`. A ExLlamaEngine le da igual —_parse_function_xml lo rescata— pero un
+# cliente estándar como Hermes descarta ese XML y se queda sin herramientas.
+# Con la clave puesta, el servidor entrega `tool_calls` estructuradas y ExLlamaEngine
+# toma su camino preferente (_collect_structured), que además es más robusto.
+#
+# Solo se mapean familias con parser real; para el resto se imprime vacío y el
+# comportamiento queda EXACTAMENTE como antes (retrocompatible).
+ai_tabby_tool_format() {
+    case "$1" in
+        Qwen3.5-*|Qwen3_5-*)      echo "qwen3_5" ;;
+        *Qwen3-Coder*)            echo "qwen3_coder" ;;
+        *[Gg]emma-4*|*[Gg]emma4*) echo "gemma4" ;;
+        *GLM-4.5*|*GLM-4.6*|*GLM-4.7*) echo "glm4_5" ;;
+        *MiniMax-M2*)             echo "minimax_m2" ;;
+        *Mistral*|*Devstral*)     echo "mistral" ;;
+        *)                        echo "" ;;   # Qwen3-8B, Qwen3-VL, LFM2.5: sin parser
+    esac
+}
+
 # Escribe el config.yml de TabbyAPI. $1=model_name $2=max_seq_len $3=vision(yes/no).
-# host/port salen de EXLLAMA_BASE_URL; sin tokens => disable_auth. No usa formato de
-# herramientas del servidor: el bucle de tools lo hace ExLlamaEngine.
+# host/port salen de EXLLAMA_BASE_URL; sin tokens => disable_auth. El formato de
+# herramientas del servidor se fija solo si el modelo tiene parser (ver arriba).
 ai_tabby_write_config() {
     local model_name="$1" max_seq="${2:-8192}" vision="${3:-no}"
-    local hp host port disable_auth vbool
+    local hp host port disable_auth vbool tool_fmt
     # Asegura una plantilla de chat compatible si el modelo la necesita (transparente).
     ai_tabby_autofix_template "$model_name"
     hp="${EXLLAMA_BASE_URL#*://}"; hp="${hp%%/*}"
@@ -390,6 +414,7 @@ ai_tabby_write_config() {
     [ -n "$host" ] || host="127.0.0.1"
     if [ -n "$EXLLAMA_API_KEY" ]; then disable_auth=false; else disable_auth=true; fi
     [ "$vision" = yes ] && vbool=true || vbool=false
+    tool_fmt="$(ai_tabby_tool_format "$model_name")"
     cat > "$EXLLAMA_TABBY_DIR/config.yml" <<YML
 # Generado por asistenteia (no editar a mano: se regenera). Config del motor exllama.
 network:
@@ -414,6 +439,7 @@ model:
   gpu_split_auto: true
   inline_model_loading: false
   vision: $vbool
+  tool_format: $tool_fmt
 
 developer:
   unsafe_launch: false
