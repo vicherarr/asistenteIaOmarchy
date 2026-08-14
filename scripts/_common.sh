@@ -414,12 +414,19 @@ ai_tabby_tool_format() {
 }
 
 # Escribe el config.yml de TabbyAPI. $1=model_name $2=max_seq_len $3=vision(yes/no)
-# $4=cache_mode (Q8 por defecto). host/port salen de EXLLAMA_BASE_URL; sin tokens =>
-# disable_auth. El formato de herramientas del servidor se fija solo si el modelo tiene
-# parser (ver arriba).
+# $4=cache_mode (Q8 por defecto) $5=reasoning(yes/no, no por defecto). host/port salen de
+# EXLLAMA_BASE_URL; sin tokens => disable_auth. El formato de herramientas del servidor se
+# fija solo si el modelo tiene parser (ver arriba).
+#
+# Sobre $5: con `reasoning: true` el servidor parte la respuesta en reasoning_content y
+# content. Lo quiere HERMES (su cliente lee reasoning_content y así el razonamiento no
+# acaba hablado por el TTS). Luka NO lo quiere: su plantilla mete el <think> de apertura
+# en el prompt y ExLlamaEngine.leads_with_reasoning se apoya en eso para MOSTRARTE el
+# razonamiento en pantalla. Por eso es un parámetro y no una constante.
 ai_tabby_write_config() {
     local model_name="$1" max_seq="${2:-8192}" vision="${3:-no}" cache_mode="${4:-Q8}"
-    local hp host port disable_auth vbool tool_fmt
+    local reasoning="${5:-no}"
+    local hp host port disable_auth vbool tool_fmt rbool
     # Asegura una plantilla de chat compatible si el modelo la necesita (transparente).
     ai_tabby_autofix_template "$model_name"
     hp="${EXLLAMA_BASE_URL#*://}"; hp="${hp%%/*}"
@@ -429,6 +436,7 @@ ai_tabby_write_config() {
     if [ -n "$EXLLAMA_API_KEY" ]; then disable_auth=false; else disable_auth=true; fi
     [ "$vision" = yes ] && vbool=true || vbool=false
     tool_fmt="$(ai_tabby_tool_format "$model_name")"
+    [ "$reasoning" = yes ] && rbool=true || rbool=false
     cat > "$EXLLAMA_TABBY_DIR/config.yml" <<YML
 # Generado por asistenteia (no editar a mano: se regenera). Config del motor exllama.
 network:
@@ -455,6 +463,8 @@ model:
   inline_model_loading: false
   vision: $vbool
   tool_format: $tool_fmt
+  # Parte la respuesta en reasoning_content + content (solo el perfil de hermes).
+  reasoning: $rbool
 
 developer:
   unsafe_launch: false
@@ -486,17 +496,19 @@ ai_tabby_model_max_seq() {
 # el modelo que toca no está descargado, para que quien llame pueda avisar.
 ai_tabby_sync_config_for_engine() {
     ai_needs_tabby || return 0
-    local model seq vis cache
+    local model seq vis cache reason
     if ai_using_hermes; then
         model="$HERMES_MODEL"; seq="$HERMES_CTX"; cache="$HERMES_CACHE_MODE"; vis=no
+        reason=yes   # Hermes lee reasoning_content; si no, el razonamiento acaba en el TTS
     else
         model="$(ai_read_env EXLLAMA_MODEL Qwen3-8B-exl3-4bpw)"
         seq="$(ai_tabby_model_max_seq "$model")"
         case "$(ai_read_env EXLLAMA_VISION False)" in [Tt]rue|1|yes) vis=yes ;; *) vis=no ;; esac
         cache=Q8
+        reason=no    # Luka MUESTRA el razonamiento: se apoya en que llegue inline
     fi
     ai_tabby_model_present "$model" || return 1
-    ai_tabby_write_config "$model" "$seq" "$vis" "$cache"
+    ai_tabby_write_config "$model" "$seq" "$vis" "$cache" "$reason"
 }
 
 # ---- Modelos EXL3 libres (cualquiera de HuggingFace, no solo el catálogo) ----
