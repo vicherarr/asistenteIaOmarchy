@@ -20,6 +20,7 @@ def create_engine(settings=_settings) -> InferenceEngine:
     - "litert"     -> LiteRTClient (motor local en proceso, por defecto).
     - "exllama"    -> ExLlamaEngine (sidecar TabbyAPI en la GPU).
     - "openrouter" -> OpenRouterEngine (LLM en la nube, sin VRAM).
+    - "hermes"     -> HermesEngine (Hermes Agent lleva el bucle; usa el mismo sidecar).
     """
     name = (getattr(settings, "AI_ENGINE", "litert") or "litert").lower()
 
@@ -41,6 +42,13 @@ def create_engine(settings=_settings) -> InferenceEngine:
         logger.info("Motor de inferencia: OpenRouter (nube)")
         return OpenRouterEngine()
 
+    if name == "hermes":
+        from src.engines.hermes_engine import HermesEngine
+
+        logger.info("Motor de inferencia: Hermes Agent (sobre el sidecar TabbyAPI)")
+        return HermesEngine()
+
     raise ValueError(
-        f"AI_ENGINE no válido: {name!r}. Valores válidos: 'litert', 'exllama', 'openrouter'."
+        f"AI_ENGINE no válido: {name!r}. "
+        "Valores válidos: 'litert', 'exllama', 'openrouter', 'hermes'."
     )

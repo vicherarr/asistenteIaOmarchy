@@ -196,3 +196,94 @@ def test_stt_uses_engine_audio_when_supported(monkeypatch):
 
     stt = se.STTEngine(litert_client=AudioEngine())
     assert stt._use_gemma is True
+
+
+# --- Fase 3: motor Hermes (el bucle agéntico lo lleva Hermes, no Luka) ----------
+
+def _hermes_settings(tmp_path, **over):
+    """Settings mínimos para construir HermesEngine sin tener Hermes instalado."""
+    class S:
+        AI_ENGINE = "hermes"
+        HERMES_DIR = str(tmp_path / "hermes")
+        HERMES_PYTHON = ""
+        HERMES_MODEL = "Qwen3.5-9B-exl3-3.00bpw"
+        HERMES_TIMEOUT = 5.0
+        HERMES_MAX_ITERATIONS = 4
+        HERMES_MAX_TOKENS = 4096
+        HERMES_ENABLED_TOOLSETS = ""
+        HERMES_DISABLED_TOOLSETS = ""
+        HERMES_SKIP_MEMORY = True
+        EXLLAMA_BASE_URL = "http://127.0.0.1:5000"
+        EXLLAMA_API_KEY = ""
+    for k, v in over.items():
+        setattr(S, k, v)
+    return S()
+
+
+def test_hermes_cumple_el_contrato(tmp_path):
+    from src.engines.hermes_engine import HermesEngine
+
+    engine = HermesEngine(_hermes_settings(tmp_path))
+    assert isinstance(engine, InferenceEngine)
+    assert engine.name == "Hermes"
+    # Sin instalar: no está listo, pero se construye igual (no revienta el arranque).
+    assert engine.is_ready is False
+    assert engine.backend_label() == "Desconectado"
+    assert engine.capabilities.audio is False   # el STT cae a Whisper
+    assert engine.capabilities.tools is True
+
+
+def test_hermes_expone_los_atributos_de_facto(tmp_path):
+    """assistant_service los lee con getattr; si faltan, degrada en silencio."""
+    from src.engines.hermes_engine import HermesEngine
+
+    engine = HermesEngine(_hermes_settings(tmp_path))
+    assert engine.tracks_tool_usage is True      # habilita el guardarraíl anti-invención
+    assert engine.streams_clean_text is True     # el puente no emite marcadores de tools
+    assert engine.leads_with_reasoning is False  # el razonamiento va por otro canal
+    assert engine.last_turn_tools_used == []
+    assert engine.model_label == "Qwen3.5-9B-exl3-3.00bpw"
+
+
+def test_hermes_sin_instalar_avisa_en_vez_de_romper(tmp_path):
+    """El turno devuelve un mensaje hablable, no una excepción."""
+    import asyncio
+    from src.engines.hermes_engine import HermesEngine
+
+    engine = HermesEngine(_hermes_settings(tmp_path))
+
+    async def run():
+        return [c async for c in engine.chat_stream("hola")]
+
+    out = "".join(asyncio.run(run()))
+    assert "no está instalado" in out.lower()
+
+
+def test_hermes_reconstruye_tools_del_historial():
+    """Cinturón y tirantes del guardarraíl: si no llegan callbacks, se leen los mensajes.
+
+    Es LA pieza que impide que Luka afirme acciones que no ejecutó, así que se prueba
+    con la forma real que devuelve Hermes en `messages`.
+    """
+    from scripts.hermes_bridge import _tools_from_messages
+
+    messages = [
+        {"role": "user", "content": "ejecuta echo hola"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "call_1", "type": "function",
+             "function": {"name": "terminal", "arguments": '{"command": "echo hola"}'}}]},
+        {"role": "tool", "tool_call_id": "call_1", "content": "hola"},
+        {"role": "assistant", "content": "Imprimió hola"},
+    ]
+    assert _tools_from_messages(messages) == ["terminal"]
+    assert _tools_from_messages([]) == []
+    assert _tools_from_messages(None) == []
+
+
+def test_factory_hermes_returns_engine(tmp_path, monkeypatch):
+    from src.engines import hermes_engine as he
+
+    monkeypatch.setattr(he, "_settings", _hermes_settings(tmp_path))
+    engine = create_engine(_DummySettings("hermes"))
+    assert isinstance(engine, InferenceEngine)
+    assert engine.name == "Hermes"

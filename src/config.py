@@ -103,6 +103,27 @@ class Settings(BaseSettings):
     # Vacío => <raíz del proyecto>/exllama/tabbyAPI. La crea el instalador.
     EXLLAMA_TABBY_DIR: str = ""
 
+    # --- Motor Hermes (AI_ENGINE="hermes") ---
+    # Hermes Agent lleva el bucle agéntico con SUS herramientas; Luka pone la voz. El LLM
+    # sale del MISMO sidecar TabbyAPI que exllama (de ahí que reutilice EXLLAMA_BASE_URL),
+    # pero con otro perfil: 64k de contexto y reasoning:true, que escribe la CLI al
+    # cambiar de motor. Hermes vive en su propio venv, fuera del de la app.
+    HERMES_DIR: str = "~/.asistenteia/hermes"
+    HERMES_PYTHON: str = ""              # vacío => <HERMES_DIR>/.venv/bin/python
+    HERMES_MODEL: str = "Qwen3.5-9B-exl3-3.00bpw"
+    # Alto a propósito: un turno agéntico puede encadenar varias herramientas.
+    HERMES_TIMEOUT: float = 600.0
+    HERMES_MAX_ITERATIONS: int = 8
+    # Generoso: los modelos "thinking" emiten TODO el razonamiento antes de la respuesta,
+    # así que con poco presupuesto `content` sale vacío (medido: 655 caracteres de
+    # razonamiento para calcular 3+4).
+    HERMES_MAX_TOKENS: int = 4096
+    # Listas separadas por comas (vacío = las que traiga Hermes por defecto).
+    HERMES_ENABLED_TOOLSETS: str = ""
+    HERMES_DISABLED_TOOLSETS: str = ""
+    # La memoria persistente de Hermes engorda el prompt fijo de cada llamada.
+    HERMES_SKIP_MEMORY: bool = True
+
     # --- Motor OpenRouter (AI_ENGINE="openrouter") ---
     # LLM en la nube por HTTP, API OpenAI-compatible: no consume VRAM ni necesita sidecar.
     # Solo modelos GRATIS (precio 0) y con tool calling; la CLI no deja elegir otros.
