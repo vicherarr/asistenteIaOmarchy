@@ -90,7 +90,20 @@ else
     log "Escribiendo $HERMES_CFG..."
     cat > "$HERMES_CFG" <<YML
 # Generado por asistenteia (install-hermes.sh). Config de Hermes para AsistenteIA.
-# El modelo y el endpoint NO van aquí: los pasa scripts/hermes_bridge.py desde el .env.
+
+# Esta sección es SOLO para usar Hermes suelto desde la terminal:
+#   asistenteia hermes                  (chat interactivo, con su TUI)
+#   asistenteia hermes -z "lo que sea"  (una pregunta y su respuesta)
+# Cuando lo pilota Luka no se usa: scripts/hermes_bridge.py le pasa el modelo y la URL
+# explícitamente desde el .env, y eso manda sobre lo de aquí. El asistente sigue
+# teniendo una sola fuente de verdad.
+model:
+  default: "$HERMES_MODEL"
+  provider: "custom"
+  base_url: "$EXLLAMA_BASE_URL/v1"
+  context_length: $HERMES_CTX
+  api_mode: chat_completions
+
 mcp_servers:
   luka:
     # Las herramientas de Luka, servidas por el PROPIO proceso del asistente: es la

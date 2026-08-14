@@ -79,6 +79,8 @@ AsistenteIA - uso: asistenteia <comando>
                engine use [m]      Activa un modelo descargado (funcione o no con tools).
                engine thinking on|off  Razonamiento <think> de Qwen3 (solo exllama).
                engine start|stop   Control manual del sidecar TabbyAPI.
+  hermes [...]  Hermes suelto en la terminal (mismo modelo y mismas herramientas).
+               Sin argumentos, chat interactivo. Con -z "...", una sola respuesta.
   logs         Muestra los logs en tiempo real
   service ...  Gestiona el servicio systemd: install | enable | disable | status | uninstall
   keybindings  (Re)configura los atajos Super+Z / Super+X
@@ -875,6 +877,26 @@ PY
         else
             echo "Hecho. Se aplicará al arrancar (asistenteia start o Super + Z)."
         fi
+        ;;
+    hermes)
+        # Hermes SUELTO en la terminal, al margen de la voz. Comparte el mismo modelo
+        # local y, si el asistente está en marcha, sus mismas herramientas (el servidor
+        # MCP vive dentro de ese proceso). Todo lo que venga detrás se le pasa tal cual:
+        #   asistenteia hermes                  -> chat interactivo (su TUI)
+        #   asistenteia hermes -z "pausa la música"  -> una pregunta y su respuesta
+        if ! ai_hermes_installed; then
+            err "Hermes no está instalado. Ponlo con: asistenteia engine hermes install"; exit 1
+        fi
+        if ! ai_tabby_up; then
+            warn "El sidecar TabbyAPI no responde en $EXLLAMA_BASE_URL: Hermes no tendrá modelo."
+            warn "Arráncalo con: asistenteia engine start"
+        fi
+        if ! ai_server_up; then
+            warn "El asistente no está en marcha, así que Hermes irá SIN las herramientas"
+            warn "de Luka (pantalla, música, correo...): las sirve su propio proceso."
+        fi
+        cd "$(ai_hermes_dir)" || { err "No se pudo entrar en $(ai_hermes_dir)."; exit 1; }
+        exec "$(ai_hermes_dir)/.venv/bin/hermes" "$@"
         ;;
     google-auth)
         # Alta interactiva del token OAuth de Google (abre el navegador una vez).
