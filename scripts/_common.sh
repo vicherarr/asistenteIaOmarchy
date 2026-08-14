@@ -199,8 +199,12 @@ ai_hermes_installed() {
 }
 
 # URL del servidor MCP que expone las tools de Luka (src/mcp_server.py). Se sirve desde
-# el propio proceso del asistente, así que sale de HOST/PORT del .env. La barra final es
-# necesaria: el mount responde 307 sin ella.
+# el propio proceso del asistente, así que sale de HOST/PORT del .env. Dos detalles que
+# hay que respetar o Hermes no conecta:
+#   - El esquema sale de $PROTO, no fijo: con SSL_CERTFILE presente la app sirve HTTPS
+#     y solo HTTPS, así que un http:// no llega a ninguna parte.
+#   - La barra final: sin ella el mount responde un 307 y algunos clientes pierden el
+#     cuerpo del POST al seguir la redirección.
 ai_luka_mcp_url() {
     local host port
     host="$(ai_read_env HOST 127.0.0.1)"
@@ -208,8 +212,13 @@ ai_luka_mcp_url() {
     # una real, y Hermes corre en esta misma máquina.
     case "$host" in ""|0.0.0.0|::) host="127.0.0.1" ;; esac
     port="$(ai_read_env PORT 8765)"
-    printf 'http://%s:%s/mcp/' "$host" "$port"
+    printf '%s://%s:%s/mcp/' "$PROTO" "$host" "$port"
 }
+
+# ¿Hay que decirle a Hermes que no valide el certificado? El de AsistenteIA es
+# autofirmado (lo genera el instalador), así que con HTTPS la verificación falla y el
+# servidor MCP queda inalcanzable. Es aceptable porque el destino es esta misma máquina.
+ai_luka_mcp_ssl_verify() { [ "$PROTO" = https ] && echo false || echo true; }
 ai_tabby_autostart(){ case "$(printf '%s' "$EXLLAMA_AUTOSTART" | tr 'A-Z' 'a-z')" in 1|true|yes|on) return 0 ;; *) return 1 ;; esac; }
 
 # El backend ExLlama está "instalado" si existe su venv y el main.py de TabbyAPI.

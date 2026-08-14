@@ -98,6 +98,9 @@ mcp_servers:
     # sesión de tmux). La barra final importa: sin ella el mount responde un 307 y
     # algunos clientes pierden el cuerpo del POST al seguir la redirección.
     url: "$MCP_URL"
+    # El certificado del asistente es autofirmado, así que con HTTPS la verificación
+    # fallaría y el servidor quedaría inalcanzable. El destino es esta misma máquina.
+    ssl_verify: $(ai_luka_mcp_ssl_verify)
     timeout: 120
     connect_timeout: 10
 YML
