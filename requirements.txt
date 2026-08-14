@@ -32,3 +32,8 @@ google-auth>=2.34.0
 google-auth-oauthlib>=1.2.0
 google-auth-httplib2>=0.2.0
 
+
+# Servidor MCP: expone las tools de Luka a Hermes cuando AI_ENGINE=hermes (src/mcp_server.py).
+# Va montado dentro del propio FastAPI, para que las tools corran en ESTE proceso, que es
+# donde vive su estado (audio, satélite, navegador, tmux).
+mcp>=2.0.0

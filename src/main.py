@@ -13,7 +13,7 @@ import asyncio
 import logging
 import time
 from collections import defaultdict
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Depends, Request, WebSocket, WebSocketDisconnect
@@ -29,6 +29,7 @@ from src.config import settings, resolve_path
 from src.audio_recorder import AudioRecorder
 from src.stt_engine import STTEngine
 from src.schema import ChatMessage
+from src.mcp_server import MCP_PATH, mount_mcp
 from src.utils import strip_markdown
 from src.wake_word_listener import SherpaWakeWordListener
 
@@ -374,6 +375,20 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("dbus-next no disponible. Dummy MPRIS Player omitido.")
 
+    # Servidor MCP con las tools de Luka, SOLO con el motor hermes: es Hermes quien las
+    # consume (lleva él el bucle agéntico y no las tiene). Con los otros motores no se
+    # monta, para no abrir superficie que nadie usa.
+    mcp_stack = AsyncExitStack()
+    await mcp_stack.__aenter__()
+    if (getattr(settings, "AI_ENGINE", "") or "").lower() == "hermes":
+        manager = mount_mcp(app, state.assistant_service.tools)
+        if manager is not None:
+            try:
+                await mcp_stack.enter_async_context(manager.run())
+                logger.info(f"Tools de Luka expuestas por MCP en {MCP_PATH}")
+            except Exception as e:  # noqa: BLE001 — sin MCP el asistente sigue en pie
+                logger.error(f"No se pudo arrancar el gestor de sesiones MCP: {e}")
+
     logger.info("AsistenteIA listo")
 
     yield
@@ -431,6 +446,8 @@ async def lifespan(app: FastAPI):
         if state.engine:
             logger.info("Cerrando el motor de inferencia...")
             state.engine.close()
+
+    await mcp_stack.aclose()
 
     logger.info("AsistenteIA detenido correctamente")
 
