@@ -120,7 +120,10 @@ class Settings(BaseSettings):
     HERMES_MAX_TOKENS: int = 4096
     # Listas separadas por comas (vacío = las que traiga Hermes por defecto).
     HERMES_ENABLED_TOOLSETS: str = ""
-    HERMES_DISABLED_TOOLSETS: str = ""
+    # 'tts' trae text_to_speech: Hermes hablaría por su cuenta, fuera del pipeline de
+    # audio de Luka (medido: lo invocó al pedirle poner música). Dos voces a la vez y
+    # sin control de dispositivo ni de interrupción. La voz la pone Luka, siempre.
+    HERMES_DISABLED_TOOLSETS: str = "tts"
     # La memoria persistente de Hermes engorda el prompt fijo de cada llamada.
     HERMES_SKIP_MEMORY: bool = True
 
