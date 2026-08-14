@@ -99,3 +99,33 @@ def test_se_monta_en_la_ruta_esperada():
     manager = mount_mcp(FakeApp(), [tool_sincrona])
     assert montado["path"] == MCP_PATH == "/mcp"
     assert manager is not None
+
+
+def test_no_expone_las_tools_que_dependen_de_la_segunda_pasada():
+    """Las de staging devuelven una frase de relleno y no hacen el trabajo.
+
+    Con Hermes al mando no hay segunda pasada, así que exponerlas haría que
+    describiera la pantalla de memoria: justo lo que el guardarraíl impide.
+    """
+    from src.camera_tool import analyze_camera
+    from src.command_executor import web_search
+    from src.document_tool import create_document
+    from src.vision_tool import analyze_clipboard_image, analyze_screen
+
+    srv = build_mcp_server([
+        web_search, analyze_screen, analyze_clipboard_image, analyze_camera, create_document,
+    ])
+    nombres = {t.name for t in asyncio.run(srv.list_tools())}
+
+    assert nombres == {"web_search"}
+    for prohibida in ("analyze_screen", "analyze_clipboard_image",
+                      "analyze_camera", "create_document"):
+        assert prohibida not in nombres
+
+
+def test_take_screenshot_si_se_expone():
+    """No hace staging: guarda/copia la captura y termina. Es segura."""
+    from src.vision_tool import take_screenshot
+
+    srv = build_mcp_server([take_screenshot])
+    assert {t.name for t in asyncio.run(srv.list_tools())} == {"take_screenshot"}

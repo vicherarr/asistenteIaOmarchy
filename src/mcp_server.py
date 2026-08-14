@@ -29,10 +29,28 @@ logger = logging.getLogger(__name__)
 # Ruta donde queda montado dentro de la app (Hermes apunta a http://host:puerto + esto).
 MCP_PATH = "/mcp"
 
-# Herramientas que NO se exponen a Hermes aunque estén registradas en Luka.
-# `create_document` y las de visión funcionan con una segunda pasada del orquestador
-# (staging + reentrada en el motor) que aquí no ocurre: se resuelven aparte.
-_EXCLUDED: set[str] = set()
+# Herramientas que NO se exponen a Hermes, aunque Luka las tenga registradas.
+#
+# Estas cuatro no HACEN el trabajo: dejan algo en cola (stage_vision_capture /
+# stage_document) y devuelven una frase de relleno — "Captura realizada. Analizando el
+# contenido visual." — porque quien remata es AssistantService, con una segunda pasada al
+# modelo adjuntando la imagen. Eso lo hace así porque desde dentro de una tool no se puede
+# reentrar en el motor.
+#
+# Con Hermes llevando el bucle esa segunda pasada NO ocurre. Si se expusieran, Hermes
+# recibiría la frase de relleno, no vería ninguna imagen, y describiría la pantalla de
+# memoria: exactamente la invención que el guardarraíl anti-invención existe para
+# impedir. Mejor que no tenga la herramienta a que la tenga y mienta.
+#
+# Para habilitarlas hay que resolver antes la visión con este motor: el sidecar del perfil
+# hermes corre con vision:false, y meter la torre de visión junto a 64k de contexto no
+# entra en 8 GiB. Ver el plan (Fase 2).
+_EXCLUDED: set[str] = {
+    "analyze_screen",
+    "analyze_clipboard_image",
+    "analyze_camera",
+    "create_document",
+}
 
 
 def build_mcp_server(tools: Iterable[Callable], name: str = "luka") -> MCPServer:
