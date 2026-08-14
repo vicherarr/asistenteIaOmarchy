@@ -219,10 +219,15 @@ def resolve_path(p: Optional[str]) -> Optional[Path]:
 
     Garantiza que las rutas configuradas funcionen sin depender del directorio
     de trabajo actual (CWD), independientemente de desde dónde se lance la app.
+
+    El '~' se expande PRIMERO. Sin eso, una ruta como '~/.asistenteia/hermes' no cuenta
+    como absoluta y acababa concatenada: '<PROJECT_ROOT>/~/.asistenteia/hermes', que no
+    existe. En el .env es natural escribir rutas con '~' y el fallo es silencioso: el
+    motor Hermes se declaraba "no instalado" por muchas veces que se instalara.
     """
     if not p:
         return None
-    path = Path(p)
+    path = Path(p).expanduser()
     return path if path.is_absolute() else settings.PROJECT_ROOT / path
 
 # Asegurar que los directorios existen

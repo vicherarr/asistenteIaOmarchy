@@ -314,3 +314,37 @@ def test_hermes_los_nombres_normalizados_casan_con_la_rama_de_terminal():
 
     assert _luka_tool_name("mcp__luka__execute_system_command") in _TERMINAL_TOOL_NAMES
     assert _luka_tool_name("mcp__luka__read_terminal_screen") in _TERMINAL_TOOL_NAMES
+
+
+def test_resolve_path_expande_la_virgulilla():
+    """Sin esto, HERMES_DIR='~/...' acababa como '<PROJECT_ROOT>/~/...' y el motor se
+    declaraba 'no instalado' por muchas veces que se instalara. Fallo silencioso."""
+    from pathlib import Path
+
+    from src.config import resolve_path, settings
+
+    assert resolve_path("~/.asistenteia/hermes") == Path.home() / ".asistenteia/hermes"
+    # Lo de siempre no cambia: relativas contra PROJECT_ROOT, absolutas intactas.
+    assert resolve_path("config/certs/cert.pem") == settings.PROJECT_ROOT / "config/certs/cert.pem"
+    assert resolve_path("/etc/hosts") == Path("/etc/hosts")
+    assert resolve_path("") is None
+    assert resolve_path(None) is None
+
+
+def test_hermes_encuentra_su_instalacion_con_ruta_de_home(tmp_path, monkeypatch):
+    """El motor debe darse por instalado cuando HERMES_DIR usa '~'."""
+    from src.engines.hermes_engine import HermesEngine
+
+    fake_home = tmp_path / "home"
+    venv_bin = fake_home / ".asistenteia/hermes/.venv/bin"
+    venv_bin.mkdir(parents=True)
+    py = venv_bin / "python"
+    py.write_text("#!/bin/sh\n")
+    py.chmod(0o755)
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setattr("pathlib.Path.home", lambda: fake_home)
+
+    settings_obj = _hermes_settings(tmp_path, HERMES_DIR="~/.asistenteia/hermes")
+    engine = HermesEngine(settings_obj)
+    assert engine.hermes_dir == str(fake_home / ".asistenteia/hermes")
+    assert engine.is_ready is True
