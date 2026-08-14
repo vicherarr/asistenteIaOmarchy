@@ -184,6 +184,32 @@ ai_needs_tabby()     { ai_using_exllama || ai_using_hermes; }
 HERMES_MODEL="$(ai_read_env HERMES_MODEL Qwen3.5-9B-exl3-3.00bpw)"
 HERMES_CTX="$(ai_read_env HERMES_CTX 65536)"
 HERMES_CACHE_MODE="$(ai_read_env HERMES_CACHE_MODE Q4)"
+
+# Carpeta de la instalación de Hermes (clon + su propio venv). El ~ se expande aquí
+# porque el .env guarda la ruta tal cual la escribe el usuario.
+ai_hermes_dir() {
+    local d; d="$(ai_read_env HERMES_DIR "$HOME/.asistenteia/hermes")"
+    printf '%s' "${d/#\~/$HOME}"
+}
+
+# Hermes está instalado si existe el intérprete de su venv y el módulo del agente.
+ai_hermes_installed() {
+    local d; d="$(ai_hermes_dir)"
+    [ -x "$d/.venv/bin/python" ] && [ -f "$d/run_agent.py" ]
+}
+
+# URL del servidor MCP que expone las tools de Luka (src/mcp_server.py). Se sirve desde
+# el propio proceso del asistente, así que sale de HOST/PORT del .env. La barra final es
+# necesaria: el mount responde 307 sin ella.
+ai_luka_mcp_url() {
+    local host port
+    host="$(ai_read_env HOST 127.0.0.1)"
+    # 0.0.0.0 es una dirección de escucha, no de destino: para conectarse hay que usar
+    # una real, y Hermes corre en esta misma máquina.
+    case "$host" in ""|0.0.0.0|::) host="127.0.0.1" ;; esac
+    port="$(ai_read_env PORT 8765)"
+    printf 'http://%s:%s/mcp/' "$host" "$port"
+}
 ai_tabby_autostart(){ case "$(printf '%s' "$EXLLAMA_AUTOSTART" | tr 'A-Z' 'a-z')" in 1|true|yes|on) return 0 ;; *) return 1 ;; esac; }
 
 # El backend ExLlama está "instalado" si existe su venv y el main.py de TabbyAPI.

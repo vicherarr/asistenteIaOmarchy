@@ -63,8 +63,11 @@ AsistenteIA - uso: asistenteia <comando>
   model [m]    Cambia el modelo (e2b/e4b/12b): lo descarga si falta y reinicia.
                Sin argumento, muestra el actual y pregunta cuál usar.
                12b es más capaz (32k contexto) pero aún no soporta imágenes.
-  engine [e]   Cambia el motor de inferencia (litert/exllama/openrouter) y reinicia.
+  engine [e]   Cambia el motor (litert/exllama/openrouter/hermes) y reinicia.
                Sin argumento, muestra el actual y los disponibles.
+               engine hermes              Hermes Agent lleva el bucle; Luka, la voz.
+               engine hermes install      Instala Hermes (clon + venv propio).
+               engine hermes status       Instalación, modelo, contexto y tools MCP.
                engine openrouter          LLM en la nube: sin VRAM, modelos gratis.
                engine openrouter model    Elige modelo gratis (marca los que ven imágenes).
                engine openrouter key <k>  Guarda la API key de openrouter.ai (solo en .env).
@@ -366,6 +369,35 @@ PY
 
         # Subcomandos del motor OpenRouter (nube). Van los primeros para que
         # 'engine openrouter model' no se confunda con 'engine model' (que es de exllama).
+        case "$sub" in
+            hermes)
+                # 'engine hermes' a secas cambia de motor (cae más abajo); con
+                # subcomando, gestiona su instalación.
+                case "${2:-}" in
+                    install)
+                        exec "$SCRIPTS_DIR/install-hermes.sh" "${@:3}" ;;
+                    status)
+                        echo "Motor actual:  $cur"
+                        echo "Instalación:   $(ai_hermes_dir)"
+                        ai_hermes_installed && echo "Estado:        instalado" \
+                                            || echo "Estado:        NO instalado (asistenteia engine hermes install)"
+                        echo "Modelo:        $HERMES_MODEL"
+                        ai_tabby_model_present "$HERMES_MODEL" \
+                            && echo "               (descargado)" \
+                            || echo "               (SIN descargar: asistenteia engine pull turboderp/Qwen3.5-9B-exl3 3.00bpw)"
+                        echo "Contexto:      $HERMES_CTX (caché $HERMES_CACHE_MODE)"
+                        echo "Tools de Luka: $(ai_luka_mcp_url)"
+                        if ai_needs_tabby; then
+                            ai_tabby_up && echo "Sidecar:       EN MARCHA ($EXLLAMA_BASE_URL)" \
+                                        || echo "Sidecar:       detenido"
+                        fi
+                        exit 0 ;;
+                    "") : ;;   # sin subcomando: sigue al cambio de motor de abajo
+                    *) err "Subcomando no válido: 'engine hermes ${2}'. Usa: install | status"; exit 1 ;;
+                esac
+                ;;
+        esac
+
         case "$sub" in
             openrouter)
                 orsub="${2:-}"
@@ -794,6 +826,15 @@ PY
             warn "No hay API key de OpenRouter configurada."
             warn "Ponla con: asistenteia engine openrouter key <TU_API_KEY>"
             if ! ai_confirm "¿Cambiar a 'openrouter' igualmente (no responderá hasta ponerla)?"; then
+                echo "Sin cambios."; exit 0
+            fi
+        fi
+
+        # hermes necesita su propia instalación (clon + venv), aparte del sidecar.
+        if [ "$sub" = hermes ] && ! ai_hermes_installed; then
+            warn "Hermes no está instalado en $(ai_hermes_dir)."
+            warn "Instálalo primero con: asistenteia engine hermes install"
+            if ! ai_confirm "¿Cambiar a 'hermes' igualmente (no responderá hasta instalarlo)?"; then
                 echo "Sin cambios."; exit 0
             fi
         fi
