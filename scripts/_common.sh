@@ -185,7 +185,9 @@ ai_hermes_use_openrouter() {
 }
 
 # Modelo activo de Hermes (OpenRouter o Local)
-HERMES_OPENROUTER_MODEL_DEFAULT="meta-llama/llama-3.3-70b-instruct"
+HERMES_OPENROUTER_MODEL_DEFAULT="deepseek/deepseek-v3.2"
+HERMES_FALLBACK_MODELS_DEFAULT="minimax/minimax-m2.5"
+
 ai_hermes_model() {
     if ai_hermes_use_openrouter; then
         ai_read_env HERMES_OPENROUTER_MODEL "$HERMES_OPENROUTER_MODEL_DEFAULT"
@@ -194,25 +196,44 @@ ai_hermes_model() {
     fi
 }
 
+# Modelo(s) de fallback de Hermes (para tareas complejas o failover en OpenRouter)
+ai_hermes_fallback_models() {
+    ai_read_env HERMES_FALLBACK_MODELS "$HERMES_FALLBACK_MODELS_DEFAULT"
+}
+
 # Helper para consultar catálogo de modelos de Hermes
 ai_hermes_models() {
     "$PROJECT_DIR/venv/bin/python" "$PROJECT_DIR/scripts/hermes-models.py" "$@"
 }
 
-# Sincroniza ~/.hermes/config.yaml con el modelo activo para cuando se use Hermes desde la terminal
+# Sincroniza ~/.hermes/config.yaml con el modelo activo y fallback_providers
 ai_hermes_sync_config() {
     local hermes_home="${HERMES_HOME:-$HOME/.hermes}"
     local cfg="$hermes_home/config.yaml"
     local mcp_url; mcp_url="$(ai_luka_mcp_url)"
     local ssl_ver; ssl_ver="$(ai_luka_mcp_ssl_verify)"
     mkdir -p "$hermes_home"
-    local model base_url ctx key_line=""
+    local model base_url ctx key_line="" fb_block=""
     if ai_hermes_use_openrouter; then
         model="$(ai_hermes_model)"
         base_url="$(ai_read_env OPENROUTER_BASE_URL "https://openrouter.ai/api/v1")"
-        ctx=131072
+        ctx=163840
         local k; k="$(ai_openrouter_key)"
         [ -n "$k" ] && key_line="  api_key: \"$k\""
+        local fb; fb="$(ai_hermes_fallback_models)"
+        if [ -n "$fb" ] && [ "$fb" != "none" ]; then
+            fb_block="fallback_providers:"
+            for fbm in $(echo "$fb" | tr ',' ' '); do
+                [ -z "$fbm" ] && continue
+                fb_block="$fb_block
+  - provider: \"custom\"
+    model: \"$fbm\"
+    base_url: \"$base_url\"
+    api_mode: \"chat_completions\""
+                [ -n "$k" ] && fb_block="$fb_block
+    api_key: \"$k\""
+            done
+        fi
     else
         model="$HERMES_MODEL"
         base_url="$EXLLAMA_BASE_URL/v1"
@@ -229,6 +250,7 @@ model:
   context_length: $ctx
   api_mode: chat_completions
 $key_line
+$fb_block
 
 mcp_servers:
   luka:

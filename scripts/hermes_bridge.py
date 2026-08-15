@@ -61,6 +61,7 @@ def main() -> None:
     p.add_argument("--max-tokens", type=int, default=4096)
     p.add_argument("--enabled-toolsets", default="")
     p.add_argument("--disabled-toolsets", default="")
+    p.add_argument("--fallback-models", default="")
     p.add_argument("--skip-memory", action="store_true")
     args = p.parse_args()
 
@@ -84,12 +85,25 @@ def main() -> None:
             _emit({"tool": str(name)})
 
     def _build() -> "AIAgent":
+        fb_entries = []
+        if args.fallback_models:
+            for fb in _split_csv(args.fallback_models):
+                if fb:
+                    fb_entries.append({
+                        "provider": "custom",
+                        "model": fb,
+                        "base_url": args.base_url,
+                        "api_key": args.api_key or "x",
+                        "api_mode": "chat_completions",
+                    })
+
         return AIAgent(
             base_url=args.base_url,
             api_key=args.api_key or "x",
             provider="custom",
             api_mode="chat_completions",
             model=args.model,
+            fallback_model=fb_entries or None,
             quiet_mode=True,          # imprescindible: stdout es el canal del protocolo
             skip_context_files=True,  # nada de AGENTS.md/CLAUDE.md del directorio
             skip_memory=args.skip_memory,

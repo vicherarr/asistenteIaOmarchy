@@ -115,7 +115,9 @@ class Settings(BaseSettings):
     # Reutiliza OPENROUTER_API_KEY y OPENROUTER_BASE_URL. Configurable desde la CLI:
     # asistenteia engine hermes model
     HERMES_USE_OPENROUTER: bool = False
-    HERMES_OPENROUTER_MODEL: str = "meta-llama/llama-3.3-70b-instruct"
+    HERMES_OPENROUTER_MODEL: str = "deepseek/deepseek-v3.2"
+    # Cadena de modelos de fallback de Hermes (ej. para failover o tareas complejas)
+    HERMES_FALLBACK_MODELS: str = "minimax/minimax-m2.5"
     # Alto a propósito: un turno agéntico puede encadenar varias herramientas.
     HERMES_TIMEOUT: float = 600.0
     HERMES_MAX_ITERATIONS: int = 8

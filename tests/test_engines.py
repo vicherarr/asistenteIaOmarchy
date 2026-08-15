@@ -214,7 +214,8 @@ def _hermes_settings(tmp_path, **over):
         HERMES_DISABLED_TOOLSETS = ""
         HERMES_TTS = False
         HERMES_USE_OPENROUTER = False
-        HERMES_OPENROUTER_MODEL = "meta-llama/llama-3.3-70b-instruct"
+        HERMES_OPENROUTER_MODEL = "deepseek/deepseek-v3.2"
+        HERMES_FALLBACK_MODELS = "minimax/minimax-m2.5"
         HERMES_SKIP_MEMORY = True
         EXLLAMA_BASE_URL = "http://127.0.0.1:5000"
         EXLLAMA_API_KEY = ""
@@ -392,7 +393,8 @@ def test_hermes_openrouter_configuration(tmp_path):
     settings = _hermes_settings(
         tmp_path,
         HERMES_USE_OPENROUTER=True,
-        HERMES_OPENROUTER_MODEL="meta-llama/llama-3.3-70b-instruct",
+        HERMES_OPENROUTER_MODEL="deepseek/deepseek-v3.2",
+        HERMES_FALLBACK_MODELS="minimax/minimax-m2.5",
         OPENROUTER_BASE_URL="https://openrouter.ai/api/v1",
         OPENROUTER_API_KEY="sk-or-test-key-123",
     )
@@ -400,7 +402,8 @@ def test_hermes_openrouter_configuration(tmp_path):
     assert engine.use_openrouter is True
     assert engine.base_url == "https://openrouter.ai/api/v1"
     assert engine.api_key == "sk-or-test-key-123"
-    assert engine.model == "meta-llama/llama-3.3-70b-instruct"
+    assert engine.model == "deepseek/deepseek-v3.2"
+    assert engine.fallback_models == "minimax/minimax-m2.5"
     assert engine.capabilities.gpu is False  # LLM en la nube
 
 
@@ -411,12 +414,14 @@ def test_hermes_openrouter_custom_model(tmp_path):
         tmp_path,
         HERMES_USE_OPENROUTER=True,
         HERMES_OPENROUTER_MODEL="deepseek/deepseek-chat",
+        HERMES_FALLBACK_MODELS="",
         OPENROUTER_BASE_URL="https://openrouter.ai/api/v1",
         OPENROUTER_API_KEY="sk-or-test-key-456",
     )
     engine = HermesEngine(settings)
     assert engine.use_openrouter is True
     assert engine.model == "deepseek/deepseek-chat"
+    assert engine.fallback_models == ""
     assert engine.api_key == "sk-or-test-key-456"
 
 
@@ -434,6 +439,8 @@ def test_hermes_local_configuration(tmp_path):
     assert engine.use_openrouter is False
     assert engine.base_url == "http://127.0.0.1:5000/v1"
     assert engine.model == "Qwen3.5-9B-exl3-3.00bpw"
+    assert engine.fallback_models == ""
     assert engine.capabilities.gpu is True
+
 
 

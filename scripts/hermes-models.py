@@ -22,26 +22,37 @@ import httpx
 #  3. Relación calidad / precio sobresaliente.
 CURATED_MODELS = [
     {
+        "alias": "deepseek",
+        "id": "deepseek/deepseek-v3.2",
+        "name": "DeepSeek V3.2",
+        "ctx": 163840,
+        "price_in": 0.27,
+        "price_out": 0.40,
+        "recommended": True,
+        "tag": "⭐ RECOMENDADO (Primario: máxima inteligencia a muy bajo coste)",
+        "desc": "Líder en razonamiento agéntico y bucles de herramientas complejas.",
+    },
+    {
+        "alias": "minimax",
+        "id": "minimax/minimax-m2.5",
+        "name": "MiniMax M2.5",
+        "ctx": 204800,
+        "price_in": 0.22,
+        "price_out": 0.90,
+        "recommended": False,
+        "tag": "⚡ FALLBACK RECOMENDADO (Tareas complejas / failover)",
+        "desc": "204k contexto, alta robustez en razonamiento profundo y recuperación.",
+    },
+    {
         "alias": "llama3.3",
         "id": "meta-llama/llama-3.3-70b-instruct",
         "name": "Meta Llama 3.3 70B Instruct",
         "ctx": 131072,
         "price_in": 0.10,
         "price_out": 0.32,
-        "recommended": True,
-        "tag": "⭐ RECOMENDADO (Mejor calidad/precio agéntico)",
-        "desc": "70B muy robusto en tool-calling y seguimiento de instrucciones complejas.",
-    },
-    {
-        "alias": "deepseek",
-        "id": "deepseek/deepseek-chat",
-        "name": "DeepSeek V3 (Chat)",
-        "ctx": 163840,
-        "price_in": 0.26,
-        "price_out": 1.03,
         "recommended": False,
-        "tag": "Máxima inteligencia a muy bajo coste",
-        "desc": "Líder en benchmarks agénticos y razonamiento multi-paso.",
+        "tag": "70B muy robusto y ultra económico",
+        "desc": "Gran seguimiento de instrucciones y bajo consumo de tokens.",
     },
     {
         "alias": "gemini-flash",
@@ -53,17 +64,6 @@ CURATED_MODELS = [
         "recommended": False,
         "tag": "Contexto masivo (1M tokens) y ultra rápido",
         "desc": "Latencia mínima y 1 millón de tokens de ventana de contexto.",
-    },
-    {
-        "alias": "qwen-plus",
-        "id": "qwen/qwen-plus",
-        "name": "Qwen Plus (Alibaba)",
-        "ctx": 1000000,
-        "price_in": 0.40,
-        "price_out": 1.20,
-        "recommended": False,
-        "tag": "1M contexto, razonamiento avanzado",
-        "desc": "Gran capacidad de análisis y llamadas a funciones estructuradas.",
     },
     {
         "alias": "gemma-free",
@@ -90,21 +90,25 @@ CURATED_MODELS = [
 ]
 
 ALIAS_MAP = {
-    "1": "meta-llama/llama-3.3-70b-instruct",
+    "1": "deepseek/deepseek-v3.2",
+    "deepseek": "deepseek/deepseek-v3.2",
+    "deepseek-v3.2": "deepseek/deepseek-v3.2",
+    "v3.2": "deepseek/deepseek-v3.2",
+    "deepseek-v3": "deepseek/deepseek-v3.2",
+    "deepseek-chat": "deepseek/deepseek-chat",
+    "v3": "deepseek/deepseek-v3.2",
+    "2": "minimax/minimax-m2.5",
+    "minimax": "minimax/minimax-m2.5",
+    "minimax-m2.5": "minimax/minimax-m2.5",
+    "m2.5": "minimax/minimax-m2.5",
+    "3": "meta-llama/llama-3.3-70b-instruct",
     "llama": "meta-llama/llama-3.3-70b-instruct",
     "llama3": "meta-llama/llama-3.3-70b-instruct",
     "llama3.3": "meta-llama/llama-3.3-70b-instruct",
     "llama70b": "meta-llama/llama-3.3-70b-instruct",
-    "2": "deepseek/deepseek-chat",
-    "deepseek": "deepseek/deepseek-chat",
-    "deepseek-v3": "deepseek/deepseek-chat",
-    "v3": "deepseek/deepseek-chat",
-    "3": "google/gemini-2.5-flash",
+    "4": "google/gemini-2.5-flash",
     "gemini": "google/gemini-2.5-flash",
     "gemini-flash": "google/gemini-2.5-flash",
-    "4": "qwen/qwen-plus",
-    "qwen": "qwen/qwen-plus",
-    "qwen-plus": "qwen/qwen-plus",
     "5": "google/gemma-4-31b-it:free",
     "free": "google/gemma-4-31b-it:free",
     "gemma": "google/gemma-4-31b-it:free",
@@ -143,6 +147,11 @@ def main() -> int:
             return 2
         query = args[1].strip()
         low = query.lower()
+
+        # Especial: "none" o "off" para deshabilitar fallback
+        if low in ("none", "off", "disable", "disabled", "no", "0"):
+            print("none")
+            return 0
 
         # 1. Alias conocido
         if low in ALIAS_MAP:

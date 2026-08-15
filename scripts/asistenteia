@@ -185,6 +185,65 @@ ai_hermes_model_cmd() {
     exit 0
 }
 
+ai_hermes_fallback_cmd() {
+    local key="${1:-}"
+    local cur_fb; cur_fb="$(ai_hermes_fallback_models)"
+
+    if [ -z "$key" ] || [ "$key" = list ] || [ "$key" = status ]; then
+        echo "Modelo fallback actual de Hermes: ${C_CYAN}${cur_fb:-ninguno}${C_RESET}"
+        echo
+        echo "El modelo de fallback se activa automáticamente en Hermes si el modelo"
+        echo "primario falla o para tareas de alta complejidad (fallback_providers)."
+        echo
+        echo "Opciones recomendadas:"
+        echo "  • minimax   -> minimax/minimax-m2.5 (⭐ 204k ctx, alta capacidad agéntica)"
+        echo "  • llama3.3  -> meta-llama/llama-3.3-70b-instruct"
+        echo "  • gemini    -> google/gemini-2.5-flash (1M ctx)"
+        echo "  • none      -> deshabilitar fallback"
+        echo
+        [ "$key" = list ] || [ "$key" = status ] && exit 0
+        if [ -r /dev/tty ]; then
+            read -r -p "¿Qué modelo de fallback configuro? [alias, id o 'none'] (Enter = cancelar): " key </dev/tty || key=""
+        fi
+        [ -z "$key" ] && { echo "Sin cambios."; exit 0; }
+    fi
+
+    if [ "$key" = "none" ] || [ "$key" = "off" ] || [ "$key" = "clear" ]; then
+        ai_set_env_key HERMES_FALLBACK_MODELS ""
+        ai_hermes_sync_config
+        ok "Fallback de Hermes deshabilitado."
+        exit 0
+    fi
+
+    local resolved=""
+    if ! resolved="$(ai_hermes_models --check "$key" 2>/dev/null)"; then
+        err "No se pudo validar el modelo de fallback '$key'."
+        exit 1
+    fi
+
+    ai_set_env_key HERMES_FALLBACK_MODELS "$resolved"
+    ai_hermes_sync_config
+    ok "Modelo de fallback para Hermes configurado: $resolved"
+
+    if [ "$(ai_engine)" != hermes ]; then
+        warn "El motor activo es '$(ai_engine)'. Activa Hermes con: asistenteia engine hermes"
+        exit 0
+    fi
+
+    if ai_server_up; then
+        echo "Reiniciando para aplicar el cambio de fallback..."
+        "$SCRIPTS_DIR/stop-assistant.sh" >/dev/null 2>&1 || true
+        sleep 1
+        case "$(ai_ensure_running 180)" in
+            error) err "No arrancó. Revisa: asistenteia logs"; exit 1 ;;
+            *)     ok "Listo: fallback de Hermes actualizado." ;;
+        esac
+    else
+        echo "Hecho. Se aplicará al arrancar (asistenteia start o Super + Z)."
+    fi
+    exit 0
+}
+
 usage() {
     cat <<EOF
 AsistenteIA - uso: asistenteia <comando>
@@ -205,6 +264,7 @@ AsistenteIA - uso: asistenteia <comando>
                Sin argumento, muestra el actual y los disponibles.
                engine hermes              Hermes Agent lleva el bucle; Luka, la voz.
                engine hermes model [m]    Elige modelo LLM (nube en OpenRouter o local).
+               engine hermes fallback [f] Modelo de fallback para tareas complejas / failover.
                engine hermes install      Instala Hermes (clon + venv propio).
                engine hermes status       Instalación, modelo, contexto y tools MCP.
                engine hermes tts on|off   TTS propio de Hermes (text_to_speech).
@@ -518,40 +578,46 @@ PY
                 case "${2:-}" in
                     model)
                         ai_hermes_model_cmd "${3:-}" ;;
+                    fallback)
+                        ai_hermes_fallback_cmd "${3:-}" ;;
                     install)
                         exec "$SCRIPTS_DIR/install-hermes.sh" "${@:3}" ;;
                     tts)
                         ai_hermes_tts_cmd "${3:-}" ;;
                     status)
-                        echo "Motor actual:  $cur"
-                        echo "Instalación:   $(ai_hermes_dir)"
-                        ai_hermes_installed && echo "Estado:        instalado" \
-                                            || echo "Estado:        NO instalado (asistenteia engine hermes install)"
+                        echo "Motor actual:     $cur"
+                        echo "Instalación:      $(ai_hermes_dir)"
+                        ai_hermes_installed && echo "Estado:           instalado" \
+                                            || echo "Estado:           NO instalado (asistenteia engine hermes install)"
                         if ai_hermes_use_openrouter; then
-                            echo "Proveedor:     OpenRouter (nube)"
-                            echo "Modelo:        $(ai_hermes_model)"
-                            echo "API key:       $(ai_openrouter_key_masked)"
+                            echo "Proveedor:        OpenRouter (nube)"
+                            echo "Modelo primario:  $(ai_hermes_model)"
+                            fb="$(ai_hermes_fallback_models)"
+                            [ -n "$fb" ] && [ "$fb" != "none" ] \
+                                && echo "Modelo fallback:  $fb (para tareas complejas / failover)" \
+                                || echo "Modelo fallback:  desactivado (asistenteia engine hermes fallback minimax)"
+                            echo "API key:          $(ai_openrouter_key_masked)"
                         else
-                            echo "Proveedor:     Local GPU (sidecar TabbyAPI)"
-                            echo "Modelo:        $HERMES_MODEL"
+                            echo "Proveedor:        Local GPU (sidecar TabbyAPI)"
+                            echo "Modelo:           $HERMES_MODEL"
                             ai_tabby_model_present "$HERMES_MODEL" \
-                                && echo "               (descargado)" \
-                                || echo "               (SIN descargar: asistenteia engine pull turboderp/Qwen3.5-9B-exl3 3.00bpw)"
-                            echo "Contexto:      $HERMES_CTX (caché $HERMES_CACHE_MODE)"
+                                && echo "                  (descargado)" \
+                                || echo "                  (SIN descargar: asistenteia engine pull turboderp/Qwen3.5-9B-exl3 3.00bpw)"
+                            echo "Contexto:         $HERMES_CTX (caché $HERMES_CACHE_MODE)"
                             if ai_needs_tabby; then
-                                ai_tabby_up && echo "Sidecar:       EN MARCHA ($EXLLAMA_BASE_URL)" \
-                                            || echo "Sidecar:       detenido"
+                                ai_tabby_up && echo "Sidecar:          EN MARCHA ($EXLLAMA_BASE_URL)" \
+                                            || echo "Sidecar:          detenido"
                             fi
                         fi
                         if ai_hermes_tts_enabled; then
-                            echo "TTS Hermes:    ACTIVADO"
+                            echo "TTS Hermes:       ACTIVADO"
                         else
-                            echo "TTS Hermes:    desactivado (asistenteia engine hermes tts on)"
+                            echo "TTS Hermes:       desactivado (asistenteia engine hermes tts on)"
                         fi
-                        echo "Tools de Luka: $(ai_luka_mcp_url)"
+                        echo "Tools de Luka:    $(ai_luka_mcp_url)"
                         exit 0 ;;
                     "") : ;;   # sin subcomando: sigue al cambio de motor de abajo
-                    *) err "Subcomando no válido: 'engine hermes ${2}'. Usa: model | install | status | tts"; exit 1 ;;
+                    *) err "Subcomando no válido: 'engine hermes ${2}'. Usa: model | fallback | install | status | tts"; exit 1 ;;
                 esac
                 ;;
         esac
@@ -1074,6 +1140,8 @@ PY
         case "${1:-}" in
             model)
                 ai_hermes_model_cmd "${2:-}" ;;
+            fallback)
+                ai_hermes_fallback_cmd "${2:-}" ;;
             tts)
                 ai_hermes_tts_cmd "${2:-}" ;;
         esac

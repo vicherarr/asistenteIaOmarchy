@@ -47,10 +47,12 @@ class HermesEngine:
             self.base_url = settings.OPENROUTER_BASE_URL.rstrip("/")
             self.api_key = settings.OPENROUTER_API_KEY.strip()
             self.model = getattr(settings, "HERMES_OPENROUTER_MODEL", "").strip() or settings.HERMES_MODEL
+            self.fallback_models = getattr(settings, "HERMES_FALLBACK_MODELS", "").strip()
         else:
             self.base_url = settings.EXLLAMA_BASE_URL.rstrip("/") + "/v1"
             self.api_key = settings.EXLLAMA_API_KEY.strip() or "x"
             self.model = settings.HERMES_MODEL
+            self.fallback_models = ""
         self.timeout = settings.HERMES_TIMEOUT
         self.max_iterations = settings.HERMES_MAX_ITERATIONS
         self.max_tokens = settings.HERMES_MAX_TOKENS
@@ -133,6 +135,8 @@ class HermesEngine:
             "--enabled-toolsets", self.enabled_toolsets,
             "--disabled-toolsets", self.disabled_toolsets,
         ]
+        if self.fallback_models:
+            cmd.extend(["--fallback-models", self.fallback_models])
         if self.skip_memory:
             cmd.append("--skip-memory")
         try:
