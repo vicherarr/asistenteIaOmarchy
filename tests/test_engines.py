@@ -348,3 +348,35 @@ def test_hermes_encuentra_su_instalacion_con_ruta_de_home(tmp_path, monkeypatch)
     engine = HermesEngine(settings_obj)
     assert engine.hermes_dir == str(fake_home / ".asistenteia/hermes")
     assert engine.is_ready is True
+
+
+def test_hermes_tts_desactivado_por_defecto(tmp_path):
+    from src.engines.hermes_engine import HermesEngine
+
+    # Por defecto HERMES_TTS=False, 'tts' debe añadirse a disabled_toolsets
+    engine = HermesEngine(_hermes_settings(tmp_path, HERMES_DISABLED_TOOLSETS="", HERMES_TTS=False))
+    assert engine.disabled_toolsets == "tts"
+    assert engine.hermes_tts is False
+
+
+def test_hermes_tts_activado(tmp_path):
+    from src.engines.hermes_engine import HermesEngine
+
+    # Con HERMES_TTS=True, 'tts' no debe estar en disabled_toolsets
+    engine = HermesEngine(_hermes_settings(tmp_path, HERMES_DISABLED_TOOLSETS="tts", HERMES_TTS=True))
+    assert engine.disabled_toolsets == ""
+    assert engine.hermes_tts is True
+
+
+def test_hermes_tts_conserva_otros_toolsets_deshabilitados(tmp_path):
+    from src.engines.hermes_engine import HermesEngine
+
+    # Si hay otros toolsets deshabilitados y HERMES_TTS=True, solo se retira 'tts'
+    engine = HermesEngine(_hermes_settings(tmp_path, HERMES_DISABLED_TOOLSETS="tts,memory", HERMES_TTS=True))
+    assert engine.disabled_toolsets == "memory"
+
+    # Si HERMES_TTS=False, se mantiene el otro y se añade 'tts'
+    engine2 = HermesEngine(_hermes_settings(tmp_path, HERMES_DISABLED_TOOLSETS="memory", HERMES_TTS=False))
+    assert "memory" in engine2.disabled_toolsets
+    assert "tts" in engine2.disabled_toolsets
+

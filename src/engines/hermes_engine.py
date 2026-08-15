@@ -50,7 +50,13 @@ class HermesEngine:
         self.max_iterations = settings.HERMES_MAX_ITERATIONS
         self.max_tokens = settings.HERMES_MAX_TOKENS
         self.enabled_toolsets = settings.HERMES_ENABLED_TOOLSETS
-        self.disabled_toolsets = settings.HERMES_DISABLED_TOOLSETS
+        self.hermes_tts = bool(getattr(settings, "HERMES_TTS", False))
+        disabled = [t.strip() for t in (settings.HERMES_DISABLED_TOOLSETS or "").split(",") if t.strip()]
+        if self.hermes_tts:
+            disabled = [t for t in disabled if t != "tts"]
+        elif "tts" not in disabled:
+            disabled.append("tts")
+        self.disabled_toolsets = ",".join(disabled)
         self.skip_memory = settings.HERMES_SKIP_MEMORY
 
         self._proc: Optional[asyncio.subprocess.Process] = None

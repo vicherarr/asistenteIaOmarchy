@@ -198,6 +198,14 @@ ai_hermes_installed() {
     [ -x "$d/.venv/bin/python" ] && [ -f "$d/run_agent.py" ]
 }
 
+# ¿Está activado el TTS propio de Hermes (text_to_speech)?
+ai_hermes_tts_enabled() {
+    case "$(printf '%s' "$(ai_read_env HERMES_TTS False)" | tr 'A-Z' 'a-z')" in
+        1|true|yes|on|si|sí) return 0 ;;
+        *)                   return 1 ;;
+    esac
+}
+
 # URL del servidor MCP que expone las tools de Luka (src/mcp_server.py). Se sirve desde
 # el propio proceso del asistente, así que sale de HOST/PORT del .env. Dos detalles que
 # hay que respetar o Hermes no conecta:

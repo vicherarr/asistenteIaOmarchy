@@ -47,6 +47,53 @@ ai_model_backend() {
     esac
 }
 
+ai_hermes_tts_cmd() {
+    local val="${1:-}"
+    local cur_on=0
+    if ai_hermes_tts_enabled; then
+        cur_on=1
+    fi
+    if [ -z "$val" ] || [ "$val" = status ]; then
+        [ "$cur_on" = 1 ] && echo "TTS propio de Hermes: ACTIVADO" \
+                          || echo "TTS propio de Hermes: desactivado"
+        echo "Uso: asistenteia engine hermes tts on|off"
+        exit 0
+    fi
+    local new_on=0 new_val="False"
+    case "$(printf '%s' "$val" | tr 'A-Z' 'a-z')" in
+        on|true|1|yes|si|sí) new_on=1; new_val=True ;;
+        off|false|0|no)      new_on=0; new_val=False ;;
+        *) err "Valor no válido: '$val'. Usa on u off."; exit 1 ;;
+    esac
+    if [ "$new_on" = "$cur_on" ]; then
+        echo "El TTS de Hermes ya está $([ "$new_on" = 1 ] && echo activado || echo desactivado). Nada que hacer."
+        exit 0
+    fi
+    ai_set_env_key HERMES_TTS "$new_val"
+    [ "$new_on" = 1 ] && echo "TTS propio de Hermes activado." || echo "TTS propio de Hermes desactivado."
+    if [ "$new_on" = 1 ]; then
+        warn "Hermes usará su herramienta 'text_to_speech' cuando lo decida."
+        warn "Ten en cuenta que esto produce audio por fuera del pipeline de Luka."
+    fi
+    if [ "$(ai_engine)" != hermes ]; then
+        warn "El motor activo es '$(ai_engine)': este ajuste aplica al motor hermes."
+        echo "Se aplicará al cambiar de motor: asistenteia engine hermes"
+        exit 0
+    fi
+    if ai_server_up; then
+        echo "Reiniciando para aplicar..."
+        "$SCRIPTS_DIR/stop-assistant.sh" >/dev/null 2>&1 || true
+        sleep 1
+        case "$(ai_ensure_running 240)" in
+            error) err "No arrancó. Revisa: asistenteia logs"; exit 1 ;;
+            *)     ok "Listo: ajuste de TTS de Hermes aplicado." ;;
+        esac
+    else
+        echo "Hecho. Se aplicará al arrancar (asistenteia start o Super + Z)."
+    fi
+    exit 0
+}
+
 usage() {
     cat <<EOF
 AsistenteIA - uso: asistenteia <comando>
@@ -68,6 +115,7 @@ AsistenteIA - uso: asistenteia <comando>
                engine hermes              Hermes Agent lleva el bucle; Luka, la voz.
                engine hermes install      Instala Hermes (clon + venv propio).
                engine hermes status       Instalación, modelo, contexto y tools MCP.
+               engine hermes tts on|off   TTS propio de Hermes (text_to_speech).
                engine openrouter          LLM en la nube: sin VRAM, modelos gratis.
                engine openrouter model    Elige modelo gratis (marca los que ven imágenes).
                engine openrouter key <k>  Guarda la API key de openrouter.ai (solo en .env).
@@ -378,6 +426,8 @@ PY
                 case "${2:-}" in
                     install)
                         exec "$SCRIPTS_DIR/install-hermes.sh" "${@:3}" ;;
+                    tts)
+                        ai_hermes_tts_cmd "${3:-}" ;;
                     status)
                         echo "Motor actual:  $cur"
                         echo "Instalación:   $(ai_hermes_dir)"
@@ -388,6 +438,11 @@ PY
                             && echo "               (descargado)" \
                             || echo "               (SIN descargar: asistenteia engine pull turboderp/Qwen3.5-9B-exl3 3.00bpw)"
                         echo "Contexto:      $HERMES_CTX (caché $HERMES_CACHE_MODE)"
+                        if ai_hermes_tts_enabled; then
+                            echo "TTS Hermes:    ACTIVADO"
+                        else
+                            echo "TTS Hermes:    desactivado (asistenteia engine hermes tts on)"
+                        fi
                         echo "Tools de Luka: $(ai_luka_mcp_url)"
                         if ai_needs_tabby; then
                             ai_tabby_up && echo "Sidecar:       EN MARCHA ($EXLLAMA_BASE_URL)" \
@@ -395,7 +450,7 @@ PY
                         fi
                         exit 0 ;;
                     "") : ;;   # sin subcomando: sigue al cambio de motor de abajo
-                    *) err "Subcomando no válido: 'engine hermes ${2}'. Usa: install | status"; exit 1 ;;
+                    *) err "Subcomando no válido: 'engine hermes ${2}'. Usa: install | status | tts"; exit 1 ;;
                 esac
                 ;;
         esac
@@ -604,6 +659,8 @@ PY
                     echo "Hecho. Se aplicará al arrancar (asistenteia start o Super + Z)."
                 fi
                 exit 0 ;;
+            tts|hermes-tts)
+                ai_hermes_tts_cmd "${2:-}" ;;
             browse)
                 # Explora los modelos de turboderp (creador de ExLlama) en HuggingFace.
                 # Solo lectura (necesita Internet); no descarga ni instala nada.
@@ -888,6 +945,9 @@ PY
         fi
         ;;
     hermes)
+        if [ "${1:-}" = "tts" ]; then
+            ai_hermes_tts_cmd "${2:-}"
+        fi
         # Hermes SUELTO en la terminal, al margen de la voz. Comparte el mismo modelo
         # local y, si el asistente está en marcha, sus mismas herramientas (el servidor
         # MCP vive dentro de ese proceso). Todo lo que venga detrás se le pasa tal cual:

@@ -122,8 +122,11 @@ class Settings(BaseSettings):
     HERMES_ENABLED_TOOLSETS: str = ""
     # 'tts' trae text_to_speech: Hermes hablaría por su cuenta, fuera del pipeline de
     # audio de Luka (medido: lo invocó al pedirle poner música). Dos voces a la vez y
-    # sin control de dispositivo ni de interrupción. La voz la pone Luka, siempre.
+    # sin control de dispositivo ni de interrupción. La voz la pone Luka por defecto.
+    # Se puede habilitar/deshabilitar desde la CLI: asistenteia engine hermes tts on|off
     HERMES_DISABLED_TOOLSETS: str = "tts"
+    # Activar TTS propio de Hermes (text_to_speech). False por defecto.
+    HERMES_TTS: bool = False
     # La memoria persistente de Hermes engorda el prompt fijo de cada llamada.
     HERMES_SKIP_MEMORY: bool = True
 
