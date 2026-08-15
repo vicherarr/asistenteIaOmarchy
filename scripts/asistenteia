@@ -94,6 +94,97 @@ ai_hermes_tts_cmd() {
     exit 0
 }
 
+ai_hermes_model_cmd() {
+    local key="${1:-}"
+    local cur_model; cur_model="$(ai_hermes_model)"
+    local is_or=0
+    ai_hermes_use_openrouter && is_or=1
+
+    if [ -z "$key" ] || [ "$key" = list ] || [ "$key" = status ]; then
+        if [ "$is_or" = 1 ]; then
+            echo "Motor Hermes actual: OpenRouter (nube) -> ${C_CYAN}$cur_model${C_RESET}"
+        else
+            echo "Motor Hermes actual: Local GPU (TabbyAPI) -> ${C_CYAN}$cur_model${C_RESET}"
+        fi
+        echo
+        echo "Catálogo de modelos para Hermes (>= 64k contexto y soporte de herramientas):"
+        echo
+        local i=0 ids=""
+        while IFS='|' read -r mid malias mname mctx pin pout rec tag desc; do
+            [ -z "$mid" ] && continue
+            i=$((i + 1))
+            ids="$ids $mid"
+            local mark=" "
+            if [ "$is_or" = 1 ] && [ "$mid" = "$cur_model" ]; then
+                mark="*"
+            elif [ "$is_or" = 0 ] && [ "$mid" = "local" ]; then
+                mark="*"
+            fi
+            local price_str="$pin / $pout"
+            [ "$pin" = "$0.00" ] && [ "$pout" = "$0.00" ] && price_str="gratis"
+            [ "$mid" = "local" ] && price_str="local (GPU)"
+
+            printf "  %s %2d) %-37s %-9s %-15s %s\n" "$mark" "$i" "$mid" "$((mctx / 1000))k ctx" "$price_str" "$tag"
+            printf "         ↳ %s\n" "$desc"
+        done < <(ai_hermes_models --list)
+
+        echo
+        echo "  * También puedes escribir cualquier otro id de modelo de OpenRouter (ej. anthropic/claude-3.5-haiku)."
+        echo
+        [ "$key" = list ] || [ "$key" = status ] && exit 0
+        if [ -r /dev/tty ]; then
+            read -r -p "¿Qué modelo configuro para Hermes? [nº, alias o id] (Enter = cancelar): " key </dev/tty || key=""
+        fi
+        [ -z "$key" ] && { echo "Sin cambios."; exit 0; }
+    fi
+
+    # Resolver alias o ID con hermes-models.py
+    local resolved=""
+    if ! resolved="$(ai_hermes_models --check "$key" 2>/dev/null)"; then
+        err "No se pudo validar el modelo o alias '$key'."
+        echo "Consulta los disponibles con: asistenteia engine hermes model list"
+        exit 1
+    fi
+
+    if [ "$resolved" = "local" ]; then
+        ai_set_env_key HERMES_USE_OPENROUTER False
+        ai_hermes_sync_config
+        ok "Hermes configurado para usar Local GPU (sidecar TabbyAPI - $HERMES_MODEL)."
+        if ! ai_tabby_model_present "$HERMES_MODEL"; then
+            warn "El modelo local ($HERMES_MODEL) no está descargado."
+            warn "Descárgalo con: asistenteia engine pull turboderp/Qwen3.5-9B-exl3 3.00bpw"
+        fi
+    else
+        ai_set_env_key HERMES_USE_OPENROUTER True
+        ai_set_env_key HERMES_OPENROUTER_MODEL "$resolved"
+        ai_hermes_sync_config
+        ok "Hermes configurado para usar OpenRouter (nube): $resolved"
+        local or_k; or_k="$(ai_openrouter_key)"
+        if [ -z "$or_k" ]; then
+            warn "No hay API key de OpenRouter configurada en .env."
+            warn "Configúrala con: asistenteia engine openrouter key <TU_API_KEY>"
+        fi
+    fi
+
+    if [ "$(ai_engine)" != hermes ]; then
+        warn "El motor activo es '$(ai_engine)'. Activa Hermes con: asistenteia engine hermes"
+        exit 0
+    fi
+
+    if ai_server_up; then
+        echo "Reiniciando para aplicar el nuevo modelo de Hermes..."
+        "$SCRIPTS_DIR/stop-assistant.sh" >/dev/null 2>&1 || true
+        sleep 1
+        case "$(ai_ensure_running 180)" in
+            error) err "No arrancó. Revisa: asistenteia logs"; exit 1 ;;
+            *)     ok "Listo: Hermes en marcha con el nuevo modelo." ;;
+        esac
+    else
+        echo "Hecho. Se aplicará al arrancar (asistenteia start o Super + Z)."
+    fi
+    exit 0
+}
+
 usage() {
     cat <<EOF
 AsistenteIA - uso: asistenteia <comando>
@@ -113,6 +204,7 @@ AsistenteIA - uso: asistenteia <comando>
   engine [e]   Cambia el motor (litert/exllama/openrouter/hermes) y reinicia.
                Sin argumento, muestra el actual y los disponibles.
                engine hermes              Hermes Agent lleva el bucle; Luka, la voz.
+               engine hermes model [m]    Elige modelo LLM (nube en OpenRouter o local).
                engine hermes install      Instala Hermes (clon + venv propio).
                engine hermes status       Instalación, modelo, contexto y tools MCP.
                engine hermes tts on|off   TTS propio de Hermes (text_to_speech).
@@ -422,8 +514,10 @@ PY
         case "$sub" in
             hermes)
                 # 'engine hermes' a secas cambia de motor (cae más abajo); con
-                # subcomando, gestiona su instalación.
+                # subcomando, gestiona su modelo, instalación y configuración.
                 case "${2:-}" in
+                    model)
+                        ai_hermes_model_cmd "${3:-}" ;;
                     install)
                         exec "$SCRIPTS_DIR/install-hermes.sh" "${@:3}" ;;
                     tts)
@@ -433,24 +527,31 @@ PY
                         echo "Instalación:   $(ai_hermes_dir)"
                         ai_hermes_installed && echo "Estado:        instalado" \
                                             || echo "Estado:        NO instalado (asistenteia engine hermes install)"
-                        echo "Modelo:        $HERMES_MODEL"
-                        ai_tabby_model_present "$HERMES_MODEL" \
-                            && echo "               (descargado)" \
-                            || echo "               (SIN descargar: asistenteia engine pull turboderp/Qwen3.5-9B-exl3 3.00bpw)"
-                        echo "Contexto:      $HERMES_CTX (caché $HERMES_CACHE_MODE)"
+                        if ai_hermes_use_openrouter; then
+                            echo "Proveedor:     OpenRouter (nube)"
+                            echo "Modelo:        $(ai_hermes_model)"
+                            echo "API key:       $(ai_openrouter_key_masked)"
+                        else
+                            echo "Proveedor:     Local GPU (sidecar TabbyAPI)"
+                            echo "Modelo:        $HERMES_MODEL"
+                            ai_tabby_model_present "$HERMES_MODEL" \
+                                && echo "               (descargado)" \
+                                || echo "               (SIN descargar: asistenteia engine pull turboderp/Qwen3.5-9B-exl3 3.00bpw)"
+                            echo "Contexto:      $HERMES_CTX (caché $HERMES_CACHE_MODE)"
+                            if ai_needs_tabby; then
+                                ai_tabby_up && echo "Sidecar:       EN MARCHA ($EXLLAMA_BASE_URL)" \
+                                            || echo "Sidecar:       detenido"
+                            fi
+                        fi
                         if ai_hermes_tts_enabled; then
                             echo "TTS Hermes:    ACTIVADO"
                         else
                             echo "TTS Hermes:    desactivado (asistenteia engine hermes tts on)"
                         fi
                         echo "Tools de Luka: $(ai_luka_mcp_url)"
-                        if ai_needs_tabby; then
-                            ai_tabby_up && echo "Sidecar:       EN MARCHA ($EXLLAMA_BASE_URL)" \
-                                        || echo "Sidecar:       detenido"
-                        fi
                         exit 0 ;;
                     "") : ;;   # sin subcomando: sigue al cambio de motor de abajo
-                    *) err "Subcomando no válido: 'engine hermes ${2}'. Usa: install | status | tts"; exit 1 ;;
+                    *) err "Subcomando no válido: 'engine hermes ${2}'. Usa: model | install | status | tts"; exit 1 ;;
                 esac
                 ;;
         esac
@@ -841,8 +942,12 @@ PY
             est="sin API key"; [ -n "$(ai_openrouter_key)" ] && est="con API key"
             printf "  %s openrouter  LLM en la nube (gratis, sin VRAM)          [%s]\n" "$m" "$est"
             m=" "; [ "$cur" = hermes ] && m="*"
-            est="modelo sin descargar"; ai_tabby_model_present "$HERMES_MODEL" && est="listo"
-            printf "  %s hermes   Hermes Agent sobre el sidecar (64k, agéntico) [%s]\n" "$m" "$est"
+            if ai_hermes_use_openrouter; then
+                est="OpenRouter: $(ai_hermes_model)"
+            else
+                est="modelo sin descargar"; ai_tabby_model_present "$HERMES_MODEL" && est="listo"
+            fi
+            printf "  %s hermes   Hermes Agent agéntico (64k+, tools)       [%s]\n" "$m" "$est"
             echo
             if ai_needs_tabby; then
                 ai_tabby_up && echo "Sidecar TabbyAPI: EN MARCHA ($EXLLAMA_BASE_URL)" \
@@ -850,6 +955,13 @@ PY
             fi
             if ai_using_openrouter; then
                 echo "Modelo OpenRouter: $(ai_openrouter_model)"
+            fi
+            if ai_using_hermes; then
+                if ai_hermes_use_openrouter; then
+                    echo "Modelo Hermes: $(ai_hermes_model) (OpenRouter)"
+                else
+                    echo "Modelo Hermes: $HERMES_MODEL (Local GPU)"
+                fi
             fi
             [ "$sub" = list ] || [ "$sub" = status ] && exit 0
             echo
@@ -902,13 +1014,25 @@ PY
         ai_refresh_focus_tools
         echo "Motor activo: $sub"
         [ "$sub" = openrouter ] && echo "Modelo: $(ai_openrouter_model)"
+        if [ "$sub" = hermes ]; then
+            ai_hermes_sync_config
+            if ai_hermes_use_openrouter; then
+                echo "Modelo Hermes: $(ai_hermes_model) (OpenRouter)"
+                if [ -z "$(ai_openrouter_key)" ]; then
+                    warn "No hay API key de OpenRouter configurada en .env."
+                    warn "Ponla con: asistenteia engine openrouter key <TU_API_KEY>"
+                fi
+            else
+                echo "Modelo Hermes: $HERMES_MODEL (Local GPU)"
+            fi
+        fi
 
-        # exllama y hermes comparten sidecar pero NO configuración: uno quiere la ventana
+        # exllama y hermes local comparten sidecar pero NO configuración: uno quiere la ventana
         # corta de Luka y el otro 64k para el bucle de Hermes. Al cambiar entre ellos hay
         # que reescribir el config.yml, o el sidecar arrancaría con el perfil del otro.
         if ai_needs_tabby; then
             if ai_tabby_sync_config_for_engine; then
-                if [ "$sub" = hermes ]; then
+                if [ "$sub" = hermes ] && ! ai_hermes_use_openrouter; then
                     echo "Sidecar: $HERMES_MODEL (contexto $HERMES_CTX, caché $HERMES_CACHE_MODE)"
                 fi
             else
@@ -918,8 +1042,10 @@ PY
             fi
         fi
 
-        # Mutua exclusión: al salir de exllama/hermes, parar el sidecar y liberar VRAM.
-        [ "$sub" = litert ] || [ "$sub" = openrouter ] && ai_tabby_stop
+        # Mutua exclusión: al salir de exllama/hermes local, parar el sidecar y liberar VRAM.
+        if ! ai_needs_tabby; then
+            ai_tabby_stop
+        fi
 
         # Al dejar de ser el motor activo, Hermes se apaga entero: el puente y cualquier
         # Hermes suelto que hubiera abierto en una terminal. Si no, se quedaría un agente
@@ -945,9 +1071,12 @@ PY
         fi
         ;;
     hermes)
-        if [ "${1:-}" = "tts" ]; then
-            ai_hermes_tts_cmd "${2:-}"
-        fi
+        case "${1:-}" in
+            model)
+                ai_hermes_model_cmd "${2:-}" ;;
+            tts)
+                ai_hermes_tts_cmd "${2:-}" ;;
+        esac
         # Hermes SUELTO en la terminal, al margen de la voz. Comparte el mismo modelo
         # local y, si el asistente está en marcha, sus mismas herramientas (el servidor
         # MCP vive dentro de ese proceso). Todo lo que venga detrás se le pasa tal cual:

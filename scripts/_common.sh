@@ -172,15 +172,76 @@ ai_engine()          { ai_read_env AI_ENGINE litert; }
 ai_using_exllama()   { [ "$(ai_engine)" = "exllama" ]; }
 ai_using_openrouter(){ [ "$(ai_engine)" = "openrouter" ]; }
 ai_using_hermes()    { [ "$(ai_engine)" = "hermes" ]; }
-# Motores que sirven su LLM desde el sidecar TabbyAPI. Hermes también, porque le habla
-# por /v1 igual que ExLlamaEngine; lo que cambia es quién lleva el bucle de tools.
-ai_needs_tabby()     { ai_using_exllama || ai_using_hermes; }
+# Motores que sirven su LLM desde el sidecar TabbyAPI. Hermes solo si corre en local;
+# si Hermes usa OpenRouter en la nube, TabbyAPI no hace falta y no consume VRAM.
+ai_needs_tabby()     { ai_using_exllama || (ai_using_hermes && ! ai_hermes_use_openrouter); }
 
-# Configuración del sidecar CUANDO el motor es hermes. Es distinta de la de exllama a
-# propósito: Hermes pide 64k de contexto mínimo y su system prompt es enorme, así que
-# necesita una cuantización más baja (más VRAM libre para la KV-cache) y caché Q4.
-# Con exllama, Luka sigue exactamente con lo suyo (4.00bpw / 8k / Q8): son dos perfiles
-# independientes y cambiar de motor reescribe el config.yml del sidecar.
+# ¿Usa Hermes un modelo en la nube vía OpenRouter?
+ai_hermes_use_openrouter() {
+    case "$(printf '%s' "$(ai_read_env HERMES_USE_OPENROUTER False)" | tr 'A-Z' 'a-z')" in
+        1|true|yes|on|si|sí) return 0 ;;
+        *)                   return 1 ;;
+    esac
+}
+
+# Modelo activo de Hermes (OpenRouter o Local)
+HERMES_OPENROUTER_MODEL_DEFAULT="meta-llama/llama-3.3-70b-instruct"
+ai_hermes_model() {
+    if ai_hermes_use_openrouter; then
+        ai_read_env HERMES_OPENROUTER_MODEL "$HERMES_OPENROUTER_MODEL_DEFAULT"
+    else
+        ai_read_env HERMES_MODEL "Qwen3.5-9B-exl3-3.00bpw"
+    fi
+}
+
+# Helper para consultar catálogo de modelos de Hermes
+ai_hermes_models() {
+    "$PROJECT_DIR/venv/bin/python" "$PROJECT_DIR/scripts/hermes-models.py" "$@"
+}
+
+# Sincroniza ~/.hermes/config.yaml con el modelo activo para cuando se use Hermes desde la terminal
+ai_hermes_sync_config() {
+    local hermes_home="${HERMES_HOME:-$HOME/.hermes}"
+    local cfg="$hermes_home/config.yaml"
+    local mcp_url; mcp_url="$(ai_luka_mcp_url)"
+    local ssl_ver; ssl_ver="$(ai_luka_mcp_ssl_verify)"
+    mkdir -p "$hermes_home"
+    local model base_url ctx key_line=""
+    if ai_hermes_use_openrouter; then
+        model="$(ai_hermes_model)"
+        base_url="$(ai_read_env OPENROUTER_BASE_URL "https://openrouter.ai/api/v1")"
+        ctx=131072
+        local k; k="$(ai_openrouter_key)"
+        [ -n "$k" ] && key_line="  api_key: \"$k\""
+    else
+        model="$HERMES_MODEL"
+        base_url="$EXLLAMA_BASE_URL/v1"
+        ctx="$HERMES_CTX"
+        [ -n "$EXLLAMA_API_KEY" ] && key_line="  api_key: \"$EXLLAMA_API_KEY\""
+    fi
+
+    cat > "$cfg" <<YML
+# Generado por asistenteia (ai_hermes_sync_config). Config de Hermes para AsistenteIA.
+model:
+  default: "$model"
+  provider: "custom"
+  base_url: "$base_url"
+  context_length: $ctx
+  api_mode: chat_completions
+$key_line
+
+mcp_servers:
+  luka:
+    url: "$mcp_url"
+    ssl_verify: $ssl_ver
+    timeout: 120
+    connect_timeout: 10
+YML
+}
+
+# Configuración del sidecar CUANDO el motor es hermes y corre en local. Es distinta de
+# la de exllama a propósito: Hermes pide 64k de contexto mínimo y su system prompt es
+# enorme, así que necesita una cuantización más baja y caché Q4.
 HERMES_MODEL="$(ai_read_env HERMES_MODEL Qwen3.5-9B-exl3-3.00bpw)"
 HERMES_CTX="$(ai_read_env HERMES_CTX 65536)"
 HERMES_CACHE_MODE="$(ai_read_env HERMES_CACHE_MODE Q4)"

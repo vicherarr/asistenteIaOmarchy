@@ -111,6 +111,11 @@ class Settings(BaseSettings):
     HERMES_DIR: str = "~/.asistenteia/hermes"
     HERMES_PYTHON: str = ""              # vacío => <HERMES_DIR>/.venv/bin/python
     HERMES_MODEL: str = "Qwen3.5-9B-exl3-3.00bpw"
+    # Si True, Hermes usa un modelo de OpenRouter en la nube en vez del sidecar TabbyAPI local.
+    # Reutiliza OPENROUTER_API_KEY y OPENROUTER_BASE_URL. Configurable desde la CLI:
+    # asistenteia engine hermes model
+    HERMES_USE_OPENROUTER: bool = False
+    HERMES_OPENROUTER_MODEL: str = "meta-llama/llama-3.3-70b-instruct"
     # Alto a propósito: un turno agéntico puede encadenar varias herramientas.
     HERMES_TIMEOUT: float = 600.0
     HERMES_MAX_ITERATIONS: int = 8

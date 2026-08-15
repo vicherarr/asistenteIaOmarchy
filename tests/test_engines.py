@@ -212,9 +212,14 @@ def _hermes_settings(tmp_path, **over):
         HERMES_MAX_TOKENS = 4096
         HERMES_ENABLED_TOOLSETS = ""
         HERMES_DISABLED_TOOLSETS = ""
+        HERMES_TTS = False
+        HERMES_USE_OPENROUTER = False
+        HERMES_OPENROUTER_MODEL = "meta-llama/llama-3.3-70b-instruct"
         HERMES_SKIP_MEMORY = True
         EXLLAMA_BASE_URL = "http://127.0.0.1:5000"
         EXLLAMA_API_KEY = ""
+        OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+        OPENROUTER_API_KEY = ""
     for k, v in over.items():
         setattr(S, k, v)
     return S()
@@ -379,4 +384,56 @@ def test_hermes_tts_conserva_otros_toolsets_deshabilitados(tmp_path):
     engine2 = HermesEngine(_hermes_settings(tmp_path, HERMES_DISABLED_TOOLSETS="memory", HERMES_TTS=False))
     assert "memory" in engine2.disabled_toolsets
     assert "tts" in engine2.disabled_toolsets
+
+
+def test_hermes_openrouter_configuration(tmp_path):
+    from src.engines.hermes_engine import HermesEngine
+
+    settings = _hermes_settings(
+        tmp_path,
+        HERMES_USE_OPENROUTER=True,
+        HERMES_OPENROUTER_MODEL="meta-llama/llama-3.3-70b-instruct",
+        OPENROUTER_BASE_URL="https://openrouter.ai/api/v1",
+        OPENROUTER_API_KEY="sk-or-test-key-123",
+    )
+    engine = HermesEngine(settings)
+    assert engine.use_openrouter is True
+    assert engine.base_url == "https://openrouter.ai/api/v1"
+    assert engine.api_key == "sk-or-test-key-123"
+    assert engine.model == "meta-llama/llama-3.3-70b-instruct"
+    assert engine.capabilities.gpu is False  # LLM en la nube
+
+
+def test_hermes_openrouter_custom_model(tmp_path):
+    from src.engines.hermes_engine import HermesEngine
+
+    settings = _hermes_settings(
+        tmp_path,
+        HERMES_USE_OPENROUTER=True,
+        HERMES_OPENROUTER_MODEL="deepseek/deepseek-chat",
+        OPENROUTER_BASE_URL="https://openrouter.ai/api/v1",
+        OPENROUTER_API_KEY="sk-or-test-key-456",
+    )
+    engine = HermesEngine(settings)
+    assert engine.use_openrouter is True
+    assert engine.model == "deepseek/deepseek-chat"
+    assert engine.api_key == "sk-or-test-key-456"
+
+
+def test_hermes_local_configuration(tmp_path):
+    from src.engines.hermes_engine import HermesEngine
+
+    settings = _hermes_settings(
+        tmp_path,
+        HERMES_USE_OPENROUTER=False,
+        HERMES_MODEL="Qwen3.5-9B-exl3-3.00bpw",
+        EXLLAMA_BASE_URL="http://127.0.0.1:5000",
+        EXLLAMA_API_KEY="",
+    )
+    engine = HermesEngine(settings)
+    assert engine.use_openrouter is False
+    assert engine.base_url == "http://127.0.0.1:5000/v1"
+    assert engine.model == "Qwen3.5-9B-exl3-3.00bpw"
+    assert engine.capabilities.gpu is True
+
 

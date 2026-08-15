@@ -42,10 +42,15 @@ class HermesEngine:
         self.python = str(resolve_path(settings.HERMES_PYTHON)) if settings.HERMES_PYTHON \
             else os.path.join(self.hermes_dir, ".venv", "bin", "python")
         self.bridge = str(resolve_path("scripts/hermes_bridge.py"))
-        # El modelo y la URL son los del sidecar: Hermes no sirve pesos, los consume.
-        self.base_url = settings.EXLLAMA_BASE_URL.rstrip("/") + "/v1"
-        self.api_key = settings.EXLLAMA_API_KEY.strip() or "x"
-        self.model = settings.HERMES_MODEL
+        self.use_openrouter = bool(getattr(settings, "HERMES_USE_OPENROUTER", False))
+        if self.use_openrouter:
+            self.base_url = settings.OPENROUTER_BASE_URL.rstrip("/")
+            self.api_key = settings.OPENROUTER_API_KEY.strip()
+            self.model = getattr(settings, "HERMES_OPENROUTER_MODEL", "").strip() or settings.HERMES_MODEL
+        else:
+            self.base_url = settings.EXLLAMA_BASE_URL.rstrip("/") + "/v1"
+            self.api_key = settings.EXLLAMA_API_KEY.strip() or "x"
+            self.model = settings.HERMES_MODEL
         self.timeout = settings.HERMES_TIMEOUT
         self.max_iterations = settings.HERMES_MAX_ITERATIONS
         self.max_tokens = settings.HERMES_MAX_TOKENS
@@ -87,13 +92,17 @@ class HermesEngine:
         return self._installed
 
     def backend_label(self) -> str:
-        return "GPU (Hermes)" if self._installed else "Desconectado"
+        if not self._installed:
+            return "Desconectado"
+        if self.use_openrouter:
+            return f"OpenRouter ({self.model})"
+        return "GPU (Hermes)"
 
     @property
     def capabilities(self) -> EngineCapabilities:
         # audio=False -> el STT cae a Whisper, igual que con exllama.
         # vision=False -> por ahora Hermes usa sus propias tools de visión, no la nuestra.
-        return EngineCapabilities(tools=True, vision=False, audio=False, gpu=True)
+        return EngineCapabilities(tools=True, vision=False, audio=False, gpu=not self.use_openrouter)
 
     @property
     def streams_clean_text(self) -> bool:
