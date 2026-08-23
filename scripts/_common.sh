@@ -258,6 +258,25 @@ mcp_servers:
     ssl_verify: $ssl_ver
     timeout: 120
     connect_timeout: 10
+
+# Puente tool_search APAGADO. Por defecto va en "auto", y "auto" no significa "cuando
+# haya muchas tools": basta UNA sola tool de MCP para que se active (should_activate en
+# hermes/tools/tool_search.py). Con él puesto, las tools de Luka desaparecen del array
+# que ve el modelo y se sustituyen por tres meta-tools —tool_search / tool_describe /
+# tool_call— que obligan a buscar la herramienta, pedir su esquema y luego invocarla
+# pasando los argumentos como string JSON ANIDADO.
+#
+# Ese anidamiento es donde se rompe. Medido el 23/08/2026 con deepseek-v3.2: el modelo
+# emitió su marcado nativo de tool call como texto plano y anidado sobre sí mismo
+# (<｜DSML｜function_calls> dentro del parámetro "arguments"), no ejecutó ni una
+# herramienta real en 8 iteraciones, y el marcado crudo llegó hasta el TTS y se pronunció.
+#
+# Recortar el número de tools NO arregla esto: la activación no depende de cuántas haya.
+# Apagarlo sí, y no hace falta: la superficie de Luka son ~13 tools (src/mcp_server.py),
+# que caben de sobra en el array directo junto a las nativas de Hermes.
+tools:
+  tool_search:
+    enabled: "off"
 YML
 }
 

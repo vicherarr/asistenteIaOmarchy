@@ -393,3 +393,67 @@ def test_engine_streams_clean_text_flags(monkeypatch):
     from src.engines import exllama_engine as ee
     monkeypatch.setattr(ee.ExLlamaEngine, "_ping", lambda self: False)
     assert ee.ExLlamaEngine().streams_clean_text is True
+
+
+# --- Punto 2: persona vs enrutado ----------------------------------------------------
+# El árbol de decisión de system_prompt.txt enruta por NOMBRE de tool
+# ("execute_system_command", "read_terminal_screen"...). Eso solo sirve para un motor que
+# recibe esas tools de Luka. Hermes trae las suyas y lleva su propio bucle, así que el
+# árbol le manda llamar a herramientas que no tiene delante. Se le da persona y voz.
+
+def test_motor_normal_recibe_el_arbol_de_decision(service, mock_litert):
+    """Sin owns_agent_loop: el prompt de siempre, con su árbol. Nada cambia."""
+    mock_litert.owns_agent_loop = False
+    prompt = service._load_system_prompt()
+
+    assert "execute_system_command" in prompt      # el árbol sigue ahí
+    assert "ÁRBOL DE DECISIÓN" in prompt
+    assert "FECHA Y HORA ACTUAL" in prompt         # _now_context se sigue añadiendo
+
+
+def test_hermes_recibe_persona_sin_enrutado(service, mock_litert):
+    """Con owns_agent_loop: persona y voz, sin un solo nombre de tool de Luka."""
+    mock_litert.owns_agent_loop = True
+    prompt = service._load_system_prompt()
+
+    assert "ÁRBOL DE DECISIÓN" not in prompt
+    for enrutado in ("execute_system_command", "read_terminal_screen",
+                     "play_specific_music", "analyze_screen", "gmail_manager",
+                     "calendar_manager"):
+        assert enrutado not in prompt, f"{enrutado} es enrutado: no va en el de persona"
+
+    # Lo que sí tiene que llevar: identidad, que se pronuncia, y no inventarse acciones.
+    assert "Luka" in prompt
+    assert "PRONUNCIA" in prompt
+    assert "NUNCA AFIRMES UNA ACCIÓN QUE NO HAYAS EJECUTADO" in prompt
+    assert "FECHA Y HORA ACTUAL" in prompt
+
+
+def test_hermes_avisa_de_que_no_tiene_correo_ni_agenda(service, mock_litert):
+    """Gmail/Calendar salen del MCP por privacidad; el prompt no debe prometerlos."""
+    mock_litert.owns_agent_loop = True
+    prompt = service._load_system_prompt()
+    assert "No tienes acceso al correo ni a la agenda" in prompt
+
+
+def test_el_modo_enfocado_se_aplica_a_los_dos_prompts(service, mock_litert):
+    """La selección de tools de la UI se sigue respetando con cualquier motor."""
+    service.active_tool_names = {"take_screenshot"}
+    for owns in (False, True):
+        mock_litert.owns_agent_loop = owns
+        assert "[MODO ENFOCADO]" in service._load_system_prompt()
+
+
+def test_hermes_engine_declara_owns_agent_loop():
+    """El flag que dispara todo lo anterior."""
+    from src.engines.hermes_engine import HermesEngine
+    assert HermesEngine.owns_agent_loop.fget(HermesEngine.__new__(HermesEngine)) is True
+
+
+def test_los_demas_motores_no_lo_declaran(monkeypatch):
+    """getattr(..., False) -> se quedan con el árbol de siempre. Retrocompatible."""
+    from src.engines import exllama_engine as ee
+    from src.engines import openrouter_engine as oe
+    monkeypatch.setattr(ee.ExLlamaEngine, "_ping", lambda self: False)
+    assert getattr(ee.ExLlamaEngine(), "owns_agent_loop", False) is False
+    assert getattr(oe.OpenRouterEngine, "owns_agent_loop", False) is False

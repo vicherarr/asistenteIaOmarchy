@@ -107,6 +107,13 @@ class HermesEngine:
         return EngineCapabilities(tools=True, vision=False, audio=False, gpu=not self.use_openrouter)
 
     @property
+    def owns_agent_loop(self) -> bool:
+        # Hermes decide y ejecuta sus propias herramientas. Le toca el prompt de persona
+        # (config/system_prompt_hermes.txt), no el árbol de decisión de Luka, que enruta
+        # por nombres de tool que este motor no recibe. Ver base.py.
+        return True
+
+    @property
     def streams_clean_text(self) -> bool:
         return True   # el puente solo emite deltas de respuesta, sin llamadas ni marcadores
 

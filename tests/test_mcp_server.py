@@ -60,15 +60,18 @@ def test_una_tool_invalida_no_tumba_al_resto():
 
 
 def test_las_tools_reales_de_luka_producen_esquemas_validos():
-    """Contra las tools de verdad: es lo que consumirá Hermes."""
-    from src.command_executor import execute_system_command, web_search
+    """Contra las tools de verdad: es lo que consumirá Hermes.
+
+    Se usan dos que SÍ se exponen (ver _EXCLUDED): el escritorio es de Luka.
+    """
+    from src.command_executor import launch_application, open_terminal_and_run_command
     from src.vision_tool import analyze_screen
 
-    srv = build_mcp_server([execute_system_command, web_search, analyze_screen])
+    srv = build_mcp_server([launch_application, open_terminal_and_run_command, analyze_screen])
     tools = {t.name: t for t in asyncio.run(srv.list_tools())}
 
-    assert tools["execute_system_command"].input_schema["required"] == ["command"]
-    assert tools["web_search"].input_schema["required"] == ["query"]
+    assert tools["launch_application"].input_schema["required"] == ["app_name"]
+    assert tools["open_terminal_and_run_command"].input_schema["required"] == ["command"]
     for t in tools.values():
         assert (t.description or "").strip(), f"{t.name} sin descripción"
 
@@ -108,19 +111,66 @@ def test_no_expone_las_tools_que_dependen_de_la_segunda_pasada():
     describiera la pantalla de memoria: justo lo que el guardarraíl impide.
     """
     from src.camera_tool import analyze_camera
-    from src.command_executor import web_search
+    from src.command_executor import launch_application
     from src.document_tool import create_document
     from src.vision_tool import analyze_clipboard_image, analyze_screen
 
     srv = build_mcp_server([
-        web_search, analyze_screen, analyze_clipboard_image, analyze_camera, create_document,
+        launch_application, analyze_screen, analyze_clipboard_image, analyze_camera,
+        create_document,
     ])
     nombres = {t.name for t in asyncio.run(srv.list_tools())}
 
-    assert nombres == {"web_search"}
+    assert nombres == {"launch_application"}
     for prohibida in ("analyze_screen", "analyze_clipboard_image",
                       "analyze_camera", "create_document"):
         assert prohibida not in nombres
+
+
+def test_no_expone_lo_que_hermes_ya_trae_de_serie():
+    """Hermes tiene terminal, ficheros y web propios, y son tools NÚCLEO suyas.
+
+    Duplicárselas con otro nombre (execute_system_command vs terminal) es lo que dejaba
+    al modelo dando vueltas: el prompt le nombraba una variante y el array le ofrecía
+    otra. Lo que queda es lo que Hermes no puede replicar: la terminal VISIBLE del
+    escritorio y el navegador del usuario.
+    """
+    from src.command_executor import (
+        execute_system_command, open_terminal_and_run_command, read_log_file,
+        read_terminal_screen, read_web_page, system_diagnostics, web_search,
+    )
+
+    srv = build_mcp_server([
+        execute_system_command, read_log_file, system_diagnostics, web_search,
+        read_web_page, open_terminal_and_run_command, read_terminal_screen,
+    ])
+    nombres = {t.name for t in asyncio.run(srv.list_tools())}
+
+    assert nombres == {"open_terminal_and_run_command", "read_terminal_screen"}
+
+
+def test_no_expone_correo_ni_agenda():
+    """Privacidad: con Hermes el bucle lo puede llevar un modelo de NUBE.
+
+    Luka las conserva con sus propios motores —el MCP solo lo consume Hermes—, así que
+    esto no quita ninguna función: quita que el correo salga del equipo. Incondicional a
+    propósito: el modelo de Hermes se cambia en caliente y el MCP se monta al arrancar,
+    así que atarlo al modelo activo fallaría hacia el lado malo.
+    """
+    from src.mcp_server import _EXCLUDED
+
+    assert {"gmail_manager", "calendar_manager"} <= _EXCLUDED
+
+    def gmail_manager(action: str) -> str:
+        """Doble de la tool real: basta el nombre, que es por lo que se filtra."""
+        return action
+
+    def calendar_manager(action: str) -> str:
+        """Ídem."""
+        return action
+
+    srv = build_mcp_server([gmail_manager, calendar_manager, tool_sincrona])
+    assert {t.name for t in asyncio.run(srv.list_tools())} == {"tool_sincrona"}
 
 
 def test_take_screenshot_si_se_expone():

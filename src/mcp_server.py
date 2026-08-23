@@ -30,12 +30,13 @@ logger = logging.getLogger(__name__)
 MCP_PATH = "/mcp"
 
 # Herramientas que NO se exponen a Hermes, aunque Luka las tenga registradas.
-#
-# Estas cuatro no HACEN el trabajo: dejan algo en cola (stage_vision_capture /
-# stage_document) y devuelven una frase de relleno — "Captura realizada. Analizando el
-# contenido visual." — porque quien remata es AssistantService, con una segunda pasada al
-# modelo adjuntando la imagen. Eso lo hace así porque desde dentro de una tool no se puede
-# reentrar en el motor.
+# Tres motivos distintos, agrupados abajo. La regla que los une: Hermes solo debe recibir
+# lo que SOLO Luka sabe hacer. Todo lo demás sobra, y sobrar no es gratis (ver _DUPLICADAS).
+
+# (1) No HACEN el trabajo: dejan algo en cola (stage_vision_capture / stage_document) y
+# devuelven una frase de relleno — "Captura realizada. Analizando el contenido visual." —
+# porque quien remata es AssistantService, con una segunda pasada al modelo adjuntando la
+# imagen. Eso lo hace así porque desde dentro de una tool no se puede reentrar en el motor.
 #
 # Con Hermes llevando el bucle esa segunda pasada NO ocurre. Si se expusieran, Hermes
 # recibiría la frase de relleno, no vería ninguna imagen, y describiría la pantalla de
@@ -45,12 +46,52 @@ MCP_PATH = "/mcp"
 # Para habilitarlas hay que resolver antes la visión con este motor: el sidecar del perfil
 # hermes corre con vision:false, y meter la torre de visión junto a 64k de contexto no
 # entra en 8 GiB. Ver el plan (Fase 2).
-_EXCLUDED: set[str] = {
+_SIN_SEGUNDA_PASADA: set[str] = {
     "analyze_screen",
     "analyze_clipboard_image",
     "analyze_camera",
     "create_document",
 }
+
+# (2) Hermes YA las trae de serie, y mejores: `terminal`/`process` para comandos,
+# `read_file`/`search_files` para logs y ficheros, `web_search`/`web_extract` para la web.
+# Las suyas son tools NÚCLEO (_HERMES_CORE_TOOLS en hermes/toolsets.py), así que nunca se
+# difieren detrás del puente tool_search; las de Luka llegaban por MCP y sí se diferían.
+#
+# Prestárselas no era neutro: duplicaba cada capacidad con dos nombres distintos para lo
+# mismo (execute_system_command vs terminal), y el system prompt de Luka nombraba la
+# variante que el modelo NO tenía delante. Medido el 23/08/2026: dos turnos seguidos
+# quemaron las 8 iteraciones enteras en tool_search/tool_describe/tool_call sin ejecutar
+# una sola herramienta real, y el marcado de tool call se coló crudo hasta el TTS.
+#
+# Lo que Luka conserva aquí es lo que Hermes no puede replicar: la terminal tmux VISIBLE
+# en el escritorio (abrir/leer/responder/interrumpir), que es otra intención distinta de
+# "ejecuta esto y dame la salida", y el navegador Chromium del usuario con su sesión viva.
+_DUPLICADAS: set[str] = {
+    "execute_system_command",   # -> terminal
+    "read_log_file",            # -> read_file / terminal
+    "system_diagnostics",       # -> terminal
+    "web_search",               # -> web_search
+    "read_web_page",            # -> web_extract
+}
+
+# (3) Privacidad: con el motor Hermes el bucle lo lleva un LLM que puede ser de NUBE
+# (OpenRouter por defecto). Exponer el correo y la agenda significa que el contenido de
+# los mensajes y los eventos acaba en un tercero. Luka sí las conserva con sus propios
+# motores —el MCP solo lo consume Hermes—, así que no se pierde ninguna función: se pierde
+# solo con este motor, que es donde el dato saldría del equipo.
+#
+# La exclusión es INCONDICIONAL a propósito, no condicionada a que el modelo sea de nube.
+# El servidor MCP se monta una vez al arrancar (src/main.py), pero el modelo de Hermes se
+# cambia en caliente desde la CLI ('asistenteia engine hermes model'). Atarlo al modelo
+# activo dejaría la superficie MCP obsoleta al pasar de local a nube, y el fallo sería
+# hacia el lado malo: el correo saliendo sin que nada avise. Esto falla cerrado.
+_PRIVADAS: set[str] = {
+    "gmail_manager",
+    "calendar_manager",
+}
+
+_EXCLUDED: set[str] = _SIN_SEGUNDA_PASADA | _DUPLICADAS | _PRIVADAS
 
 
 def build_mcp_server(tools: Iterable[Callable], name: str = "luka") -> MCPServer:
@@ -59,9 +100,12 @@ def build_mcp_server(tools: Iterable[Callable], name: str = "luka") -> MCPServer
         name=name,
         instructions=(
             "Herramientas del asistente Luka sobre este escritorio Linux "
-            "(CachyOS/Hyprland): pantalla, música, aplicaciones, portapapeles, "
-            "correo y la cámara del satélite. Úsalas en lugar de las genéricas "
-            "cuando la petición sea sobre ESTE equipo."
+            "(CachyOS/Hyprland): música, aplicaciones gráficas, portapapeles, "
+            "capturas, la terminal VISIBLE del escritorio, el navegador Chromium "
+            "del usuario y la cámara del satélite. Son cosas de ESTE equipo que no "
+            "puedes hacer con tus herramientas genéricas. Para ejecutar comandos sin "
+            "que el usuario los vea, leer ficheros o buscar en la web, usa las tuyas "
+            "(terminal, read_file, web_search): son mejores y no están aquí."
         ),
     )
     registered = []

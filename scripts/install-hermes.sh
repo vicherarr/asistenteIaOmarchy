@@ -116,6 +116,17 @@ mcp_servers:
     ssl_verify: $(ai_luka_mcp_ssl_verify)
     timeout: 120
     connect_timeout: 10
+
+# Puente tool_search APAGADO. En "auto" (su valor por defecto) basta UNA tool de MCP para
+# que se active, y entonces las de Luka salen del array del modelo y hay que llegar a
+# ellas por tool_search/tool_describe/tool_call, pasando los argumentos como string JSON
+# anidado. Ahí es donde se atragantan los modelos: medido el 23/08/2026, deepseek-v3.2
+# emitió su marcado de tool call como texto plano, gastó las 8 iteraciones sin ejecutar
+# nada y el marcado se coló hasta el TTS. Con ~13 tools no hace ninguna falta diferirlas.
+# Se mantiene igual en ai_hermes_sync_config (scripts/_common.sh), que reescribe esto.
+tools:
+  tool_search:
+    enabled: "off"
 YML
 fi
 

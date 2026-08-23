@@ -96,3 +96,34 @@ class InferenceEngine(Protocol):
     def close(self) -> None:
         """Libera recursos del motor."""
         ...
+
+
+# --- Rasgos OPCIONALES ---------------------------------------------------------------
+# Fuera del Protocol a propósito. Es `runtime_checkable`, así que isinstance() comprueba
+# que estén TODOS sus miembros: meter aquí algo que solo declara un motor haría que los
+# demás dejaran de validar (lo comprueba tests/test_engines.py). Se leen siempre con
+# `getattr(motor, "<rasgo>", <defecto>)`, y quien no lo declare se comporta como siempre.
+#
+#   streams_clean_text   (bool, False)  El stream ya viene sin llamadas ni marcadores de
+#                                       tool, así que no hay que filtrarlo antes del TTS.
+#   leads_with_reasoning (bool, False)  El contenido abre con el razonamiento y lo cierra
+#                                       un </think>; el TTS espera a pasarlo.
+#   tracks_tool_usage    (bool, False)  El motor sabe de primera mano qué tools corrieron
+#                                       (last_turn_tools_used), verdad de campo para el
+#                                       guardarraíl anti-invención.
+#   owns_agent_loop      (bool, False)  El motor ES un agente: lleva él el bucle con SU
+#                                       catálogo, en vez de recibir las tools de Luka e
+#                                       iterar assistant_service. Solo Hermes hoy.
+#
+#                                       Manda en qué system prompt se carga. El de Luka
+#                                       (config/system_prompt.txt) es un árbol de decisión
+#                                       que enruta por nombre de tool ("comando de
+#                                       terminal -> execute_system_command"), y eso solo
+#                                       sirve para quien recibe ESAS tools. A un motor con
+#                                       las suyas se le estaría mandando llamar a cosas
+#                                       que no tiene delante: medido el 23/08/2026, dos
+#                                       turnos enteros buscando execute_system_command sin
+#                                       ejecutar nada. Con True se carga
+#                                       config/system_prompt_hermes.txt, solo persona y
+#                                       voz; el enrutado es de quien lleve el bucle.
+#                                       Ver AssistantService._load_system_prompt.

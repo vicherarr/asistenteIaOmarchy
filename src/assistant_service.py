@@ -316,6 +316,38 @@ class AssistantService:
         )
         return base_prompt + nota
 
+    def _load_system_prompt(self) -> str:
+        """System prompt del motor activo, ya con fecha y modo enfocado aplicados.
+
+        Hay DOS prompts porque hay dos repartos de trabajo distintos:
+
+        - `system_prompt.txt` — el de siempre. Un árbol de decisión que enruta petición
+          -> nombre de tool ("comando de terminal -> execute_system_command"). Vale
+          cuando el bucle lo lleva Luka y es él quien pasa esas tools al modelo.
+        - `system_prompt_hermes.txt` — solo persona y voz: quién es Luka, que lo que
+          escriba se va a pronunciar, seguridad y no inventarse acciones. Sin enrutado.
+
+        El enrutado es de quien lleva el bucle. Con Hermes lo lleva Hermes, con SU
+        catálogo, así que un árbol que nombra las tools de Luka le manda llamar a cosas
+        que no tiene delante. Medido el 23/08/2026: el modelo se pasó dos turnos enteros
+        buscando `execute_system_command` sin ejecutar nada.
+
+        Y esto se arregla AQUÍ, eligiendo el fichero, no editando el árbol: tocarlo rompe
+        tool calls sin relación en los otros motores, que llevan afinados a base de medir.
+        """
+        hermes = getattr(self.litert, "owns_agent_loop", False)
+        nombre = "system_prompt_hermes.txt" if hermes else "system_prompt.txt"
+        try:
+            system_prompt = (settings.PROJECT_ROOT / "config" / nombre).read_text(encoding="utf-8")
+        except Exception as e:
+            logger.error(f"Error cargando system prompt ({nombre}): {e}")
+            system_prompt = "Eres un asistente de voz para Linux llamado Luka."
+        # Fecha/hora ACTUAL (zona local): imprescindible para resolver "hoy", "mañana",
+        # "el viernes a las 5" a ISO 8601 al crear/mover eventos de calendario.
+        system_prompt += self._now_context()
+        # Modo enfocado: si hay tools seleccionadas, instruir al modelo a usar solo esas.
+        return self._focused_system_prompt(system_prompt)
+
     def _extract_sentences(self, text_buffer: str) -> tuple[List[str], str]:
         """
         Extrae frases completas del buffer basadas en signos de puntuación (.!?:\n)
@@ -746,18 +778,9 @@ class AssistantService:
             yield google_confirm
             return
 
-        # Cargar system prompt desde archivo
-        prompt_path = settings.PROJECT_ROOT / "config" / "system_prompt.txt"
-        try:
-            system_prompt = prompt_path.read_text(encoding="utf-8")
-        except Exception as e:
-            logger.error(f"Error cargando system prompt: {e}")
-            system_prompt = "Eres un asistente de voz para Linux llamado AsistenteIA."
-        # Fecha/hora ACTUAL (zona local): imprescindible para resolver "hoy", "mañana",
-        # "el viernes a las 5" a ISO 8601 al crear/mover eventos de calendario.
-        system_prompt += self._now_context()
-        # Modo enfocado: si hay tools seleccionadas, instruir al modelo a usar solo esas.
-        system_prompt = self._focused_system_prompt(system_prompt)
+        # System prompt del motor activo (árbol de decisión, o solo persona si el motor
+        # lleva su propio bucle agéntico). Ver _load_system_prompt.
+        system_prompt = self._load_system_prompt()
 
         accumulated_text = ""
         sentence_buffer = ""
@@ -1158,8 +1181,7 @@ class AssistantService:
         if visible_text and " " not in visible_text and len(visible_text) > 10:
             logger.info("Respuesta sin espacios, obteniendo versión limpia via chat()...")
             try:
-                prompt_path = settings.PROJECT_ROOT / "config" / "system_prompt.txt"
-                system_prompt = self._focused_system_prompt(prompt_path.read_text(encoding="utf-8"))
+                system_prompt = self._load_system_prompt()
                 clean_response = await self.litert.chat(
                     prompt=text,
                     tools=self._selected_tools(),
