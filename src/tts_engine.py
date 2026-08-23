@@ -8,6 +8,7 @@ import asyncio
 import logging
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -35,13 +36,73 @@ class TTSEngine:
     # peor, suponerla.
     SAMPLE_RATE = KOKORO_SAMPLE_RATE
 
+    # Los OutputStream de PortAudio NO son thread-safe, y aquí se tocan desde dos hilos:
+    # las escrituras van en un worker (asyncio.to_thread) y `stop()` llega desde el hilo
+    # del bucle de eventos cuando el usuario interrumpe. Cerrar un stream mientras otro
+    # hilo está dentro de write() libera las estructuras que el bucle de ALSA sigue
+    # usando: SIGSEGV en snd_pcm_poll_descriptors_revents. Pasó en producción el
+    # 23/08/2026 — el proceso murió 4 s después de un /cancel y systemd lo reinició.
+    #
+    # `_stream_lock` serializa abrir/escribir/cerrar. `_stop_requested` es la señal de
+    # corte: `stop()` la levanta SIN pedir el lock, para no quedarse esperando, y el que
+    # escribe la mira entre bloque y bloque. Por eso se escribe troceado (ver
+    # _BLOQUE_ESCRITURA): con la escritura entera de una frase, el lock quedaba retenido
+    # segundos y `stop()` bloquearía el bucle de eventos.
+    _BLOQUE_ESCRITURA = 2048          # ~85 ms a 24 kHz: corte fino sin trocear de más
+    # Cuánto espera `stop()` al que escribe. Se queda corto a propósito: `stop()` corre
+    # en el hilo del bucle de eventos, así que esta espera lo BLOQUEA. Lo normal es que
+    # el que escribe salga en ~85 ms (un bloque), así que 1 s ya es diez veces el peor
+    # caso esperado; agotarlo solo significa dejar un stream abierto, que se reutiliza o
+    # se cierra luego. Barato, comparado con congelar el asistente.
+    _ESPERA_CIERRE = 1.0
+
     def __init__(self) -> None:
         self._kokoro_pipeline = None
         self._playback_process: Optional[asyncio.subprocess.Process] = None
         self._is_playing = False
         self._active_stream = None
         self._persistent_stream = None  # OutputStream reutilizado para pipeline
+        self._stream_lock = threading.RLock()
+        self._stop_requested = threading.Event()
         self._init_kokoro()
+
+    # ---- acceso serializado a los streams de PortAudio ----
+    def _escribir_troceado(self, stream, audio_np: np.ndarray) -> bool:
+        """Escribe en bloques, mirando la señal de corte entre uno y otro.
+
+        Devuelve False si se cortó a medias. El troceado NO es por rendimiento: es lo
+        que acota cuánto puede tardar `stop()` en hacerse con el lock. Debe llamarse ya
+        con `_stream_lock` cogido.
+        """
+        datos = audio_np.astype('float32')
+        for i in range(0, len(datos), self._BLOQUE_ESCRITURA):
+            if self._stop_requested.is_set():
+                return False
+            stream.write(datos[i:i + self._BLOQUE_ESCRITURA])
+        return True
+
+    def _cerrar(self, stream) -> None:
+        """Cierra un OutputStream una sola vez. Debe llamarse con `_stream_lock` cogido.
+
+        El guard de `closed` importa: antes, `stop()` cerraba el stream de Kokoro y el
+        bloque `with sd.OutputStream(...)` del worker lo volvía a cerrar al salir. Dos
+        Pa_CloseStream sobre el mismo handle, el segundo ya liberado.
+        """
+        if stream is None:
+            return
+        try:
+            if not stream.closed:
+                stream.stop()
+                stream.close()
+        except Exception as e:  # noqa: BLE001 — cerrar nunca debe tumbar al que llama
+            logger.debug(f"Error cerrando OutputStream (se ignora): {e}")
+
+    def _cerrar_todos(self) -> None:
+        """Cierra los dos streams. Debe llamarse con `_stream_lock` cogido."""
+        self._cerrar(self._active_stream)
+        self._active_stream = None
+        self._cerrar(self._persistent_stream)
+        self._persistent_stream = None
 
     def _init_kokoro(self) -> None:
         """Intenta inicializar Kokoro TTS."""
@@ -108,31 +169,34 @@ class TTSEngine:
             return
 
         def _play():
-            # Abrir stream persistente si no existe
-            if self._persistent_stream is None:
-                try:
-                    import sounddevice as sd
-                    self._persistent_stream = sd.OutputStream(
-                        samplerate=KOKORO_SAMPLE_RATE,
-                        channels=1,
-                        dtype='float32'
-                    )
-                    self._persistent_stream.start()
-                except Exception as e:
-                    logger.error(f"No se pudo abrir OutputStream persistente: {e}")
+            # Todo el ciclo abrir/escribir/cerrar va bajo el lock: `stop()` no puede
+            # cerrarlo por debajo mientras se escribe (era el segfault). Ver la nota de
+            # _stream_lock en la cabecera de la clase.
+            with self._stream_lock:
+                if self._stop_requested.is_set():
                     return
-
-            if self._persistent_stream and not self._persistent_stream.closed:
-                try:
-                    self._persistent_stream.write(audio_np.astype('float32'))
-                except Exception as e:
-                    logger.warning(f"Error escribiendo al stream persistente: {e}")
-                    # Intentar recrear el stream
+                # Abrir stream persistente si no existe
+                if self._persistent_stream is None:
                     try:
-                        self._persistent_stream.close()
-                    except Exception:
-                        pass
-                    self._persistent_stream = None
+                        import sounddevice as sd
+                        self._persistent_stream = sd.OutputStream(
+                            samplerate=KOKORO_SAMPLE_RATE,
+                            channels=1,
+                            dtype='float32'
+                        )
+                        self._persistent_stream.start()
+                    except Exception as e:
+                        logger.error(f"No se pudo abrir OutputStream persistente: {e}")
+                        return
+
+                if self._persistent_stream and not self._persistent_stream.closed:
+                    try:
+                        self._escribir_troceado(self._persistent_stream, audio_np)
+                    except Exception as e:
+                        logger.warning(f"Error escribiendo al stream persistente: {e}")
+                        # Intentar recrear el stream en la siguiente frase
+                        self._cerrar(self._persistent_stream)
+                        self._persistent_stream = None
 
         try:
             await asyncio.to_thread(_play)
@@ -141,12 +205,8 @@ class TTSEngine:
 
     def close_persistent_stream(self) -> None:
         """Cierra el OutputStream persistente al finalizar."""
-        if self._persistent_stream:
-            try:
-                self._persistent_stream.stop()
-                self._persistent_stream.close()
-            except Exception:
-                pass
+        with self._stream_lock:
+            self._cerrar(self._persistent_stream)
             self._persistent_stream = None
 
     async def speak(self, text: str, sink_id: Optional[str] = None) -> Optional[str]:
@@ -175,19 +235,33 @@ class TTSEngine:
             
             # Usamos el dispositivo predeterminado de PipeWire (None), el cual cambia automáticamente
             # al dispositivo de salida activo (incluyendo auriculares bluetooth seleccionados)
-            with sd.OutputStream(samplerate=KOKORO_SAMPLE_RATE, channels=1, dtype='float32') as stream:
+            #
+            # Sin `with` a propósito: ese bloque cerraba el stream al salir, y si `stop()`
+            # ya lo había cerrado desde el hilo del bucle de eventos eran dos
+            # Pa_CloseStream sobre el mismo handle. El cierre va ahora por `_cerrar`, que
+            # mira `closed`, y todo el ciclo bajo `_stream_lock`.
+            with self._stream_lock:
+                if self._stop_requested.is_set():
+                    return None
+                stream = sd.OutputStream(
+                    samplerate=KOKORO_SAMPLE_RATE, channels=1, dtype='float32')
+                stream.start()
                 self._active_stream = stream
-                for _, _, audio in generator:
-                    if not self._is_playing:
-                        logger.info("Generación de audio Kokoro cancelada por interrupción")
-                        break
-                    if audio is not None and len(audio) > 0:
-                        audio_np = self._tensor_to_numpy(audio)
-                        audio_chunks.append(audio_np)
-                        # Reproducir chunk de audio en tiempo real
-                        stream.write(audio_np.astype('float32'))
-                self._active_stream = None
-            
+                try:
+                    for _, _, audio in generator:
+                        if not self._is_playing or self._stop_requested.is_set():
+                            logger.info("Generación de audio Kokoro cancelada por interrupción")
+                            break
+                        if audio is not None and len(audio) > 0:
+                            audio_np = self._tensor_to_numpy(audio)
+                            audio_chunks.append(audio_np)
+                            # Reproducir chunk de audio en tiempo real
+                            if not self._escribir_troceado(stream, audio_np):
+                                break
+                finally:
+                    self._cerrar(stream)
+                    self._active_stream = None
+
             if not audio_chunks:
                 return None
                 
@@ -302,39 +376,59 @@ class TTSEngine:
             logger.warning(f"Fallo en reproducción TTS: {e}")
 
     def stop(self) -> None:
-        """Detiene la reproducción en curso."""
+        """Detiene la reproducción en curso.
+
+        Llega desde el hilo del bucle de eventos (POST /cancel, una petición nueva),
+        mientras un worker puede estar dentro de write(). El orden importa:
+
+        1. Levantar `_stop_requested` SIN pedir el lock. El que escribe la mira entre
+           bloques y sale en ~85 ms, así que esto corta el audio ya, no al final.
+        2. Coger el lock y cerrar. Como el que escribía ya salió, nadie está dentro de
+           PortAudio cuando se libera el stream: es lo que evita el SIGSEGV.
+
+        Si el lock no llega en `_ESPERA_CIERRE` no se fuerza el cierre. Un stream que
+        sigue abierto es un recurso colgando; cerrarlo por debajo de quien lo usa es un
+        core dump y se lleva el proceso entero. Se reutiliza o se cierra más tarde.
+        """
         self._is_playing = False
-        
-        # Parar stream activo de Kokoro
-        if self._active_stream:
+        self._stop_requested.set()
+
+        if self._stream_lock.acquire(timeout=self._ESPERA_CIERRE):
             try:
-                self._active_stream.stop()
-                self._active_stream.close()
-            except Exception:
-                pass
-            self._active_stream = None
-        
-        # Parar stream persistente del pipeline
-        if self._persistent_stream:
-            try:
-                self._persistent_stream.stop()
-                self._persistent_stream.close()
-            except Exception:
-                pass
-            self._persistent_stream = None
-        
+                self._cerrar_todos()
+            finally:
+                self._stream_lock.release()
+        else:
+            logger.warning(
+                "TTS: no se pudo cerrar el audio en %.1f s (alguien sigue escribiendo). "
+                "Se deja abierto a propósito: cerrarlo ahora sería un segfault.",
+                self._ESPERA_CIERRE,
+            )
+
         try:
             import sounddevice as sd
             sd.stop()
         except Exception as e:
             logger.warning(f"No se pudo detener el dispositivo de audio: {e}")
-            
+
+
         if self._playback_process and self._playback_process.returncode is None:
             try:
                 self._playback_process.terminate()
                 logger.info("Reproducción TTS detenida manualmente")
             except Exception:
                 pass
+
+    def rearm(self) -> None:
+        """Deja el motor listo para un turno nuevo después de un `stop()`.
+
+        `_stop_requested` es pegajosa a propósito —una vez levantada, todo lo que quede
+        en la cola de audio del turno viejo se descarta en vez de sonar a destiempo—,
+        así que hay que bajarla explícitamente al empezar el siguiente. Sin esto, el
+        primer stop() dejaría el TTS mudo para siempre.
+        """
+        self._stop_requested.clear()
+        self._is_playing = True
 
     async def speak_async(self, text: str, sink_id: Optional[str] = None) -> Optional[str]:
         """Mantenemos por compatibilidad con AssistantService pero ahora es nativamente async."""

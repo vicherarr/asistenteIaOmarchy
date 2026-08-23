@@ -748,8 +748,8 @@ class AssistantService:
             self._current_tts_task.cancel()
         if self._current_play_task and not self._current_play_task.done():
             self._current_play_task.cancel()
-        self.tts.stop() # Asegurar parada inmediata del proceso
-        self.tts._is_playing = True  # Re-activar para nueva síntesis
+        self.tts.stop()   # Asegurar parada inmediata del proceso
+        self.tts.rearm()  # Baja la señal de corte del turno anterior y reactiva síntesis
 
         # Pipeline de doble cola: texto → síntesis → audio → reproducción
         queue_text = asyncio.Queue()
