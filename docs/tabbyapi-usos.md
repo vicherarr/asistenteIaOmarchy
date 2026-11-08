@@ -82,6 +82,48 @@ aider --openai-api-base http://127.0.0.1:5000/v1 --openai-api-key x \
       --model Qwen3-8B-exl3-4bpw
 ```
 
+**opencode** (agente de terminal) se da de alta en `~/.config/opencode/opencode.json`. Su
+línea 1.x usa la config **V1** (`provider` + `npm` + `options`); la V2 que ya publica la
+web (`providers` + `package` + `settings`) la rechaza como «unsupported»:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "tabbyapi": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "TabbyAPI (local · GPU)",
+      "api": "http://127.0.0.1:5000/v1",
+      "options": { "apiKey": "tabbyapi-local" },
+      "models": {
+        "DeepSeek-R1-Distill-Qwen-7B-4.0bpw": {
+          "name": "DeepSeek-R1-Distill-Qwen-7B (EXL2 4.0bpw)",
+          "reasoning": false,
+          "tool_call": false,
+          "attachment": false,
+          "temperature": true,
+          "limit": { "context": 8192, "output": 4096 }
+        }
+      }
+    }
+  }
+}
+```
+
+- El `apiKey` es de relleno: con `disable_auth: true` TabbyAPI no pide clave.
+- El id del modelo tiene que ser **exactamente** el `model_name` de TabbyAPI (`GET
+  /v1/model`), no el nombre del repo de HuggingFace.
+- `tool_call: false` porque los DeepSeek-R1 no están entrenados para herramientas, y
+  `reasoning: false` porque aquí el parser de razonamiento de TabbyAPI va apagado a
+  propósito (Luka necesita el `</think>` en línea para no hablar el razonamiento): el
+  razonamiento llega como texto normal y después la respuesta.
+- TabbyAPI sirve **un modelo a la vez** (`inline_model_loading: false`): si cambias de
+  modelo con `asistenteia engine use`, actualiza también esta entrada.
+- Comprobación: `opencode models tabbyapi` y
+  `opencode run -m tabbyapi/DeepSeek-R1-Distill-Qwen-7B-4.0bpw "hola"`.
+- La ventana sale de `EXLLAMA_CTX` (8192). Si opencode se queda corto de contexto, súbela
+  (p. ej. 16384; la KV en Q8 de este 7B son ~0,5 GiB) y reinicia el asistente.
+
 ### 3.2. Frontend de chat completo
 **Open WebUI**, **LibreChat**, **SillyTavern** o **Lobe Chat** se conectan a un endpoint
 OpenAI. Tendrías una web tipo ChatGPT, con historial y multiusuario, servida por tu GPU.
