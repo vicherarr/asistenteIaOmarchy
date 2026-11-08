@@ -82,9 +82,12 @@ aider --openai-api-base http://127.0.0.1:5000/v1 --openai-api-key x \
       --model Qwen3-8B-exl3-4bpw
 ```
 
-**opencode** (agente de terminal) se da de alta en `~/.config/opencode/opencode.json`. Su
-línea 1.x usa la config **V1** (`provider` + `npm` + `options`); la V2 que ya publica la
-web (`providers` + `package` + `settings`) la rechaza como «unsupported»:
+**opencode** (agente de terminal) se da de alta en `~/.config/opencode/opencode.json`. Hay
+dos líneas y **no se instalan juntas por defecto**: la 1.x (`opencode-ai`, hoy 1.19.5) usa
+la config **V1** (`provider` + `npm` + `options`), y la 2.x (`@opencode/cli`, hoy 2.2.6)
+prefiere el formato nativo **V2** (`providers` + `package` + `settings` + `capabilities`),
+aunque sigue leyendo la V1 y la normaliza en memoria. El mismo `opencode.json` sirve para
+las dos si cada entrada usa **un solo** formato dentro.
 
 ```json
 {
@@ -104,6 +107,25 @@ web (`providers` + `package` + `settings`) la rechaza como «unsupported»:
           "temperature": true,
           "limit": { "context": 8192, "output": 4096 }
         }
+      }
+    }
+  }
+}
+```
+
+Equivalente nativo para la **2.x** (mismo provider, otro formato):
+
+```json
+"providers": {
+  "tabbyapi": {
+    "name": "TabbyAPI (local · GPU)",
+    "package": "@opencode/ai/providers/openai-compatible",
+    "settings": { "baseURL": "http://127.0.0.1:5000/v1", "apiKey": "tabbyapi-local" },
+    "models": {
+      "DeepSeek-R1-Distill-Qwen-7B-4.0bpw": {
+        "name": "DeepSeek-R1-Distill-Qwen-7B (EXL2 4.0bpw)",
+        "capabilities": { "temperature": true, "tools": false },
+        "limit": { "context": 8192, "output": 4096 }
       }
     }
   }

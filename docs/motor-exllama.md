@@ -184,6 +184,18 @@ Aviso: el R1 **no está entrenado para tool-calling** (TabbyAPI no tiene parser 
 familia). El bucle de Luka le sigue ofreciendo las herramientas, pero lo normal es que
 responda en texto; para tareas agénticas siguen siendo mejores `qwen3-8b` o `lfm2.5`.
 
+### Sampling por defecto: lo que salva a los clientes terceros
+
+El `config.yml` que genera la CLI declara `sampling.override_preset: asistenteia`, y el
+preset (`sampler_overrides/asistenteia.yml`) fija **temperatura 0.6, top_p 0.95, min_p
+0.05 y repetition_penalty 1.05** como *fallback*: solo se aplican a lo que el cliente no
+envíe. Importa porque, sin preset, TabbyAPI arranca con temperatura 0 y la backend la
+fuerza a **1.0** (`backends/exllamav2/model.py`: `if temperature == 0: temperature =
+1.0`). A 1.0 un modelo que razona divaga y suelta tokens basura: se midió con opencode 2
+sobre este R1 ("`391.iffies,ISBN`", `祜 Stokes`…) mientras el mismo prompt con
+`temperature` explícita salía limpio. Luka no lo sufre porque manda `EXLLAMA_TEMPERATURE`
+en cada petición; opencode, aider o un `curl` a pelo sí.
+
 ---
 
 ## 6. El bucle agéntico de tool-calling (`ExLlamaEngine`)

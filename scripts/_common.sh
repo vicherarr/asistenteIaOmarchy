@@ -706,6 +706,8 @@ ai_tabby_write_config() {
     local hp host port disable_auth vbool tool_fmt rbool
     # Asegura una plantilla de chat compatible si el modelo la necesita (transparente).
     ai_tabby_autofix_template "$model_name"
+    # Y unos valores de sampling por defecto para terceros (opencode, aider, curl…).
+    ai_tabby_write_sampler_preset
     hp="${EXLLAMA_BASE_URL#*://}"; hp="${hp%%/*}"
     host="${hp%%:*}"; port="${hp##*:}"
     case "$port" in ''|*[!0-9]*) port=5000 ;; esac
@@ -743,8 +745,40 @@ model:
   # Parte la respuesta en reasoning_content + content (solo el perfil de hermes).
   reasoning: $rbool
 
+# Valores de sampling para los clientes que NO mandan parámetros (opencode, aider,
+# curl…). Sin esto TabbyAPI arranca con temperatura 0 y la fuerza a 1.0
+# (backends/exllamav2/model.py: "if temperature == 0: temperature = 1.0"), y un modelo
+# que razona a 1.0 divaga y suelta tokens basura. Luka sí manda la suya
+# (EXLLAMA_TEMPERATURE), así que aquí solo se rellenan los huecos.
+sampling:
+  override_preset: asistenteia
+
 developer:
   unsafe_launch: false
+YML
+}
+
+# Crea el preset de sampling que referencia config.yml, si no existe. Es un fichero de
+# TabbyAPI (sampler_overrides/<nombre>.yml) con formato {param: {override: valor}}; solo
+# actúa como FALLBACK de lo que no envíe el cliente. No se pisa lo que haya escrito el
+# usuario a mano. Valores pensados para modelos que razonan (R1/Qwen3/LFM2.5):
+# temperatura baja-media, nucleus amplio, min_p suave y una repetición leve.
+ai_tabby_write_sampler_preset() {
+    local dir="$EXLLAMA_TABBY_DIR/sampler_overrides"
+    local f="$dir/asistenteia.yml"
+    [ -f "$f" ] && return 0
+    mkdir -p "$dir" 2>/dev/null || return 0
+    cat > "$f" <<'YML'
+# Generado por asistenteia. Fallbacks de sampling para los clientes que no envían
+# parámetros (opencode, aider, curl…). Se puede editar; el instalador no lo pisa.
+temperature:
+  override: 0.6
+top_p:
+  override: 0.95
+min_p:
+  override: 0.05
+repetition_penalty:
+  override: 1.05
 YML
 }
 
