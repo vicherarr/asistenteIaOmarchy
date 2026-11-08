@@ -22,6 +22,7 @@ import inspect
 import json
 import logging
 import re
+import time
 import typing
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
@@ -344,6 +345,7 @@ class ExLlamaEngine:
             self._headers["Authorization"] = f"Bearer {settings.EXLLAMA_API_KEY}"
         self._client = httpx.AsyncClient(timeout=self.timeout, headers=self._headers)
         self._ready = self._ping()
+        self._last_ping = time.monotonic()
         # Verdad de campo del turno: qué herramientas se ejecutaron realmente. Aquí el
         # bucle de tools es nuestro, así que lo sabemos con certeza. Lo consume el
         # guardarraíl anti-invención de assistant_service.
@@ -426,6 +428,17 @@ class ExLlamaEngine:
 
     @property
     def is_ready(self) -> bool:
+        # El sidecar puede estar cargando cuando arranca la app: systemd reinicia la unit
+        # companion (`asistenteia-tabby`) junto con la del asistente y TabbyAPI tarda ~8 s
+        # en servir peticiones. El ping del constructor falla en esa ventana y, sin este
+        # reintento, /status se queda en "Desconectado" hasta el primer mensaje aunque el
+        # motor funcione. Se reintenta como mucho cada 3 s para no martillear /v1/models.
+        if self._ready:
+            return True
+        ahora = time.monotonic()
+        if ahora - self._last_ping >= 3.0:
+            self._last_ping = ahora
+            self._ready = self._ping()
         return self._ready
 
     def backend_label(self) -> str:

@@ -210,6 +210,38 @@ def test_r1_con_thinking_on_sigue_sin_sufijo(monkeypatch):
     assert engine.leads_with_reasoning is True
 
 
+def test_is_ready_reintenta_cuando_el_sidecar_estaba_cargando(monkeypatch):
+    """Arrancar la app a la vez que el sidecar no debe dejar /status en "Desconectado".
+
+    systemd reinicia la unit companion junto con la del asistente y TabbyAPI tarda unos
+    segundos en servir; el ping del constructor falla. is_ready reintenta (como mucho
+    cada 3 s) en vez de quedarse pegado hasta el primer mensaje.
+    """
+    import time
+
+    from src.engines import exllama_engine as ee
+    from src.config import settings
+
+    llamadas = {"n": 0}
+
+    def ping(self):
+        llamadas["n"] += 1
+        return llamadas["n"] > 1          # la primera vez el sidecar aún no responde
+
+    monkeypatch.setattr(ee.ExLlamaEngine, "_ping", ping)
+    engine = ee.ExLlamaEngine(settings)
+    assert engine._ready is False
+
+    # Dentro de la ventana de 3 s no se martillea
+    assert engine.is_ready is False
+    assert llamadas["n"] == 1
+
+    # Pasados los 3 s, reintenta y se recupera
+    engine._last_ping -= 10
+    assert engine.is_ready is True
+    assert llamadas["n"] == 2
+
+
 def test_stt_falls_back_to_whisper_without_engine_audio(monkeypatch):
     """STT_USE_GEMMA_AUDIO=True pero el motor no hace audio (ExLlama) -> Whisper."""
     from src import stt_engine as se
