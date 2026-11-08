@@ -86,7 +86,8 @@ Propiedades del contrato relevantes:
 
 ## 3. ExLlamaV3 y la cuantización EXL3
 
-- **[ExLlamaV3](https://github.com/turboderp-org/exllamav3)** (v0.0.39) — motor de
+- **[ExLlamaV3](https://github.com/turboderp-org/exllamav3)** (hoy **1.6.6**, la versión que
+  fija TabbyAPI en su `pyproject.toml`) — motor de
   inferencia de LLMs cuantizados optimizado para GPUs NVIDIA. Kernels CUDA propios para
   máxima velocidad de decode single-user.
 - **EXL3** — formato de cuantización de ExLlamaV3. Permite elegir el ratio de bits por
@@ -150,7 +151,7 @@ Hermes). Catálogo integrado (`asistenteia engine model`):
 
 TabbyAPI elige el backend leyendo el `quant_method` del `config.json` del modelo (`exl3`
 → `exllamav3`; cualquier otro → `exllamav2`), y el venv del sidecar trae los dos wheels
-(`exllamav3` 0.0.39 y `exllamav2` 0.3.2). Por eso el catálogo puede mezclar formatos y
+(`exllamav3` 1.6.6 y `exllamav2` 0.3.2). Por eso el catálogo puede mezclar formatos y
 `asistenteia engine model` descarga un EXL2 igual que un EXL3, sin tocar nada más.
 
 Nota sobre el R1: de este modelo **no existe cuantización EXL3** (solo EXL2), y la
@@ -228,7 +229,7 @@ usuario → [TabbyAPI] → ¿tool_calls?
 
 ## 7. Visión multimodal (Qwen3-VL)
 
-- exllamav3 0.0.39 soporta la arquitectura **Qwen3-VL** (`architecture/qwen3_vl.py`,
+- exllamav3 (≥0.0.39; hoy 1.6.6) soporta la arquitectura **Qwen3-VL** (`architecture/qwen3_vl.py`,
   con vision tower). TabbyAPI la carga con `model.vision: true` en su config.
 - `ExLlamaEngine` envía imágenes como `image_url` con la imagen en **base64** dentro del
   contenido del mensaje (formato OpenAI multimodal), solo si `EXLLAMA_VISION=True`.
@@ -295,13 +296,33 @@ El instalador clona TabbyAPI, crea su venv (py3.10–3.13, prefiere 3.11), insta
 `.[cu12]` (NVIDIA) o `.[amd]`, escribe `config.yml` y descarga el modelo del catálogo. La
 instalación es opt-in y aislada (~15 GB); nunca se versiona (`.gitignore: exllama/`).
 
+### Actualizar el motor (sin reinstalar)
+
+Las versiones de `exllamav3`/`exllamav2` no las elige AsistenteIA: las fija el
+`pyproject.toml` de TabbyAPI (wheels precompilados por versión de CUDA/Python). Para
+subir de versión:
+
+```bash
+cd ~/.asistenteia/exllama/tabbyAPI
+git fetch --depth 1 origin main && git reset --hard FETCH_HEAD   # código nuevo
+venv/bin/pip install -e '.[cu12]'                                # wheels que fije el pyproject
+systemctl --user restart asistenteia-tabby.service
+```
+
+Antes de tocar nada conviene guardar la vuelta atrás (`pip freeze`, commit actual y un
+script de rollback); en producción se hizo así y quedó en
+`~/.asistenteia/exllama/rollback/`. Ojo: cada salto de versión puede cambiar qué
+arquitecturas y formatos EXL3 soporta el motor (p. ej. `gemma4_unified` o los quants
+`mul1` necesitan exllamav3 ≥1.0), así que conviene verificar con el modelo de siempre
+antes de dar el salto definitivo.
+
 ---
 
 ## 12. Resumen de tecnologías
 
 | Capa | Tecnología |
 |---|---|
-| Motor de inferencia | **ExLlamaV3** 0.0.39 (EXL3) y **ExLlamaV2** 0.3.2 (EXL2), según el modelo |
+| Motor de inferencia | **ExLlamaV3** 1.6.6 (EXL3) y **ExLlamaV2** 0.3.2 (EXL2), según el modelo |
 | Servidor / sidecar | **TabbyAPI** (OpenAI-compatible) |
 | Cliente HTTP | **httpx** (async, streaming SSE) |
 | Modelos | **Qwen3-8B-exl3**, **Qwen3-VL-8B-Instruct-EXL3**, **LFM2.5-8B-A1B-exl3**, **DeepSeek-R1-Distill-Qwen-7B-EXL2** |
