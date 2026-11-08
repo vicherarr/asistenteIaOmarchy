@@ -546,10 +546,31 @@ ai_refresh_focus_tools() {
     ai_set_env_key ASSISTANT_DEFAULT_TOOLS "$focus"
 }
 
-# ¿Está descargado el modelo cuyo DIRNAME es $1? (dir no vacío bajo models/)
+# ¿Está descargado el modelo cuyo DIRNAME es $1?
+#
+# NO basta con que la carpeta no esté vacía: una descarga cortada deja los ficheros
+# pequeños (config.json, tokenizer.json, plantilla…) y ningún peso. Al darlo por bueno,
+# 'engine model' / 'engine install' se negaban a reintentar la descarga, el .env se
+# quedaba apuntando a un modelo que no existe y TabbyAPI entraba en bucle de reinicio.
+# Así que se exige al menos un .safetensors con sentido: la cabecera de safetensors son
+# 8 bytes little-endian con la longitud del JSON de tensores, y el fichero tiene que ser
+# más grande que eso. HF además descarga a un .incomplete dentro de .cache, así que un
+# .safetensors presente ya era una descarga terminada.
 ai_tabby_model_present() {
-    local d="$EXLLAMA_TABBY_DIR/models/$1"
-    [ -d "$d" ] && [ -n "$(ls -A "$d" 2>/dev/null)" ]
+    local d="$EXLLAMA_TABBY_DIR/models/$1" f hlen
+    [ -d "$d" ] || return 1
+    for f in "$d"/*.safetensors; do
+        [ -s "$f" ] || continue
+        hlen="$(od -An -tu8 -N8 "$f" 2>/dev/null | tr -d '[:space:]')"
+        case "$hlen" in ''|*[!0-9]*) continue ;; esac
+        # Los enteros de bash son de 64 bits con signo: una cabecera basura (p.ej. todo
+        # 0xFF) desborda y `[` aborta. 9 dígitos acotan a < 1e9, muy por encima de los
+        # 100 MiB que como máximo ocupa un JSON de tensores real.
+        [ "${#hlen}" -le 9 ] || continue
+        [ "$hlen" -gt 1 ] && [ "$hlen" -le 104857600 ] || continue
+        [ "$(stat -c %s "$f" 2>/dev/null || echo 0)" -gt $(( hlen + 8 )) ] && return 0
+    done
+    return 1
 }
 
 # Adapta la plantilla de chat de un modelo para TabbyAPI, si hace falta. Dos arreglos,
@@ -821,16 +842,16 @@ for b in refs.branches:
 PY
 }
 
-# Lista los modelos ya descargados bajo models/ (dirs con pesos o config.json),
-# uno por línea. Sirve tanto para el catálogo como para los traídos con 'pull'.
+# Lista los modelos ya descargados bajo models/ (con pesos de verdad, ver
+# ai_tabby_model_present), uno por línea. Sirve tanto para el catálogo como para los
+# traídos con 'pull'. Una carpeta a medias (solo config/tokenizer) NO se lista: se
+# activaría un modelo que TabbyAPI no puede cargar.
 ai_tabby_list_downloaded() {
     local d
     for d in "$EXLLAMA_TABBY_DIR"/models/*/; do
         [ -d "$d" ] || continue
         d="${d%/}"
-        if [ -f "$d/config.json" ] || ls "$d"/*.safetensors >/dev/null 2>&1; then
-            basename "$d"
-        fi
+        ai_tabby_model_present "$(basename "$d")" && basename "$d"
     done
 }
 
