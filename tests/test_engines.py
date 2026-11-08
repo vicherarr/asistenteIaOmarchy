@@ -170,6 +170,46 @@ def test_engine_names(monkeypatch):
     assert ee.ExLlamaEngine().name == "ExLlama"
 
 
+# --- DeepSeek-R1: razona siempre, así que no lleva '/no_think' -------------------
+
+def _exllama_settings(monkeypatch, modelo, thinking):
+    """Settings mínimos para construir un ExLlamaEngine sin tocar la red."""
+    from src.engines import exllama_engine as ee
+    from src.config import settings
+
+    monkeypatch.setattr(ee.ExLlamaEngine, "_ping", lambda self: False)
+    monkeypatch.setattr(settings, "EXLLAMA_MODEL", modelo)
+    monkeypatch.setattr(settings, "EXLLAMA_THINKING", thinking)
+    return ee.ExLlamaEngine(settings)
+
+
+def test_r1_nunca_lleva_no_think(monkeypatch):
+    """El R1 no entiende '/no_think': ni con EXLLAMA_THINKING=False se le añade.
+
+    La CLI fuerza EXLLAMA_THINKING=True al elegirlo; esto cubre el caso de un .env
+    a mano o de un cambio de modelo sin pasar por ella, para que el prompt no se
+    ensucie con un sufijo que el modelo no conoce.
+    """
+    engine = _exllama_settings(monkeypatch, "DeepSeek-R1-Distill-Qwen-7B-4.0bpw", False)
+    assert engine._system_suffix == ""
+
+
+def test_qwen3_con_thinking_off_si_lleva_no_think(monkeypatch):
+    """Retrocompatible: Qwen3 (y el resto) mantienen el sufijo de siempre."""
+    engine = _exllama_settings(monkeypatch, "Qwen3-8B-exl3-4bpw", False)
+    assert engine._system_suffix == " /no_think"
+
+    engine = _exllama_settings(monkeypatch, "Qwen3-8B-exl3-4bpw", True)
+    assert engine._system_suffix == ""
+    assert engine.leads_with_reasoning is True
+
+
+def test_r1_con_thinking_on_sigue_sin_sufijo(monkeypatch):
+    engine = _exllama_settings(monkeypatch, "DeepSeek-R1-Distill-Qwen-7B-4.0bpw", True)
+    assert engine._system_suffix == ""
+    assert engine.leads_with_reasoning is True
+
+
 def test_stt_falls_back_to_whisper_without_engine_audio(monkeypatch):
     """STT_USE_GEMMA_AUDIO=True pero el motor no hace audio (ExLlama) -> Whisper."""
     from src import stt_engine as se

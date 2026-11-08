@@ -1,10 +1,14 @@
-"""Motor de inferencia ExLlamaV3 vía TabbyAPI (servidor OpenAI-compatible).
+"""Motor de inferencia ExLlama vía TabbyAPI (servidor OpenAI-compatible).
+
+Sirve tanto modelos EXL3 (backend exllamav3) como EXL2 (backend exllamav2): el
+sidecar elige el backend leyendo el `quant_method` del config.json del modelo.
 
 Implementa el contrato InferenceEngine hablando con un sidecar TabbyAPI por HTTP.
 A diferencia de LiteRT (tool-calling nativo en proceso), aquí el bucle agéntico es
 nuestro: el modelo emite `<tool_call>{json}</tool_call>` en el texto, lo parseamos,
 ejecutamos la herramienta Python y reinyectamos el resultado, hasta la respuesta
-final. El razonamiento `<think>...</think>` de Qwen3 se filtra (configurable).
+final. El razonamiento `<think>...</think>` de Qwen3 y el de los DeepSeek-R1 se
+gestionan con `EXLLAMA_THINKING` (ver `_system_suffix`).
 
 No soporta audio (transcribe_audio -> ""): el STT cae a Whisper por capacidades.
 """
@@ -34,6 +38,16 @@ _PYTYPE_TO_JSON = {
 }
 
 _THINK_OPEN, _THINK_CLOSE = "<think>", "</think>"
+
+
+def _always_reasons(model: str) -> bool:
+    """¿El modelo razona SIEMPRE, sin interruptor? Los DeepSeek-R1 (y sus destilados)
+    no conocen el '/no_think' de Qwen3: el sufijo sería texto basura en el prompt. Su
+    razonamiento hay que mostrarlo, no apagarlo, así que ahí no se añade nunca."""
+    m = (model or "").lower()
+    return "deepseek-r1" in m or "r1-distill" in m
+
+
 _TOOL_OPEN, _TOOL_CLOSE = "<tool_call>", "</tool_call>"
 # Formato de tool-calls de LFM2.5 (turboderp): [func(arg='val'), ...] entre estos
 # marcadores, con sintaxis tipo Python (no JSON). Aditivo al de Qwen3: ambos conviven.
@@ -356,11 +370,13 @@ class ExLlamaEngine:
 
     @property
     def leads_with_reasoning(self) -> bool:
-        # Modelos "thinking" servidos por TabbyAPI (Qwen3/Qwen3.5...): la plantilla
-        # inyecta el <think> de APERTURA en el prompt, así que el contenido EMPIEZA
-        # ya dentro del razonamiento y solo llega el cierre </think> antes de la
-        # respuesta final. assistant_service lo usa para MOSTRAR el razonamiento en
-        # pantalla pero NO hablarlo (mantiene el TTS cerrado hasta pasar </think>).
+        # Modelos "thinking" servidos por TabbyAPI (Qwen3/Qwen3.5... y los DeepSeek-R1
+        # con su plantilla adaptada): el <think> de APERTURA va en el prompt, así que el
+        # contenido EMPIEZA ya dentro del razonamiento y solo llega el cierre </think>
+        # antes de la respuesta final. assistant_service lo usa para MOSTRAR el
+        # razonamiento en pantalla pero NO hablarlo (mantiene el TTS cerrado hasta pasar
+        # </think>). En los R1 esto es obligatorio: sin la bandera, el razonamiento se
+        # hablaría entero por el TTS.
         return bool(self.thinking)
 
     # ---- puntos de extensión (los redefine OpenRouterEngine, que hereda de aquí) ----
@@ -390,8 +406,12 @@ class ExLlamaEngine:
     @property
     def _system_suffix(self) -> str:
         """Sufijo que se añade al system prompt. En Qwen3, '/no_think' apaga el
-        razonamiento; otros modelos no lo entienden y para ellos es basura."""
-        return "" if self.thinking else " /no_think"
+        razonamiento; otros modelos no lo entienden y para ellos es basura. Los R1
+        (DeepSeek) razonan siempre y tampoco conocen ese truco: se quedan sin sufijo
+        aunque EXLLAMA_THINKING esté desactivado (la CLI lo fuerza a True igualmente)."""
+        if self.thinking or _always_reasons(self.model):
+            return ""
+        return " /no_think"
 
     def _ping(self) -> bool:
         try:

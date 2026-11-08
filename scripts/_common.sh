@@ -456,12 +456,16 @@ ai_lfm25_pick_rev() {
     echo "2.10bpw"   # ni la menor entra con margen: se baja la mínima de todos modos
 }
 
-# Catálogo de modelos EXL3 del motor exllama. Devuelve, para la clave dada:
+# Catálogo de modelos del motor exllama. Devuelve, para la clave dada:
 #   "REPO|REVISION|DIRNAME|VISION(yes/no)|MAX_SEQ|DESCRIPCIÓN"
 # DIRNAME es el directorio bajo models/ y el model_name que usa TabbyAPI.
 # MAX_SEQ = ventana/cache. En 8 GiB: texto 8192; el VL (encoder de visión + pesos
 # 3.5bpw) solo cabe a 6144 (8192 da "Insufficient VRAM"; 4096 es poco para el
 # system prompt + imagen). 6144 carga (~6.3 GB) y sirve texto+visión.
+#
+# El catálogo mezcla EXL3 (exllamav3) y EXL2 (exllamav2): TabbyAPI elige el backend
+# leyendo el `quant_method` del config.json del modelo (EXL2 -> exllamav2) y ambos
+# venv están instalados, así que los dos formatos conviven sin tocar nada más.
 exllama_model_meta() {
     local _r
     case "$1" in
@@ -473,10 +477,16 @@ exllama_model_meta() {
         # de HF, que ai_tabby_autofix_template adapta sola al cargarlo (ver abajo).
         lfm2.5)   _r="$(ai_lfm25_pick_rev)"
                   echo "turboderp/LFM2.5-8B-A1B-exl3|$_r|LFM2.5-8B-A1B-exl3-$_r|no|8192|texto+razonamiento (MoE 8B-A1B, $_r según VRAM)" ;;
+        # Destilado de DeepSeek-R1 sobre Qwen2.5-7B: razona ANTES de contestar, así que
+        # es lento pero bueno para problemas algorítmicos/mates. Se sirve en EXL2 4.0bpw
+        # (~4.5 GiB de pesos): cabe con 8192 de contexto en 8 GiB. No existe EXL3 de este
+        # modelo, y la variante "abliterated" de Orion-zhen es fp16 (TabbyAPI no la sirve
+        # tal cual: habría que cuantizarla). Ver docs/motor-exllama.md.
+        deepseek-r1-7b) echo "lucyknada/deepseek-ai_DeepSeek-R1-Distill-Qwen-7B-exl2|4.0bpw|DeepSeek-R1-Distill-Qwen-7B-4.0bpw|no|8192|razonamiento profundo (R1-distill 7B, EXL2)" ;;
         *)        return 1 ;;
     esac
 }
-EXLLAMA_MODEL_KEYS="qwen3-8b qwen3-vl lfm2.5"
+EXLLAMA_MODEL_KEYS="qwen3-8b qwen3-vl lfm2.5 deepseek-r1-7b"
 
 # Modo enfocado por modelo: ASSISTANT_DEFAULT_TOOLS para ESE modelo. Vacío = todas
 # (normal, retrocompatible). Sintaxis: nombres sueltos = lista blanca; nombres con
@@ -493,19 +503,45 @@ ai_model_focus_tools() {
     esac
 }
 
+# ¿El modelo razona SIEMPRE, sin interruptor? DeepSeek-R1 y sus destilados: no conocen
+# el '/no_think' de Qwen3. Con EXLLAMA_THINKING=False el sufijo acabaría en el prompt
+# como texto raro y, peor, el asistente hablaría el razonamiento (leads_with_reasoning
+# pasa a False). Por eso a estos modelos no se les apaga nunca.
+ai_model_always_reasons() {
+    case "$1" in *DeepSeek-R1*|*R1-Distill*) return 0 ;; *) return 1 ;; esac
+}
+
+# Tope de tokens de generación curado por modelo. Un R1 se pasa media respuesta
+# razonando: con los 1024 de serie se quedaría sin presupuesto antes de contestar.
+ai_model_max_tokens() {
+    case "$1" in *DeepSeek-R1*|*R1-Distill*) echo 4096 ;; *) echo 1024 ;; esac
+}
+
 # Recalcula las preferencias por-modelo en el .env según el modelo que se ejecutará
 # de verdad: con engine litert manda Gemma (sin enfoque); con exllama, EXLLAMA_MODEL.
 # - ASSISTANT_DEFAULT_TOOLS: modo enfocado (solo LFM2.5 se centra en terminal/código).
-# - EXLLAMA_THINKING: LFM2.5 NECESITA razonar para emitir tool calls fiables, así que
-#   lo activamos al elegirlo (el usuario puede desactivarlo luego con 'engine thinking
-#   off', a costa de que las tools dejen de funcionar). No tocamos otros modelos.
+# - EXLLAMA_THINKING: LFM2.5 NECESITA razonar para emitir tool calls fiables y los R1
+#   razonan SIEMPRE (no se les puede apagar), así que se activa en ambos. En el resto
+#   se respeta lo que haya puesto el usuario con 'engine thinking'.
+# - EXLLAMA_MAX_TOKENS: presupuesto de generación curado por modelo (4096 para los R1,
+#   1024 para el resto). Solo se reescribe si el valor actual es uno de los curados,
+#   para no pisar un ajuste manual (p.ej. 2048).
 # Se llama tras cambiar de motor o de modelo. Idempotente y retrocompatible.
 ai_refresh_focus_tools() {
-    local focus="" model=""
+    local focus="" model="" cur_tok want_tok
     if ai_using_exllama; then
         model="$(ai_read_env EXLLAMA_MODEL '')"
         focus="$(ai_model_focus_tools "$model")"
-        case "$model" in *LFM2.5*) ai_set_env_key EXLLAMA_THINKING True ;; esac
+        if ai_model_always_reasons "$model"; then
+            ai_set_env_key EXLLAMA_THINKING True
+        else
+            case "$model" in *LFM2.5*) ai_set_env_key EXLLAMA_THINKING True ;; esac
+        fi
+        cur_tok="$(ai_read_env EXLLAMA_MAX_TOKENS 1024)"
+        want_tok="$(ai_model_max_tokens "$model")"
+        if [ "$cur_tok" != "$want_tok" ]; then
+            case "$cur_tok" in ''|1024|4096) ai_set_env_key EXLLAMA_MAX_TOKENS "$want_tok" ;; esac
+        fi
     fi
     ai_set_env_key ASSISTANT_DEFAULT_TOOLS "$focus"
 }
@@ -516,28 +552,83 @@ ai_tabby_model_present() {
     [ -d "$d" ] && [ -n "$(ls -A "$d" 2>/dev/null)" ]
 }
 
-# Adapta la plantilla de chat de un modelo para TabbyAPI, si hace falta. Algunos
-# modelos (p.ej. LFM2.5) traen un chat_template.jinja con la etiqueta {% generation %}
-# de HuggingFace (marca tokens del assistant para entrenar); el Jinja de TabbyAPI no
-# la compila y deshabilita /v1/chat/completions. Generamos un tabby_template.jinja
-# (que TabbyAPI carga ANTES que el del modelo) partiendo de la PROPIA plantilla del
-# modelo y quitando solo esas etiquetas. Transparente y por-modelo: es idempotente
-# (si ya existe, no hace nada) y no toca los modelos cuya plantilla ya carga bien
-# (qwen3 no tiene esa etiqueta, así que ni entran). $1 = dirname bajo models/.
+# Adapta la plantilla de chat de un modelo para TabbyAPI, si hace falta. Dos arreglos,
+# los dos por-modelo, idempotentes y best-effort (si no reconocen la plantilla no tocan
+# nada y TabbyAPI sigue usando la del modelo):
+#   1. {% generation %}: algunos modelos (p.ej. LFM2.5) traen la etiqueta de HuggingFace
+#      que marca tokens del assistant para entrenar; el Jinja de TabbyAPI no la compila
+#      y deshabilita /v1/chat/completions. Se quita.
+#   2. Prefijo de razonamiento (DeepSeek-R1 y destilados): el modelo se entrenó con el
+#      turno del assistant YA abierto dentro de "<think>\n" (lo pone la plantilla
+#      oficial). La cuantización EXL2 de lucyknada trae la plantilla cruda de Qwen2, sin
+#      ese prefijo, así que el modelo arranca peor y puede no cerrar el razonamiento con
+#      </think> (y entonces el asistente no sabría cuándo empezar a hablar). Se añade
+#      solo al prompt de generación; el resto de la plantilla se conserva tal cual.
+# El resultado se escribe en tabby_template.jinja, que TabbyAPI carga ANTES que la del
+# modelo (common/templating.py de TabbyAPI). $1 = dirname bajo models/.
 ai_tabby_autofix_template() {
     local dir="$EXLLAMA_TABBY_DIR/models/$1"
-    local src="$dir/chat_template.jinja" dst="$dir/tabby_template.jinja"
-    [ -f "$src" ] && [ ! -f "$dst" ] || return 0
-    grep -qE '\{%-?[[:space:]]*(end)?generation[[:space:]]*-?%\}' "$src" || return 0
-    if sed -E 's/\{%-?[[:space:]]*(end)?generation[[:space:]]*-?%\}//g' "$src" > "$dst"; then
-        log "Plantilla de chat adaptada para TabbyAPI: models/$1/tabby_template.jinja"
-    else
-        rm -f "$dst"
-    fi
+    local dst="$dir/tabby_template.jinja" think=no rc=0
+    [ -d "$dir" ] && [ ! -f "$dst" ] || return 0
+    ai_model_always_reasons "$1" && think=yes
+    "$(ai_hf_python)" - "$dir" "$think" <<'PY' || rc=$?
+import json
+import pathlib
+import re
+import sys
+
+model_dir, think = pathlib.Path(sys.argv[1]), sys.argv[2] == "yes"
+
+
+def _plantilla():
+    """Lee la plantilla del modelo: archivo suelto, chat_template.json o tokenizer_config."""
+    f = model_dir / "chat_template.jinja"
+    if f.is_file():
+        return f.read_text(encoding="utf-8")
+    for nombre in ("chat_template.json", "tokenizer_config.json"):
+        f = model_dir / nombre
+        if not f.is_file():
+            continue
+        try:
+            tmpl = json.loads(f.read_text(encoding="utf-8")).get("chat_template")
+        except Exception:
+            continue
+        if isinstance(tmpl, list):  # tokenizer_config con varias plantillas
+            por_nombre = next((t.get("template") for t in tmpl if t.get("name") == "default"), None)
+            tmpl = por_nombre or (tmpl[0].get("template") if tmpl else None)
+        if isinstance(tmpl, str) and tmpl.strip():
+            return tmpl
+    return None
+
+
+original = _plantilla()
+if original is None:
+    sys.exit(1)  # sin plantilla reconocible: no hay nada que adaptar
+
+salida = re.sub(r"\{%-?\s*(?:end)?generation\s*-?%\}", "", original)  # (1)
+
+# (2) '<｜Assistant｜>' es lo último que emite la plantilla de Qwen2/DeepSeek cuando
+# add_generation_prompt está activo. Se le cuelga el <think> de apertura. Se exige que
+# detrás haya un bloque add_generation_prompt para no tocar el '<|Assistant|>' que la
+# plantilla usa al recorrer mensajes anteriores del assistant.
+if think and "<think>" not in salida:
+    marca = "{{'<｜Assistant｜>'}}"
+    idx = salida.rfind(marca)
+    if idx != -1 and salida.rfind("add_generation_prompt") < idx:
+        salida = salida[:idx] + "{{'<｜Assistant｜><think>\\n'}}" + salida[idx + len(marca):]
+
+if salida == original:
+    sys.exit(1)  # ya estaba bien: TabbyAPI usa la plantilla del propio modelo
+
+(model_dir / "tabby_template.jinja").write_text(salida, encoding="utf-8")
+PY
+    [ "$rc" -eq 0 ] && log "Plantilla de chat adaptada para TabbyAPI: models/$1/tabby_template.jinja"
+    return 0
 }
 
-# Descarga un modelo EXL3 a models/<dirname>. $1=repo $2=revision $3=dirname.
-# Devuelve 0 si quedó presente (ya estaba o se bajó bien). Usa el venv de TabbyAPI.
+# Descarga un modelo (EXL3 o EXL2; el backend lo elige TabbyAPI) a models/<dirname>.
+# $1=repo $2=revision $3=dirname. Devuelve 0 si quedó presente (ya estaba o se bajó
+# bien). Usa el venv de TabbyAPI.
 ai_tabby_download_model() {
     local repo="$1" rev="$2" name="$3"
     if ai_tabby_model_present "$name"; then

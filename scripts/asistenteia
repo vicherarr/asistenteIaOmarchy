@@ -273,11 +273,12 @@ AsistenteIA - uso: asistenteia <comando>
                engine openrouter key <k>  Guarda la API key de openrouter.ai (solo en .env).
                engine openrouter status   Modelo, visión y key (enmascarada).
                engine install [m]  Instala el backend exllama (TabbyAPI + modelo).
-               engine model [m]    Modelo curado: qwen3-8b / qwen3-vl / lfm2.5 (4 GiB).
+               engine model [m]    Modelo curado: qwen3-8b / qwen3-vl / lfm2.5 /
+                                   deepseek-r1-7b (razonamiento largo).
                engine browse [f]   Lista modelos EXL3 de turboderp en HuggingFace.
-               engine pull <repo> [bpw]  Descarga cualquier modelo EXL3 (de turboderp).
+               engine pull <repo> [bpw]  Descarga un modelo EXL3/EXL2 de HuggingFace.
                engine use [m]      Activa un modelo descargado (funcione o no con tools).
-               engine thinking on|off  Razonamiento <think> de Qwen3 (solo exllama).
+               engine thinking on|off  Razonamiento <think> (Qwen3/LFM2.5; los R1 razonan siempre).
                engine start|stop   Control manual del sidecar TabbyAPI.
   hermes [...]  Hermes suelto en la terminal (mismo modelo y mismas herramientas).
                Sin argumentos, chat interactivo. Con -z "...", una sola respuesta.
@@ -731,9 +732,10 @@ PY
             stop)
                 ai_tabby_stop; echo "Sidecar TabbyAPI detenido."; exit 0 ;;
             model)
-                # Gestiona el MODELO del motor exllama (catálogo qwen3-8b / qwen3-vl):
-                # lo descarga si falta, ajusta .env (EXLLAMA_MODEL/VISION) y config.yml,
-                # y reinicia. Análogo a 'asistenteia model' para LiteRT.
+                # Gestiona el MODELO del motor exllama (catálogo: qwen3-8b / qwen3-vl /
+                # lfm2.5 / deepseek-r1-7b): lo descarga si falta, ajusta .env
+                # (EXLLAMA_MODEL/VISION, más razonamiento y presupuesto de tokens) y
+                # config.yml, y reinicia. Análogo a 'asistenteia model' para LiteRT.
                 key="${2:-}"
                 cur_model="$(ai_read_env EXLLAMA_MODEL Qwen3-8B-exl3-4bpw)"
                 if [ -z "$key" ] || [ "$key" = list ] || [ "$key" = status ]; then
@@ -743,7 +745,7 @@ PY
                         IFS='|' read -r _r _v dir vis _s desc < <(exllama_model_meta "$k")
                         est="no descargado"; ai_tabby_model_present "$dir" && est="descargado"
                         mark=" "; [ "$dir" = "$cur_model" ] && mark="*"
-                        printf "  %s %-9s %-26s [%s]\n" "$mark" "$k" "$desc" "$est"
+                        printf "  %s %-14s %s [%s]\n" "$mark" "$k" "$desc" "$est"
                     done
                     exit 0
                 fi
@@ -762,9 +764,18 @@ PY
                 fi
                 ai_set_env_key EXLLAMA_MODEL "$dir"
                 [ "$vis" = yes ] && ai_set_env_key EXLLAMA_VISION True || ai_set_env_key EXLLAMA_VISION False
+                # La ventana del catálogo (ya validada para 8 GiB) también se guarda: al
+                # ir y volver de 'hermes' o al reiniciar el sidecar se reescribe el
+                # config.yml con EXLLAMA_CTX, y una ventana vieja (p.ej. la 6144 del VL)
+                # no debe imponerse al modelo nuevo.
+                ai_set_env_key EXLLAMA_CTX "$seq"
                 ai_refresh_focus_tools
                 ai_tabby_write_config "$dir" "$seq" "$vis"
                 echo "Modelo exllama activo: $dir (visión: $vis)"
+                if ai_model_always_reasons "$dir"; then
+                    echo "Razonamiento: SIEMPRE activo (el R1 no entiende '/no_think');"
+                    echo "presupuesto de generación: $(ai_read_env EXLLAMA_MAX_TOKENS 4096) tokens."
+                fi
                 if [ "$(ai_engine)" != exllama ]; then
                     warn "El motor activo es '$(ai_engine)'. Úsalo con: asistenteia engine exllama"
                     exit 0
@@ -782,15 +793,20 @@ PY
                 fi
                 exit 0 ;;
             thinking)
-                # Activa/desactiva el razonamiento <think> de Qwen3 (solo exllama):
-                # mejores respuestas a costa de latencia y tokens. Ajusta EXLLAMA_THINKING.
+                # Activa/desactiva el razonamiento <think> (solo exllama): mejores
+                # respuestas a costa de latencia y tokens. Ajusta EXLLAMA_THINKING.
+                # Los R1 (DeepSeek) razonan SIEMPRE: no conocen el '/no_think' de Qwen3
+                # y, con el flag apagado, el asistente hablaría el razonamiento.
                 val="${2:-}"
+                cur_think_model="$(ai_read_env EXLLAMA_MODEL '')"
                 case "$(printf '%s' "$(ai_read_env EXLLAMA_THINKING False)" | tr 'A-Z' 'a-z')" in
                     true|1|yes|on) cur_on=1 ;; *) cur_on=0 ;;
                 esac
                 if [ -z "$val" ] || [ "$val" = status ]; then
                     [ "$cur_on" = 1 ] && echo "Razonamiento (exllama): ACTIVADO" \
                                       || echo "Razonamiento (exllama): desactivado"
+                    ai_model_always_reasons "$cur_think_model" \
+                        && echo "El modelo activo ($cur_think_model) razona siempre: aquí no se apaga."
                     echo "Uso: asistenteia engine thinking on|off"
                     exit 0
                 fi
@@ -799,6 +815,13 @@ PY
                     off|false|0|no)      new_on=0; new_val=False ;;
                     *) err "Valor no válido: '$val'. Usa on u off."; exit 1 ;;
                 esac
+                if [ "$new_on" = 0 ] && ai_model_always_reasons "$cur_think_model"; then
+                    err "El modelo activo ($cur_think_model) razona siempre: no entiende '/no_think'."
+                    err "Apagarlo haría que el asistente hablara el razonamiento en vez de la respuesta."
+                    echo "Si quieres respuestas sin razonamiento, cambia de modelo:"
+                    echo "  asistenteia engine model qwen3-8b"
+                    exit 1
+                fi
                 if [ "$new_on" = "$cur_on" ]; then
                     echo "El razonamiento ya está $([ "$new_on" = 1 ] && echo activado || echo desactivado). Nada que hacer."
                     exit 0
@@ -834,7 +857,7 @@ PY
                 # Filtro opcional para acotar (substring sobre el id del repo).
                 filt="${2:-}"
                 echo "Modelos de ${C_CYAN}turboderp${C_RESET} en HuggingFace${filt:+ (filtro: $filt)}:"
-                echo "(ordenados por descargas; 'exl3' es el formato del motor exllama)"
+                echo "(ordenados por descargas; 'exl3' es el formato del motor exllama; también sirve EXL2)"
                 echo
                 if ! rows="$(ai_hf_author_models turboderp "$filt" 2>&1)"; then
                     err "$rows"; exit 1
@@ -851,9 +874,11 @@ PY
                 echo "Para código/razonamiento, busca un *Coder* o un Qwen3 grande que te quepa en VRAM."
                 exit 0 ;;
             pull)
-                # Descarga CUALQUIER modelo EXL3 (recomendado: de turboderp) a la carpeta
-                # de modelos de TabbyAPI, sin tocar el catálogo curado. En EXL3 cada bpw
+                # Descarga CUALQUIER modelo EXL3 o EXL2 (recomendado: de turboderp) a la
+                # carpeta de modelos de TabbyAPI, sin tocar el catálogo curado. Cada bpw
                 # (cuantización) es una rama: sin indicar una, te enseña las disponibles.
+                # El backend lo elige TabbyAPI solo, así que un EXL2 (p.ej. los
+                # DeepSeek-R1-Distill) se sirve igual que un EXL3.
                 repo="${2:-}"; rev="${3:-}"
                 if [ -z "$repo" ]; then
                     err "Uso: asistenteia engine pull <repo> [revision/bpw]"
@@ -910,10 +935,10 @@ PY
                 echo "Cuando quieras usarlo: asistenteia engine use $dir"
                 exit 0 ;;
             use)
-                # Activa un modelo EXL3 YA descargado (del catálogo o traído con 'pull'):
-                # escribe el config.yml del sidecar y fija EXLLAMA_MODEL. Funcione o no
-                # como asistente (depende de si soporta tools), TabbyAPI lo sirve igual
-                # en /v1 para herramientas externas. Opciones: --vision, --ctx N.
+                # Activa un modelo YA descargado (EXL3 o EXL2; del catálogo o traído con
+                # 'pull'): escribe el config.yml del sidecar y fija EXLLAMA_MODEL.
+                # Funcione o no como asistente (depende de si soporta tools), TabbyAPI lo
+                # sirve igual en /v1 para herramientas externas. Opciones: --vision, --ctx N.
                 name="${2:-}"; want_vision=no; ctx=""
                 args=("${@:3}"); i=0
                 while [ "$i" -lt "${#args[@]}" ]; do
@@ -927,7 +952,7 @@ PY
 
                 cur_model="$(ai_read_env EXLLAMA_MODEL Qwen3-8B-exl3-4bpw)"
                 if [ -z "$name" ] || [ "$name" = list ] || [ "$name" = status ]; then
-                    echo "Modelos EXL3 descargados (en $EXLLAMA_TABBY_DIR/models):"
+                    echo "Modelos descargados (EXL3/EXL2, en $EXLLAMA_TABBY_DIR/models):"
                     found=0
                     while IFS= read -r d; do
                         [ -z "$d" ] && continue

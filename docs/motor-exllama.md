@@ -5,10 +5,11 @@ inferencia intercambiable** basado en ExLlamaV3, además del LiteRT (Gemma) orig
 Cubre las tecnologías empleadas, cómo encajan y las decisiones de diseño clave.
 
 > **TL;DR:** AsistenteIA puede ejecutar su LLM con **LiteRT/Gemma** (por defecto, en
-> proceso) o con **ExLlamaV3/Qwen3** sobre un **sidecar TabbyAPI** (servidor
-> OpenAI-compatible en GPU). Es 100 % retrocompatible, conmutable con
-> `asistenteia engine`, y un solo motor está activo a la vez. El modelo `qwen3-vl`
-> añade **visión** (multimodal).
+> proceso) o con **ExLlamaV3/V2** sobre un **sidecar TabbyAPI** (servidor
+> OpenAI-compatible en GPU), sirviendo cuantizaciones **EXL3** y **EXL2**. Es 100 %
+> retrocompatible, conmutable con `asistenteia engine`, y un solo motor está activo a la
+> vez. El modelo `qwen3-vl` añade **visión** (multimodal) y `deepseek-r1-7b` añade
+> **razonamiento profundo** (destilado de R1).
 
 ---
 
@@ -126,7 +127,7 @@ TabbyAPI generada por AsistenteIA **omite `tool_format`** a propósito; el parse
 
 ---
 
-## 5. Los modelos: Qwen3 y Qwen3-VL
+## 5. Los modelos: Qwen3, Qwen3-VL, LFM2.5 y DeepSeek-R1
 
 Se eligió la familia **Qwen3** por su tool-calling/agéntico líder en open source (estilo
 Hermes). Catálogo integrado (`asistenteia engine model`):
@@ -135,17 +136,53 @@ Hermes). Catálogo integrado (`asistenteia engine model`):
 |---|---|---|---|---|---|
 | `qwen3-8b` | `turboderp/Qwen3-8B-exl3` | 4.0 | ❌ | 8192 | ~5,7 GB |
 | `qwen3-vl` | `ArtusDev/Qwen_Qwen3-VL-8B-Instruct-EXL3` | 3.5 | ✅ | 6144 | ~6,3 GB |
+| `lfm2.5` | `turboderp/LFM2.5-8B-A1B-exl3` | según VRAM | ❌ | 8192 | ~2,7–5,8 GB |
+| `deepseek-r1-7b` | `lucyknada/deepseek-ai_DeepSeek-R1-Distill-Qwen-7B-exl2` | 4.0 | ❌ | 8192 | ~5,7 GB |
 
 - **Qwen3-8B** — texto + tools, rápido. Modelo base.
 - **Qwen3-VL-8B-Instruct** — multimodal (texto + tools + **visión**); conserva la visión
   que el asistente usa hoy con LiteRT (`analyze_screen`, etc.).
+- **LFM2.5-8B-A1B** — MoE de 8B con solo ~1B activo: modo enfocado de terminal/sistema.
+- **DeepSeek-R1-Distill-Qwen-7B** — destilado de R1 sobre Qwen2.5-7B. Razona ANTES de
+  contestar: para problemas algorítmicos/matemáticos, no para conversar rápido.
 
-### `/no_think`
+### EXL3 y EXL2 conviven en la misma instalación
+
+TabbyAPI elige el backend leyendo el `quant_method` del `config.json` del modelo (`exl3`
+→ `exllamav3`; cualquier otro → `exllamav2`), y el venv del sidecar trae los dos wheels
+(`exllamav3` 0.0.39 y `exllamav2` 0.3.2). Por eso el catálogo puede mezclar formatos y
+`asistenteia engine model` descarga un EXL2 igual que un EXL3, sin tocar nada más.
+
+Nota sobre el R1: de este modelo **no existe cuantización EXL3** (solo EXL2), y la
+variante *abliterated* que se encuentra en el Hub
+(`Orion-zhen/DeepSeek-R1-Distill-Qwen-7B-abliterated`) son pesos **fp16**, que TabbyAPI
+no sirve tal cual: habría que cuantizarla antes con exllamav2.
+
+### Razonamiento: `/no_think` (Qwen3) frente a los R1, que razonan siempre
 
 Qwen3 tiene "thinking" (`<think>…</think>`) activado por defecto. Para un asistente de
 voz se desactiva (latencia/tokens) añadiendo `/no_think` al system prompt, pero es
 **configurable** (`EXLLAMA_THINKING`, default `False`). `ExLlamaEngine` filtra los
 bloques `<think>` del stream para que nunca lleguen al TTS.
+
+Los **R1** son otro caso: razonan **siempre** y no conocen `/no_think`. Se entrenaron con
+el turno del assistant ya abierto dentro de `<think>\n`, pero la cuantización EXL2 de
+lucyknada trae la plantilla cruda de Qwen2, sin ese prefijo. Por eso
+`ai_tabby_autofix_template` genera un `tabby_template.jinja` que se lo añade al prompt de
+generación (TabbyAPI carga esa plantilla antes que la del modelo). Con la apertura en el
+prompt, el stream empieza dentro del razonamiento y llega el `</think>` antes de la
+respuesta: `leads_with_reasoning` mantiene el **TTS cerrado** hasta ahí, así que el
+razonamiento se ve en pantalla pero no se habla.
+
+En consecuencia, `engine model deepseek-r1-7b`:
+
+- fuerza `EXLLAMA_THINKING=True` (apagarlo no es una opción: se hablaría el razonamiento);
+- sube `EXLLAMA_MAX_TOKENS` a 4096 (con los 1024 de serie el modelo se queda sin
+  presupuesto razonando y no llega a contestar).
+
+Aviso: el R1 **no está entrenado para tool-calling** (TabbyAPI no tiene parser para su
+familia). El bucle de Luka le sigue ofreciendo las herramientas, pero lo normal es que
+responda en texto; para tareas agénticas siguen siendo mejores `qwen3-8b` o `lfm2.5`.
 
 ---
 
@@ -235,13 +272,15 @@ asistenteia engine                  # motor actual + disponibles (estado del sid
 asistenteia engine install [m]      # instala el backend exllama (TabbyAPI + venv + modelo)
 asistenteia engine exllama          # conmuta a ExLlamaV3 y reinicia
 asistenteia engine litert           # vuelve a LiteRT (para el sidecar, libera VRAM)
-asistenteia engine model [list|qwen3-8b|qwen3-vl]   # gestiona el modelo exllama
-asistenteia engine model qwen3-vl   # descarga/activa Qwen3-VL (visión) y reinicia
+asistenteia engine model [list|qwen3-8b|qwen3-vl|lfm2.5|deepseek-r1-7b]
+asistenteia engine model qwen3-vl        # descarga/activa Qwen3-VL (visión) y reinicia
+asistenteia engine model deepseek-r1-7b  # descarga/activa el R1 (razonamiento) y reinicia
+asistenteia engine thinking on|off  # razonamiento (Qwen3/LFM2.5; los R1 razonan siempre)
 asistenteia engine start|stop       # control manual del sidecar TabbyAPI
 ```
 
 El instalador clona TabbyAPI, crea su venv (py3.10–3.13, prefiere 3.11), instala
-`.[cu12]` (NVIDIA) o `.[amd]`, escribe `config.yml` y descarga el modelo EXL3. La
+`.[cu12]` (NVIDIA) o `.[amd]`, escribe `config.yml` y descarga el modelo del catálogo. La
 instalación es opt-in y aislada (~15 GB); nunca se versiona (`.gitignore: exllama/`).
 
 ---
@@ -250,10 +289,10 @@ instalación es opt-in y aislada (~15 GB); nunca se versiona (`.gitignore: exlla
 
 | Capa | Tecnología |
 |---|---|
-| Motor de inferencia | **ExLlamaV3** 0.0.39 (kernels CUDA, cuantización EXL3) |
+| Motor de inferencia | **ExLlamaV3** 0.0.39 (EXL3) y **ExLlamaV2** 0.3.2 (EXL2), según el modelo |
 | Servidor / sidecar | **TabbyAPI** (OpenAI-compatible) |
 | Cliente HTTP | **httpx** (async, streaming SSE) |
-| Modelos | **Qwen3-8B-exl3** (texto), **Qwen3-VL-8B-Instruct-EXL3** (visión) |
+| Modelos | **Qwen3-8B-exl3**, **Qwen3-VL-8B-Instruct-EXL3**, **LFM2.5-8B-A1B-exl3**, **DeepSeek-R1-Distill-Qwen-7B-EXL2** |
 | Runtime GPU | **torch 2.9 + CUDA 12.8**, **flash-attn 2.8.3**, **xformers** |
 | Descarga de modelos | **huggingface_hub** (`snapshot_download`) |
 | Ciclo de vida | **systemd** (unit companion, cgroups) + scripts shell (`setsid`/PID) |

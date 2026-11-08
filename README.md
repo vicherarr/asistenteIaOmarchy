@@ -81,7 +81,7 @@ Todo (inferencia de texto, tool calling, visión multimodal, audio nativo) corre
 El motor de inferencia es **conmutable** y 100% retrocompatible: LiteRT es el de por defecto y nada cambia si no tocas nada. La factoría `src/engines/factory.py` construye el motor según `AI_ENGINE` y todo el sistema lo consume por un contrato común (`src/engines/base.py`: `InferenceEngine` + `EngineCapabilities`), de modo que el resto actúa **por capacidades**, no por nombre de motor.
 
 - **`litert` (defecto):** Gemma 4 en proceso; texto, tools, visión y audio nativos.
-- **`exllama`:** Qwen3 cuantizado EXL3 sobre un **sidecar [TabbyAPI](https://github.com/theroyallab/tabbyAPI)** (servidor OpenAI-compatible en GPU). El bucle agéntico de tool-calling es propio (`src/engines/exllama_engine.py`); no hace audio (el STT cae a Whisper por capacidades). Aislado en su propio venv para no mezclar las dependencias de torch/CUDA con las del asistente.
+- **`exllama`:** LLM cuantizado (**EXL3** o **EXL2**) sobre un **sidecar [TabbyAPI](https://github.com/theroyallab/tabbyAPI)** (servidor OpenAI-compatible en GPU). El bucle agéntico de tool-calling es propio (`src/engines/exllama_engine.py`); no hace audio (el STT cae a Whisper por capacidades). Aislado en su propio venv para no mezclar las dependencias de torch/CUDA con las del asistente.
 
 - **`openrouter`:** un LLM **en la nube** por HTTP ([OpenRouter](https://openrouter.ai)), sin VRAM ni descargas. Solo se ofrecen modelos **gratis y con tool calling**; por defecto `google/gemma-4-31b-it:free` (30,7B, 256k de contexto y **acepta imágenes**, así que la cámara del satélite y el análisis de pantalla los describe él). Reutiliza el cliente OpenAI-compatible de `exllama` (`src/engines/openrouter_engine.py` hereda de él). Ver [docs/motor-openrouter.md](docs/motor-openrouter.md).
 
@@ -310,23 +310,28 @@ asistenteia model …    # cambia el modelo   asistenteia engine …   # cambia 
 asistenteia uninstall  # desinstala         asistenteia service …  # gestiona el servicio
 ```
 
-**Cambiar de motor de inferencia** (LiteRT ⇄ ExLlamaV3):
+**Cambiar de motor de inferencia** (LiteRT ⇄ ExLlama):
 
 ```bash
 asistenteia engine              # motor actual + disponibles (estado del sidecar)
-asistenteia engine install      # instala el backend exllama (TabbyAPI + modelo EXL3, ~15 GB)
-asistenteia engine exllama      # conmuta a ExLlamaV3 y reinicia
+asistenteia engine install      # instala el backend exllama (TabbyAPI + modelo, ~15 GB)
+asistenteia engine exllama      # conmuta a ExLlama y reinicia
 asistenteia engine litert       # vuelve a LiteRT (para el sidecar, libera VRAM)
-asistenteia engine model        # modelo exllama: qwen3-8b (texto) / qwen3-vl (visión)
-asistenteia engine model qwen3-vl   # descarga/activa Qwen3-VL (multimodal) y reinicia
+asistenteia engine model        # modelos: qwen3-8b / qwen3-vl / lfm2.5 / deepseek-r1-7b
+asistenteia engine model qwen3-vl        # descarga/activa Qwen3-VL (multimodal) y reinicia
+asistenteia engine model deepseek-r1-7b  # descarga/activa el R1 (razonamiento) y reinicia
 asistenteia engine start|stop   # control manual del sidecar TabbyAPI
 ```
 
-**Modelos exllama** (catálogo): `qwen3-8b` (texto + tools, rápido) y `qwen3-vl`
-(Qwen3-VL-8B multimodal: texto + tools + **visión**, para `analyze_screen`). El
-comando descarga el modelo si falta, ajusta `EXLLAMA_VISION` automáticamente y la
-config de TabbyAPI, y reinicia. En 8 GiB el VL cabe a 3.5bpw con contexto 6144
-(~2.7 GB libres tras cargar); si en tu GPU no entra, baja a un bpw menor.
+**Modelos exllama** (catálogo): `qwen3-8b` (texto + tools, rápido), `qwen3-vl`
+(Qwen3-VL-8B multimodal: texto + tools + **visión**, para `analyze_screen`), `lfm2.5`
+(MoE 8B-A1B, enfocado a terminal/sistema) y `deepseek-r1-7b`
+(DeepSeek-R1-Distill-Qwen-7B en EXL2: **razonamiento profundo** para problemas
+algorítmicos; razona siempre, así que es más lento y no está entrenado para tool
+calling). El comando descarga el modelo si falta, ajusta `EXLLAMA_VISION`,
+`EXLLAMA_THINKING` y `EXLLAMA_MAX_TOKENS` según el modelo, reescribe la config de
+TabbyAPI y reinicia. En 8 GiB el VL cabe a 3.5bpw con contexto 6144 (~2.7 GB libres
+tras cargar) y el R1 a 4.0bpw con 8192; si en tu GPU no entra, baja a un bpw menor.
 
 <details>
 <summary><b>⚙️ Opciones avanzadas, instalación manual y desinstalación</b></summary>

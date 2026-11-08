@@ -122,7 +122,7 @@ fi
 log "Escribiendo config.yml ($MODEL_KEY, visión: $EXL_VISION)..."
 ai_tabby_write_config "$EXL_NAME" "$EXL_SEQ" "$EXL_VISION"
 
-# --- 5. Modelo EXL3 ---------------------------------------------------------
+# --- 5. Modelo (EXL3 o EXL2; TabbyAPI elige el backend solo) ----------------
 if ai_tabby_model_present "$EXL_NAME"; then
     ok "El modelo ya está en models/$EXL_NAME."
 else
@@ -136,7 +136,11 @@ fi
 # --- 6. Dejar el .env coherente con el modelo instalado ---------------------
 ai_set_env_key EXLLAMA_MODEL "$EXL_NAME"
 [ "$EXL_VISION" = yes ] && ai_set_env_key EXLLAMA_VISION True || ai_set_env_key EXLLAMA_VISION False
-# Modo enfocado por modelo (p.ej. LFM2.5 -> terminal/código); vacío para el resto.
+# Ventana del catálogo (validada para 8 GiB): se guarda para que un cambio de motor
+# posterior no reimponga la de otro modelo.
+ai_set_env_key EXLLAMA_CTX "$EXL_SEQ"
+# Modo enfocado por modelo (p.ej. LFM2.5 -> terminal/código), razonamiento y
+# presupuesto de tokens según el modelo (los R1 necesitan 4096); vacío para el resto.
 ai_refresh_focus_tools
 
 echo
