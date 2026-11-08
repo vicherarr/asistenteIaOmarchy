@@ -100,6 +100,13 @@ class Settings(BaseSettings):
     # error recuperable (p.ej. referencia de correo que falla y el modelo corrige listando)
     # no agote el presupuesto y deje al usuario sin respuesta.
     EXLLAMA_MAX_TOOL_ROUNDS: int = 8
+    # Ventana de contexto ya validada para el modelo exllama activo. La escriben
+    # 'engine model' y 'engine use' y la lee la CLI (ai_tabby_model_max_seq), no la app:
+    # aquí solo se declara para que el .env siga siendo válido. Con 0 manda el catálogo.
+    # OJO: este campo faltaba y, al añadirlo la CLI al .env, pydantic (extra=forbid)
+    # tumbaba el asistente entero al arrancar. Hay un test que ata .env.example a estos
+    # campos para que no vuelva a pasar.
+    EXLLAMA_CTX: int = 0
     # --- Lifecycle del sidecar (lo gestiona la CLI/shell, no la app Python) ---
     # Si True, "asistenteia start" arranca/para TabbyAPI automáticamente cuando
     # AI_ENGINE="exllama" (igual que LiteRT se carga solo dentro del proceso).
@@ -117,6 +124,11 @@ class Settings(BaseSettings):
     HERMES_DIR: str = "~/.asistenteia/hermes"
     HERMES_PYTHON: str = ""              # vacío => <HERMES_DIR>/.venv/bin/python
     HERMES_MODEL: str = "Qwen3.5-9B-exl3-3.00bpw"
+    # Perfil del sidecar cuando Hermes corre en local. Los lee la CLI (ai_tabby_sync_
+    # config_for_engine), no la app: se declaran para que el .env no traiga claves
+    # desconocidas (pydantic usa extra=forbid y el asistente no arrancaría).
+    HERMES_CTX: int = 65536
+    HERMES_CACHE_MODE: str = "Q4"
     # Si True, Hermes usa un modelo de OpenRouter en la nube en vez del sidecar TabbyAPI local.
     # Reutiliza OPENROUTER_API_KEY y OPENROUTER_BASE_URL. Configurable desde la CLI:
     # asistenteia engine hermes model

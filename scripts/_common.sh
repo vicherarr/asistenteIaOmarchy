@@ -981,6 +981,11 @@ ai_ensure_running() {
     fi
     if ai_service_installed; then
         ai_import_graphical_env
+        # Un servicio que falló varias veces seguidas se queda en 'start-limit-hit' y
+        # systemd se niega a arrancarlo aunque la causa ya esté resuelta ("Start request
+        # repeated too quickly"), que es lo que pasó con el .env roto. Se limpia el
+        # contador antes de arrancar; si no está fallado, no hace nada.
+        systemctl --user reset-failed "$SERVICE_NAME" 2>/dev/null || true
         systemctl --user start "$SERVICE_NAME"
     else
         ai_start_direct
